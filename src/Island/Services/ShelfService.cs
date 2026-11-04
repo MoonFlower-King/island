@@ -1,52 +1,75 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Text.Json.Serialization;
 using Island.Core;
 
 namespace Island.Services;
 
 public sealed class ShelfItem
 {
-    public string Path { get; set; } = "";
+    private string _path = "";
+    private (bool IsFolder, string Detail)? _info;
 
+    public string Path
+    {
+        get => _path;
+        set
+        {
+            _path = value;
+            _info = null;
+        }
+    }
+
+    [JsonIgnore]
     public string Name => System.IO.Path.GetFileName(Path.TrimEnd('\\', '/')) is { Length: > 0 } n ? n : Path;
 
-    public bool IsFolder => Directory.Exists(Path);
-
+    /// <summary>每次调用都会查询磁盘（用于判断文件是否还在），不要在绑定里用。</summary>
+    [JsonIgnore]
     public bool Exists => File.Exists(Path) || Directory.Exists(Path);
 
+    [JsonIgnore]
+    public bool IsFolder => Info.IsFolder;
+
     /// <summary>按类型挑一个图标（Segoe Fluent Icons 字形）。</summary>
+    [JsonIgnore]
     public string Glyph
     {
         get
         {
-            if (IsFolder) return "";
+            if (IsFolder) return "\uE8B7";
             return System.IO.Path.GetExtension(Path).ToLowerInvariant() switch
             {
-                ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp" or ".heic" => "",
-                ".mp4" or ".mov" or ".mkv" or ".avi" or ".webm" => "",
-                ".mp3" or ".flac" or ".wav" or ".m4a" or ".aac" or ".ogg" => "",
-                ".zip" or ".rar" or ".7z" or ".tar" or ".gz" => "",
-                ".pdf" or ".doc" or ".docx" or ".txt" or ".md" or ".ppt" or ".pptx" or ".xls" or ".xlsx" => "",
-                ".exe" or ".msi" => "",
-                _ => "",
+                ".png" or ".jpg" or ".jpeg" or ".gif" or ".bmp" or ".webp" or ".heic" => "\uEB9F",
+                ".mp4" or ".mov" or ".mkv" or ".avi" or ".webm" => "\uE714",
+                ".mp3" or ".flac" or ".wav" or ".m4a" or ".aac" or ".ogg" => "\uE8D6",
+                ".zip" or ".rar" or ".7z" or ".tar" or ".gz" => "\uF012",
+                ".pdf" or ".doc" or ".docx" or ".txt" or ".md" or ".ppt" or ".pptx" or ".xls" or ".xlsx" => "\uE8A5",
+                ".exe" or ".msi" => "\uE756",
+                _ => "\uE7C3",
             };
         }
     }
 
-    public string Detail
+    [JsonIgnore]
+    public string Detail => Info.Detail;
+
+    /// <summary>
+    /// 文件夹/大小只读一次磁盘并缓存。界面绑定会反复读取这些属性，
+    /// 每次都访问磁盘的话，遇到网络盘或休眠的移动硬盘会卡住界面。
+    /// </summary>
+    private (bool IsFolder, string Detail) Info => _info ??= ReadInfo(Path);
+
+    private static (bool, string) ReadInfo(string path)
     {
-        get
+        try
         {
-            try
-            {
-                if (IsFolder) return "文件夹";
-                var info = new FileInfo(Path);
-                return info.Exists ? FormatSize(info.Length) : "文件已不存在";
-            }
-            catch
-            {
-                return "";
-            }
+            if (Directory.Exists(path)) return (true, "文件夹");
+            var info = new FileInfo(path);
+            return (false, info.Exists ? FormatSize(info.Length) : "文件已不存在");
+        }
+        catch
+        {
+            return (false, "");
         }
     }
 

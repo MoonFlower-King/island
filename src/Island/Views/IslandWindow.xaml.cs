@@ -66,7 +66,7 @@ public partial class IslandWindow : Window
         ShadowLayer.Data = _capsuleGeometry;
         ContentHost.Clip = _capsuleGeometry;
         _shape = new CapsuleAnimator(_capsuleGeometry, IslandMetrics.HostWidth, MetricsFor(IslandState.Idle));
-        _shape.Updated += OnShapeUpdated;
+        UpdateHotZone(MetricsFor(IslandState.Idle));
 
         LayoutViews();
         foreach (var view in AllViews)
@@ -103,6 +103,7 @@ public partial class IslandWindow : Window
 
         PositionWindow();
         UpdateClock();
+        Loaded += (_, _) => PrewarmPanels();
     }
 
     private FrameworkElement[] AllViews =>
@@ -141,11 +142,32 @@ public partial class IslandWindow : Window
         }
     }
 
-    /// <summary>形状每帧变化后，顶部热区跟着胶囊的宽度走（细线时比线略宽，便于“撞”到）。</summary>
-    private void OnShapeUpdated()
+    /// <summary>
+    /// 顶部热区跟着胶囊的目标宽度走（细线时比线略宽，便于“撞”到）。
+    /// 只在状态切换时设置一次：每帧改宽度会触发布局，动画就不顺了。
+    /// </summary>
+    private void UpdateHotZone(IslandMetrics target) =>
+        HotZone.Width = Math.Clamp(target.Width + 60, 180, 260);
+
+    /// <summary>
+    /// 启动后空闲时把每个功能面板悄悄布局一遍。面板默认是折叠的，
+    /// 不预热的话第一次打开某个标签时才创建控件，会掉一两帧。
+    /// </summary>
+    private void PrewarmPanels()
     {
-        double width = Math.Clamp(_shape.CurrentRect.Width + 60, 180, 260);
-        if (Math.Abs(HotZone.Width - width) > 0.5) HotZone.Width = width;
+        Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+        {
+            if (_isHovering) return; // 用户已经在用了，不要打扰
+            foreach (IslandTab tab in Enum.GetValues<IslandTab>())
+            {
+                FrameworkElement panel = PanelFor(tab);
+                if (panel.Visibility == Visibility.Visible) continue;
+                panel.Visibility = Visibility.Visible;
+                panel.UpdateLayout();
+                panel.Visibility = Visibility.Collapsed;
+            }
+            Log.Info("面板预热完成");
+        }));
     }
 
     // ───────────────────────────── 窗口与 Win32 ─────────────────────────────
@@ -278,6 +300,7 @@ public partial class IslandWindow : Window
 
         // 变大时有一点回弹，缩小时又快又稳——离开后要立刻让出屏幕
         _shape.AnimateTo(b, growing ? SpringParameters.Expand : SpringParameters.Collapse);
+        UpdateHotZone(b);
         CrossFadeTo(view, growing);
     }
 
@@ -321,12 +344,18 @@ public partial class IslandWindow : Window
 
             if (isTarget && view.RenderTransform is ScaleTransform scale)
             {
+                // 缩放期间让文字按“动画中”渲染，不逐帧对齐像素，避免抖动；结束后恢复清晰模式
+                TextOptions.SetTextHintingMode(view, TextHintingMode.Animated);
                 double startScale = growing ? 0.94 : 1.04;
                 var zoom = new DoubleAnimation(startScale, 1, fadeIn + delay)
                 {
                     EasingFunction = new SpringEase { DampingRatio = 0.8, Stiffness = 10 },
                 };
                 Timeline.SetDesiredFrameRate(zoom, 120);
+                zoom.Completed += (_, _) =>
+                {
+                    if (ReferenceEquals(_currentView, view)) TextOptions.SetTextHintingMode(view, TextHintingMode.Auto);
+                };
                 scale.BeginAnimation(ScaleTransform.ScaleXProperty, zoom);
                 scale.BeginAnimation(ScaleTransform.ScaleYProperty, zoom);
             }
@@ -460,7 +489,7 @@ public partial class IslandWindow : Window
     }
 
     private bool ShouldStayExpanded() =>
-        _holdExpanded || IsCursorOverIsland() || CapsuleMenu.IsOpen || _isDraggingOver || (_isTyping && IsActive);
+        _holdExpanded || IsCursorOverIsland() || CapsuleMenu.IsOpen || _isDraggingOver || IsComposingText();
 
     /// <summary>直接问系统光标在哪里，比 WPF 的 IsMouseOver 可靠（拖放、快速移动时也准）。</summary>
     private bool IsCursorOverIsland()
@@ -485,6 +514,7 @@ public partial class IslandWindow : Window
         if (_currentState != IslandState.Idle) return;
         _currentView = ViewFor(IslandState.Idle);
         _shape.AnimateTo(MetricsFor(IslandState.Idle), SpringParameters.Expand);
+        UpdateHotZone(MetricsFor(IslandState.Idle));
         CrossFadeTo(_currentView, growing: !IdleAsLine);
     }
 

@@ -69,6 +69,17 @@ public class ServicesTests
     }
 
     [Fact]
+    public void OnlyRealDataIsSavedToDisk()
+    {
+        string shelf = System.Text.Json.JsonSerializer.Serialize(new ShelfItem { Path = @"C:\does-not-exist\a.txt" });
+        Assert.Equal("{\"Path\":\"C:\\\\does-not-exist\\\\a.txt\"}", shelf);
+
+        string clip = System.Text.Json.JsonSerializer.Serialize(new ClipboardEntry { Text = "x" });
+        Assert.DoesNotContain("Preview", clip);
+        Assert.DoesNotContain("TimeLabel", clip);
+    }
+
+    [Fact]
     public void AccentColorKeepsTheArtworkHue()
     {
         BitmapSource image = SolidImage(Color.FromRgb(20, 30, 90));
