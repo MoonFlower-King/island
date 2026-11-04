@@ -334,6 +334,7 @@ pub fn step(app: &mut App) {
                 ));
             }
             let _ = app.scene.disable_shadow();
+            let _ = app.scene.add_probe();
             smoke.step = 41;
             next = 300;
         }
@@ -349,6 +350,15 @@ pub fn step(app: &mut App) {
                     "去掉阴影后取样 #{:02X}{:02X}{:02X}",
                     c.r, c.g, c.b
                 ));
+            }
+            let full = Metrics {
+                width: island::metrics::WINDOW_WIDTH,
+                height: 300.0,
+                radius: 0.0,
+                top: 0.0,
+            };
+            if let Some(c) = snapshot(app, &mut smoke, "05d-probe", Some((full, 15.0, 255.0))) {
+                smoke.note(&format!("白色方块取样 #{:02X}{:02X}{:02X}", c.r, c.g, c.b));
             }
             let _ = app.scene.expanded.visual.SetOpacity(1.0);
             smoke.step = 5;
