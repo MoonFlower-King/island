@@ -333,6 +333,23 @@ pub fn step(app: &mut App) {
                     c.r, c.g, c.b
                 ));
             }
+            let _ = app.scene.disable_shadow();
+            smoke.step = 41;
+            next = 300;
+        }
+        41 => {
+            let c = snapshot(
+                app,
+                &mut smoke,
+                "05c-no-shadow",
+                Some((IslandState::Expanded.metrics(), 220.0, 244.0)),
+            );
+            if let Some(c) = c {
+                smoke.note(&format!(
+                    "去掉阴影后取样 #{:02X}{:02X}{:02X}",
+                    c.r, c.g, c.b
+                ));
+            }
             let _ = app.scene.expanded.visual.SetOpacity(1.0);
             smoke.step = 5;
             app.set_palette(DARK);
