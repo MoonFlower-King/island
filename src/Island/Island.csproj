@@ -23,7 +23,8 @@
     <AssemblyTitle>Island 灵动岛</AssemblyTitle>
     <Description>Windows 上的灵动岛：音乐、待办、剪贴板历史、文件中转站、AI 翻译、系统监控。</Description>
     <Authors>MoonFlower-King</Authors>
-    <Copyright>Copyright © MoonFlower-King</Copyright>
+    <Copyright>Copyright © 2026 MoonFlower-King</Copyright>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
   </PropertyGroup>
 
   <ItemGroup>

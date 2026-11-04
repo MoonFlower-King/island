@@ -116,3 +116,7 @@ src/Island/
     └── Panels/                   待办、剪贴板、中转站、翻译、监控面板
 tests/Island.Tests/               单元测试
 ```
+
+## 许可证
+
+[MIT](LICENSE)
