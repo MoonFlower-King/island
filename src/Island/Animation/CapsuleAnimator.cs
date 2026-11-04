@@ -66,7 +66,7 @@ public sealed class Spring
 }
 
 /// <summary>
-/// 驱动胶囊形状：每一帧（CompositionTarget.Rendering）推进四根弹簧——宽、高、顶部位置、圆角——
+/// 驱动胶囊形状：每一帧（CompositionTarget.Rendering）推进四根弹簧——宽、高、离边缘的距离、圆角——
 /// 再写进共享的 RectangleGeometry。只在运动时订阅渲染事件，停下后不占任何 CPU。
 /// </summary>
 public sealed class CapsuleAnimator
@@ -75,21 +75,26 @@ public sealed class CapsuleAnimator
 
     private readonly RectangleGeometry _geometry;
     private readonly double _hostWidth;
+    private readonly double _hostHeight;
     private readonly Spring _width, _height, _top, _radius;
     private SpringParameters _parameters = SpringParameters.Expand;
     private TimeSpan _lastFrame;
     private bool _running;
 
-    public CapsuleAnimator(RectangleGeometry geometry, double hostWidth, IslandMetrics initial)
+    public CapsuleAnimator(RectangleGeometry geometry, double hostWidth, double hostHeight, IslandMetrics initial)
     {
         _geometry = geometry;
         _hostWidth = hostWidth;
+        _hostHeight = hostHeight;
         _width = new Spring(initial.Width);
         _height = new Spring(initial.Height);
         _top = new Spring(initial.Top);
         _radius = new Spring(initial.CornerRadius);
         Apply();
     }
+
+    /// <summary>贴在哪条边上：决定胶囊在宿主区域里怎么对齐。改了之后调用 <see cref="JumpTo"/> 立即生效。</summary>
+    public DockEdge Edge { get; set; } = DockEdge.Top;
 
     /// <summary>当前（动画中的）胶囊矩形，相对于 CapsuleHost。</summary>
     public Rect CurrentRect => _geometry.Rect;
@@ -162,7 +167,8 @@ public sealed class CapsuleAnimator
         double h = Math.Max(1, _height.Value);
         double r = Math.Clamp(_radius.Value, 0, Math.Min(w, h) / 2);
 
-        _geometry.Rect = new Rect((_hostWidth - w) / 2, _top.Value, w, h);
+        IslandRect rect = new IslandMetrics(w, h, r, _top.Value).RectIn(Edge, _hostWidth, _hostHeight);
+        _geometry.Rect = new Rect(rect.X, rect.Y, rect.Width, rect.Height);
         _geometry.RadiusX = r;
         _geometry.RadiusY = r;
         Updated?.Invoke();
