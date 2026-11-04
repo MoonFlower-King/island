@@ -15,6 +15,12 @@ public sealed class AppSettings
     /// <summary>翻译使用的 Claude 模型。</summary>
     public string TranslateModel { get; set; } = "claude-opus-5-5";
 
+    /// <summary>外观主题。</summary>
+    public ThemeSettings Theme { get; set; } = new();
+
+    /// <summary>待机时缩成顶端的一条细线（否则显示带时间的小胶囊）。</summary>
+    public bool IdleAsLine { get; set; } = true;
+
     /// <summary>剪贴板历史是否保存到磁盘（关闭后只保留在内存里，退出即清空）。</summary>
     public bool PersistClipboardHistory { get; set; } = true;
 

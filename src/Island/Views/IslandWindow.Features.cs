@@ -38,8 +38,6 @@ public partial class IslandWindow
 
     private void InitializeFeatures()
     {
-        _settings = AppSettings.Load();
-
         _todo = new TodoService();
         _clipboard = new ClipboardService(_settings);
         _shelf = new ShelfService();
@@ -82,6 +80,7 @@ public partial class IslandWindow
         IslandTab.Shelf => TabShelf,
         IslandTab.Translate => TabTranslate,
         IslandTab.Monitor => TabMonitor,
+        IslandTab.Appearance => TabAppearance,
         _ => TabMusic,
     };
 
@@ -93,6 +92,7 @@ public partial class IslandWindow
         IslandTab.Shelf => ShelfPanel,
         IslandTab.Translate => TranslatePanel,
         IslandTab.Monitor => MonitorPanel,
+        IslandTab.Appearance => AppearancePanel,
         _ => MusicPanel,
     };
 

@@ -29,6 +29,7 @@ public partial class IslandWindow
     private MediaSnapshot? _media;
     private bool _mediaLingering;
     private bool _equalizerRunning;
+    private Color _rawAccent = Color.FromRgb(0x30, 0xD1, 0x58);
 
     private bool HasMedia => _media is not null;
 
@@ -126,7 +127,7 @@ public partial class IslandWindow
     {
         if (art is null)
         {
-            host.Background = new SolidColorBrush(Color.FromRgb(0x2C, 0x2C, 0x2E));
+            host.SetResourceReference(System.Windows.Controls.Border.BackgroundProperty, "IslandSurfaceStrong");
             placeholder.Visibility = Visibility.Visible;
             return;
         }
@@ -137,9 +138,12 @@ public partial class IslandWindow
         placeholder.Visibility = Visibility.Collapsed;
     }
 
+    /// <summary>封面取色按当前主题的背景调整：深色背景提亮，浅色背景压暗，保证看得清。</summary>
     private void ApplyAccent(Color color)
     {
-        var brush = new SolidColorBrush(color);
+        _rawAccent = color;
+        Color readable = ColorMath.EnsureReadable(color, App.Theme.Current.Background);
+        var brush = new SolidColorBrush(readable);
         brush.Freeze();
         ProgressFill.Background = brush;
         foreach (var bar in EqualizerBars) bar.Fill = brush;

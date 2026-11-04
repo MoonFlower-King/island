@@ -69,14 +69,13 @@ public class ServicesTests
     }
 
     [Fact]
-    public void AccentColorFromDarkArtIsBrightEnoughOnBlack()
+    public void AccentColorKeepsTheArtworkHue()
     {
         BitmapSource image = SolidImage(Color.FromRgb(20, 30, 90));
         Color accent = ColorExtractor.Accent(image, Colors.Green);
 
-        double luminance = (0.2126 * accent.R + 0.7152 * accent.G + 0.0722 * accent.B) / 255;
-        Assert.True(luminance >= 0.4, $"主题色太暗：{accent}");
-        Assert.True(accent.B > accent.R, $"应保留封面的蓝色调：{accent}");
+        Assert.True(accent.B > accent.R && accent.B > accent.G, $"应保留封面的蓝色调：{accent}");
+        Assert.InRange(accent.B, 80, 100);
     }
 
     private static BitmapSource SolidImage(Color color)

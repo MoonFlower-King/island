@@ -14,7 +14,7 @@
         UseLayoutRounding="True"
         TextOptions.TextFormattingMode="Display"
         FontFamily="{StaticResource IslandFont}"
-        Foreground="{StaticResource IslandForeground}"
+        Foreground="{DynamicResource IslandForeground}"
         PreviewKeyDown="OnWindowPreviewKeyDown"
         Deactivated="OnWindowDeactivated">
 
@@ -25,12 +25,12 @@
     <Grid x:Name="Root">
 
         <!--
-          顶部热区：鼠标“撞”到屏幕顶端时也能展开（胶囊离顶端有几像素空隙）。
+          顶部热区：鼠标“撞”到屏幕顶端时也能展开（待机时岛只是一条细线，很难精确指到）。
           几乎透明（Alpha=1）但能接收鼠标；只有很窄的一条，不影响下面的窗口。
         -->
         <Border x:Name="HotZone"
                 HorizontalAlignment="Center" VerticalAlignment="Top"
-                Width="200" Height="6"
+                Width="220" Height="6"
                 Background="#01000000"
                 AllowDrop="True"
                 MouseEnter="OnIslandMouseEnter"
@@ -40,10 +40,15 @@
                 DragLeave="OnIslandDragLeave"
                 Drop="OnIslandDrop" />
 
+        <!--
+          CapsuleHost 固定为最大尺寸，从不改变布局大小。
+          胶囊的形状是一个 RectangleGeometry，由弹簧动画逐帧改它的位置、大小和圆角：
+          背景、阴影和内容裁剪共用这一个几何体。这样动画每帧只重绘、不重新布局，才足够顺滑。
+          背景没有填充的地方不接收鼠标，所以只有胶囊本身可以点。
+        -->
         <Grid x:Name="CapsuleHost"
               HorizontalAlignment="Center"
               VerticalAlignment="Top"
-              Width="140" Height="34"
               AllowDrop="True"
               MouseEnter="OnIslandMouseEnter"
               MouseLeave="OnIslandMouseLeave"
@@ -68,21 +73,24 @@
             </Grid.ContextMenu>
 
             <!-- 阴影单独放一层，避免 Effect 影响文字渲染 -->
-            <Border x:Name="ShadowLayer"
-                    Background="{StaticResource IslandBackground}"
-                    CornerRadius="17">
-                <Border.Effect>
-                    <DropShadowEffect BlurRadius="18" ShadowDepth="3" Direction="270"
+            <Path x:Name="ShadowLayer" Fill="{DynamicResource IslandBackground}">
+                <Path.Effect>
+                    <DropShadowEffect x:Name="CapsuleShadow" BlurRadius="18" ShadowDepth="3" Direction="270"
                                       Opacity="0.35" Color="Black" RenderingBias="Performance" />
-                </Border.Effect>
-            </Border>
+                </Path.Effect>
+            </Path>
 
-            <Border x:Name="Capsule"
-                    Background="{StaticResource IslandBackground}"
-                    CornerRadius="17"
-                    SizeChanged="OnCapsuleSizeChanged">
+            <!-- 浅色主题下有一圈细描边，免得浅色胶囊融进浅色背景 -->
+            <Path x:Name="CapsuleShape"
+                  Fill="{DynamicResource IslandBackground}"
+                  Stroke="{DynamicResource IslandOutline}"
+                  StrokeThickness="1" />
 
-                <Grid>
+            <!-- 各状态的内容按各自的最终尺寸摆好，由胶囊形状裁剪出可见部分 -->
+            <Grid x:Name="ContentHost">
+                    <!-- 待机细线：没有内容 -->
+                    <Grid x:Name="LineView" />
+
                     <!-- 待机：只显示时间 -->
                     <Grid x:Name="IdleView">
                         <TextBlock x:Name="IdleClock"
@@ -98,7 +106,7 @@
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <Ellipse x:Name="CompactDot" Width="10" Height="10" Fill="{StaticResource IslandGreen}"
+                        <Ellipse x:Name="CompactDot" Width="10" Height="10" Fill="{DynamicResource IslandGreen}"
                                  VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
                             <Ellipse.RenderTransform>
                                 <ScaleTransform x:Name="CompactDotScale" />
@@ -112,7 +120,7 @@
                         <TextBlock x:Name="CompactClock" Grid.Column="2"
                                    Text="00:00"
                                    FontSize="13"
-                                   Foreground="{StaticResource IslandSecondary}"
+                                   Foreground="{DynamicResource IslandSecondary}"
                                    VerticalAlignment="Center" />
                     </Grid>
 
@@ -124,10 +132,10 @@
                             <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <Border x:Name="MediaCompactArt" Width="24" Height="24" CornerRadius="7"
-                                Background="#FF2C2C2E" VerticalAlignment="Center">
+                                Background="{DynamicResource IslandSurfaceStrong}" VerticalAlignment="Center">
                             <TextBlock x:Name="MediaCompactArtPlaceholder" Text="&#xE8D6;"
                                        FontFamily="{StaticResource IconFont}" FontSize="12"
-                                       Foreground="{StaticResource IslandSecondary}"
+                                       Foreground="{DynamicResource IslandSecondary}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
                         <TextBlock x:Name="MediaCompactTitle" Grid.Column="1" Margin="10,0"
@@ -149,7 +157,7 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource IslandAccent}"
+                        <Border Width="40" Height="40" CornerRadius="20" Background="{DynamicResource IslandAccent}"
                                 VerticalAlignment="Center">
                             <TextBlock x:Name="NotificationIcon" Text="🔔" FontSize="18"
                                        FontFamily="Segoe UI Emoji"
@@ -161,7 +169,7 @@
                                        TextTrimming="CharacterEllipsis" />
                             <TextBlock x:Name="NotificationBody" Text=""
                                        FontSize="12" Margin="0,2,0,0"
-                                       Foreground="{StaticResource IslandSecondary}"
+                                       Foreground="{DynamicResource IslandSecondary}"
                                        TextTrimming="CharacterEllipsis" />
                         </StackPanel>
                     </Grid>
@@ -187,10 +195,12 @@
                                              Tag="Translate" ToolTip="AI 翻译" Checked="OnTabChecked" />
                                 <RadioButton x:Name="TabMonitor" Style="{StaticResource IslandTab}" Content="&#xE9D9;"
                                              Tag="Monitor" ToolTip="系统监控" Checked="OnTabChecked" />
+                                <RadioButton x:Name="TabAppearance" Style="{StaticResource IslandTab}" Content="&#xE790;"
+                                             Tag="Appearance" ToolTip="外观" Checked="OnTabChecked" />
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                 <TextBlock x:Name="ExpandedDate" FontSize="11" Margin="0,0,8,0"
-                                           Foreground="{StaticResource IslandTertiary}" VerticalAlignment="Center" />
+                                           Foreground="{DynamicResource IslandTertiary}" VerticalAlignment="Center" />
                                 <TextBlock x:Name="ExpandedClock" Text="00:00" FontSize="14" FontWeight="SemiBold"
                                            VerticalAlignment="Center" />
                             </StackPanel>
@@ -213,20 +223,20 @@
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
                                         <Border x:Name="MediaExpandedArt" Width="72" Height="72" CornerRadius="14"
-                                                Background="#FF2C2C2E">
+                                                Background="{DynamicResource IslandSurfaceStrong}">
                                             <TextBlock x:Name="MediaExpandedArtPlaceholder" Text="&#xE8D6;"
                                                        FontFamily="{StaticResource IconFont}" FontSize="26"
-                                                       Foreground="{StaticResource IslandSecondary}"
+                                                       Foreground="{DynamicResource IslandSecondary}"
                                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
                                             <TextBlock x:Name="MediaTitle" FontSize="16" FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis" />
                                             <TextBlock x:Name="MediaArtist" FontSize="13" Margin="0,2,0,0"
-                                                       Foreground="{StaticResource IslandSecondary}"
+                                                       Foreground="{DynamicResource IslandSecondary}"
                                                        TextTrimming="CharacterEllipsis" />
                                             <TextBlock x:Name="MediaSource" FontSize="11" Margin="0,3,0,0"
-                                                       Foreground="{StaticResource IslandTertiary}"
+                                                       Foreground="{DynamicResource IslandTertiary}"
                                                        TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
                                     </Grid>
@@ -236,16 +246,16 @@
                                             <RowDefinition Height="Auto" />
                                             <RowDefinition Height="Auto" />
                                         </Grid.RowDefinitions>
-                                        <Border x:Name="ProgressTrack" Height="4" CornerRadius="2" Background="#33FFFFFF"
+                                        <Border x:Name="ProgressTrack" Height="4" CornerRadius="2" Background="{DynamicResource IslandSurfaceStrong}"
                                                 SizeChanged="OnProgressTrackSizeChanged">
                                             <Border x:Name="ProgressFill" HorizontalAlignment="Left" Width="0"
-                                                    CornerRadius="2" Background="{StaticResource IslandGreen}" />
+                                                    CornerRadius="2" Background="{DynamicResource IslandGreen}" />
                                         </Border>
                                         <TextBlock x:Name="MediaPosition" Grid.Row="1" Margin="0,4,0,0"
-                                                   FontSize="11" Foreground="{StaticResource IslandSecondary}"
+                                                   FontSize="11" Foreground="{DynamicResource IslandSecondary}"
                                                    HorizontalAlignment="Left" Text="0:00" />
                                         <TextBlock x:Name="MediaDuration" Grid.Row="1" Margin="0,4,0,0"
-                                                   FontSize="11" Foreground="{StaticResource IslandSecondary}"
+                                                   FontSize="11" Foreground="{DynamicResource IslandSecondary}"
                                                    HorizontalAlignment="Right" Text="0:00" />
                                     </Grid>
 
@@ -270,10 +280,10 @@
                             <panels:ShelfPanel x:Name="ShelfPanel" Visibility="Collapsed" />
                             <panels:TranslatePanel x:Name="TranslatePanel" Visibility="Collapsed" />
                             <panels:MonitorPanel x:Name="MonitorPanel" Visibility="Collapsed" />
+                            <panels:AppearancePanel x:Name="AppearancePanel" Visibility="Collapsed" />
                         </Grid>
                     </Grid>
-                </Grid>
-            </Border>
+            </Grid>
         </Grid>
     </Grid>
 </Window>

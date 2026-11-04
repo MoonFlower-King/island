@@ -9,4 +9,5 @@ public enum IslandTab
     Shelf,
     Translate,
     Monitor,
+    Appearance,
 }
