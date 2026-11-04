@@ -9,6 +9,7 @@
 //!         ├ line（细线的颜色：放音乐时变成封面主题色）
 //!         ├ compact（音乐胶囊：封面、歌名、律动条）
 //!         ├ level（音量 / 亮度提示）
+//!         ├ notification（通知）
 //!         └ expanded（展开面板）
 //! ```
 //!
@@ -60,6 +61,7 @@ pub enum View {
     Clock,
     Compact,
     Level,
+    Notification,
     Expanded,
 }
 
@@ -71,6 +73,7 @@ pub struct Scene {
     line: SpriteVisual,
     line_brush: CompositionColorBrush,
     pub level: Layer,
+    pub notification: Layer,
     pub clock: Layer,
     edge: Edge,
     bg_brush: CompositionColorBrush,
@@ -175,11 +178,13 @@ impl Scene {
 
         let compact = make_layer(c, gfx, metrics::COMPACT, scale)?;
         let level = make_layer(c, gfx, metrics::LEVEL, scale)?;
+        let notification = make_layer(c, gfx, metrics::NOTIFICATION, scale)?;
         let clock = make_layer(c, gfx, metrics::IDLE_CLOCK, scale)?;
         content.Children()?.InsertAtTop(&clock.visual)?;
         let expanded = make_layer(c, gfx, metrics::EXPANDED, scale)?;
         content.Children()?.InsertAtTop(&compact.visual)?;
         content.Children()?.InsertAtTop(&level.visual)?;
+        content.Children()?.InsertAtTop(&notification.visual)?;
         content.Children()?.InsertAtTop(&expanded.visual)?;
 
         // 律动条：4 根，挂在音乐胶囊右侧，动画全在合成器里跑
@@ -225,6 +230,7 @@ impl Scene {
             line,
             line_brush,
             level,
+            notification,
             clock,
             edge: Edge::Top,
             bg_brush,
@@ -264,7 +270,13 @@ impl Scene {
             Edge::Left => "Vector3(0, (p.H - VH) / 2, 0)",
             Edge::Right => "Vector3(p.W - VW, (p.H - VH) / 2, 0)",
         };
-        for layer in [&self.compact, &self.level, &self.clock, &self.expanded] {
+        for layer in [
+            &self.compact,
+            &self.level,
+            &self.notification,
+            &self.clock,
+            &self.expanded,
+        ] {
             bind(
                 c,
                 &layer.visual,
@@ -384,8 +396,10 @@ impl Scene {
     /// 内容切换：旧的淡出，新的稍等一下再淡入，并从略小一点放大到原尺寸。
     pub fn show(&self, view: View, growing: bool) -> Result<()> {
         for (layer, v) in [
+            (&self.clock, View::Clock),
             (&self.compact, View::Compact),
             (&self.level, View::Level),
+            (&self.notification, View::Notification),
             (&self.expanded, View::Expanded),
         ] {
             fade(&self.compositor, &layer.visual, view == v, growing)?;
@@ -468,6 +482,7 @@ impl Scene {
         for layer in [
             &mut self.compact,
             &mut self.level,
+            &mut self.notification,
             &mut self.clock,
             &mut self.expanded,
         ] {

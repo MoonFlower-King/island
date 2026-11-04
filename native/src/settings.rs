@@ -81,6 +81,8 @@ pub struct Settings {
     pub media_as_line: bool,
     pub dock: Edge,
     pub persist_clipboard: bool,
+    /// 岛显示在哪块屏幕上（设备名，如 `\\.\DISPLAY2`）；空表示主屏幕。只有原生版用。
+    pub monitor: String,
     /// 当前使用的翻译服务（预设的 id）。
     pub translate_provider: String,
     /// 原始 JSON：保存时在它上面改，保留不认识的字段。
@@ -132,6 +134,7 @@ impl Settings {
             dock: Edge::parse(raw.get("Dock").and_then(Value::as_str).unwrap_or("Top")),
             persist_clipboard: get_bool(&raw, "PersistClipboardHistory", true),
             translate_provider: get_str(&raw, "TranslateProvider", "anthropic"),
+            monitor: get_str(&raw, "Monitor", ""),
             raw,
         }
     }
@@ -203,6 +206,7 @@ impl Settings {
             json!(self.persist_clipboard),
         );
         m.insert("TranslateProvider".into(), json!(self.translate_provider));
+        m.insert("Monitor".into(), json!(self.monitor));
 
         let mut theme = match m.remove("Theme") {
             Some(Value::Object(t)) => t,
