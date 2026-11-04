@@ -59,6 +59,8 @@
                     <MenuItem Header="演示：弹出一条通知" Click="OnDemoNotification" />
                     <MenuItem x:Name="PersistClipboardMenu" Header="保存剪贴板历史到磁盘"
                               IsCheckable="True" Click="OnTogglePersistClipboard" />
+                    <MenuItem x:Name="StartupMenu" Header="开机自动启动"
+                              IsCheckable="True" Click="OnToggleStartup" />
                     <MenuItem Header="打开数据文件夹" Click="OnOpenDataFolder" />
                     <Separator />
                     <MenuItem Header="退出" Click="OnExit" />

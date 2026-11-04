@@ -21,6 +21,9 @@ public partial class MonitorPanel : UserControl
         _timer.Tick += (_, _) => Update();
     }
 
+    /// <summary>是否已经显示过至少一次采样结果（冒烟测试用）。</summary>
+    public bool HasData { get; private set; }
+
     public void SetActive(bool active)
     {
         if (active == _timer.IsEnabled) return;
@@ -49,6 +52,7 @@ public partial class MonitorPanel : UserControl
 
         DownText.Text = SystemMonitor.FormatSpeed(s.DownloadBytesPerSecond);
         UpText.Text = SystemMonitor.FormatSpeed(s.UploadBytesPerSecond);
+        HasData = true;
     }
 
     private static Brush Frozen(Color color)

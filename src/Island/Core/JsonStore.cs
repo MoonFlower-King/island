@@ -16,8 +16,11 @@ public static class JsonStore
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping, // 中文原样保存，方便手动查看
     };
 
+    /// <summary>数据目录。可以用环境变量 ISLAND_DATA_DIR 改到别处（冒烟测试用它隔离真实数据）。</summary>
     public static string DataDirectory { get; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Island");
+        Environment.GetEnvironmentVariable("ISLAND_DATA_DIR") is { Length: > 0 } custom
+            ? custom
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Island");
 
     public static string PathOf(string fileName) => Path.Combine(DataDirectory, fileName);
 

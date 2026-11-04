@@ -11,13 +11,28 @@
     <RootNamespace>Island</RootNamespace>
     <AssemblyName>Island</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\island.ico</ApplicationIcon>
     <!-- 允许在非 Windows 机器上编译（CI / 代码检查用），运行仍需 Windows -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 发布正式版时由 CI 根据 Git 标签（v1.2.3）覆盖 -->
+    <Version>1.0.0</Version>
+    <Product>Island</Product>
+    <AssemblyTitle>Island 灵动岛</AssemblyTitle>
+    <Description>Windows 上的灵动岛：音乐、待办、剪贴板历史、文件中转站、AI 翻译、系统监控。</Description>
+    <Authors>MoonFlower-King</Authors>
+    <Copyright>Copyright © MoonFlower-King</Copyright>
   </PropertyGroup>
 
   <ItemGroup>
     <!-- 官方 Anthropic C# SDK，用于 AI 翻译 -->
     <PackageReference Include="Anthropic" Version="13.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Island.Tests" />
   </ItemGroup>
 
 </Project>

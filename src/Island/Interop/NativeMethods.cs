@@ -79,6 +79,28 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool IsWindow(IntPtr hWnd);
 
+    /// <summary>SHQueryUserNotificationState 的返回值中表示“用户正在全屏做事”的几种。</summary>
+    private const int QUNS_BUSY = 2;                    // 有全屏程序（视频、F11 浏览器等）
+    private const int QUNS_RUNNING_D3D_FULL_SCREEN = 3; // 全屏游戏
+    private const int QUNS_PRESENTATION_MODE = 4;       // 演示模式（PPT 放映等）
+
+    [DllImport("shell32.dll")]
+    private static extern int SHQueryUserNotificationState(out int state);
+
+    /// <summary>当前是否有全屏程序在前台。这时岛应该让开。</summary>
+    public static bool IsFullscreenAppRunning()
+    {
+        try
+        {
+            if (SHQueryUserNotificationState(out int state) != 0) return false;
+            return state is QUNS_BUSY or QUNS_RUNNING_D3D_FULL_SCREEN or QUNS_PRESENTATION_MODE;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static long GetWindowLong(IntPtr hWnd, int nIndex) =>
         IntPtr.Size == 8
             ? GetWindowLongPtr64(hWnd, nIndex).ToInt64()

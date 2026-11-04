@@ -46,7 +46,8 @@ public partial class IslandWindow : Window
     private readonly DispatcherTimer _collapseWatchdog = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly DispatcherTimer _notificationTimer = new();
     private readonly DispatcherTimer _clockTimer = new();
-    private readonly DispatcherTimer _topmostTimer = new() { Interval = TimeSpan.FromSeconds(3) };
+    // 定期抢回置顶，并检查是否有全屏程序（有就隐藏自己）
+    private readonly DispatcherTimer _topmostTimer = new() { Interval = TimeSpan.FromSeconds(1.5) };
 
     private IntPtr _hwnd;
     private IslandState _baseState = IslandState.Idle;
@@ -54,6 +55,9 @@ public partial class IslandWindow : Window
     private FrameworkElement? _currentView;
     private bool _isHovering;
     private bool _hasNotification;
+    private bool _holdExpanded;           // 强制保持展开（冒烟测试用）
+    private bool _autoHideForFullscreen = true;
+    private bool _hiddenForFullscreen;
 
     public IslandWindow()
     {
@@ -87,10 +91,7 @@ public partial class IslandWindow : Window
         _collapseWatchdog.Tick += (_, _) => TryCollapse();
         _notificationTimer.Tick += (_, _) => DismissNotification();
         _clockTimer.Tick += (_, _) => UpdateClock();
-        _topmostTimer.Tick += (_, _) =>
-        {
-            if (_hwnd != IntPtr.Zero) NativeMethods.BringToTopmost(_hwnd);
-        };
+        _topmostTimer.Tick += (_, _) => OnTopmostTick();
 
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         SystemParameters.StaticPropertyChanged += OnSystemParametersChanged;
@@ -136,6 +137,35 @@ public partial class IslandWindow : Window
                 break;
         }
         return IntPtr.Zero;
+    }
+
+    private void OnTopmostTick()
+    {
+        if (_hwnd == IntPtr.Zero) return;
+
+        bool fullscreen = _autoHideForFullscreen && NativeMethods.IsFullscreenAppRunning();
+        if (fullscreen != _hiddenForFullscreen) SetHiddenForFullscreen(fullscreen);
+
+        // 全屏时不去抢置顶，免得盖在视频或游戏上
+        if (!fullscreen) NativeMethods.BringToTopmost(_hwnd);
+    }
+
+    /// <summary>看视频、打游戏、放 PPT 时淡出并让鼠标穿透，结束后恢复。</summary>
+    private void SetHiddenForFullscreen(bool hidden)
+    {
+        _hiddenForFullscreen = hidden;
+        Root.IsHitTestVisible = !hidden;
+        Root.BeginAnimation(OpacityProperty, new DoubleAnimation(hidden ? 0 : 1, TimeSpan.FromMilliseconds(200)));
+
+        if (hidden)
+        {
+            _hoverInTimer.Stop();
+            _collapseWatchdog.Stop();
+            _isHovering = false;
+            EndTyping(restoreFocus: false);
+            UpdateState();
+        }
+        Log.Info(hidden ? "检测到全屏程序，隐藏" : "全屏结束，恢复显示");
     }
 
     /// <summary>放在主显示器工作区的顶部正中。</summary>
@@ -371,6 +401,7 @@ public partial class IslandWindow : Window
 
     private void OnIslandMouseEnter(object sender, MouseEventArgs e)
     {
+        if (_hiddenForFullscreen) return;
         _hoverOutTimer.Stop();
         if (!_isHovering && !_hoverInTimer.IsEnabled) _hoverInTimer.Start();
     }
@@ -418,7 +449,7 @@ public partial class IslandWindow : Window
     }
 
     private bool ShouldStayExpanded() =>
-        IsCursorOverIsland() || CapsuleMenu.IsOpen || _isDraggingOver || (_isTyping && IsActive);
+        _holdExpanded || IsCursorOverIsland() || CapsuleMenu.IsOpen || _isDraggingOver || (_isTyping && IsActive);
 
     /// <summary>直接问系统光标在哪里，比 WPF 的 IsMouseOver 可靠（拖放、快速移动时也准）。</summary>
     private bool IsCursorOverIsland()

@@ -52,6 +52,7 @@ public partial class IslandWindow
         TranslatePanel.Attach(new TranslationService(_settings));
 
         PersistClipboardMenu.IsChecked = _settings.PersistClipboardHistory;
+        StartupMenu.IsChecked = StartupRegistration.IsEnabled;
 
         _dragLeaveTimer.Tick += (_, _) =>
         {
@@ -287,6 +288,12 @@ public partial class IslandWindow
                 Debug.WriteLine($"[Clipboard] 删除历史文件失败：{ex.Message}");
             }
         }
+    }
+
+    private void OnToggleStartup(object sender, RoutedEventArgs e)
+    {
+        bool wanted = StartupMenu.IsChecked;
+        if (!StartupRegistration.SetEnabled(wanted)) StartupMenu.IsChecked = !wanted;
     }
 
     private void OnOpenDataFolder(object sender, RoutedEventArgs e)
