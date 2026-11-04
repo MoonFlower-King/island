@@ -11,6 +11,7 @@ use windows::UI::Composition::Compositor;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::System::Com::CoCreateGuid;
 use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::DataExchange::AddClipboardFormatListener;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -23,24 +24,27 @@ use windows::Win32::System::WinRT::{
     CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
 };
 use windows::Win32::UI::HiDpi::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
+use windows::Win32::UI::Input::Ime::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::core::{Interface, PCWSTR, Result, w};
 
 use island::clip::History;
 use island::color::{self, Palette, Rgb};
+use island::edit::TextEdit;
 use island::level::{self, WheelAccumulator};
 use island::metrics::{Edge, IslandState, WINDOW_HEIGHT, WINDOW_WIDTH};
 use island::playback::Clock;
 use island::settings::{Settings, ThemeMode};
 use island::state::{self, HoverTracker, Inputs, MEDIA_LINGER_MS};
+use island::todo::Todos;
 
 use super::gfx::Gfx;
 use super::media::{self, Command, Snapshot, WM_MEDIA};
 use super::scene::{self, Scene, View};
 use super::system::{self, Monitor, Volume};
-use super::views::{self, CLIP_ROWS, Hit, Tab, Targets, ViewState};
+use super::views::{self, CLIP_ROWS, Editing, Field, Hit, TODO_ROWS, Tab, Targets, ViewState};
 use super::{log, smoke};
 
 const TIMER_POLL: usize = 1;
@@ -84,6 +88,16 @@ pub struct App {
     clock: Clock,
     pub clips: History,
     clip_scroll: usize,
+    pub todos: Todos,
+    todo_scroll: usize,
+    /// 正在编辑的输入框。有焦点时窗口才变成可激活的，键盘输入才会进来。
+    pub editing: Option<(Field, TextEdit)>,
+    /// 输入法正在组的字、组字内的光标（UTF-16）。
+    composition: (String, usize),
+    /// WM_CHAR 按 UTF-16 一个个来，表情这类字符要等低位代理到了再拼起来。
+    high_surrogate: Option<u16>,
+    /// 开始编辑前在前台的窗口：编辑结束（回车、Esc、收起）时把焦点还给它。
+    previous_foreground: HWND,
     /// 刚刚自己写入剪贴板的文字，收到通知时不要再记一遍。
     own_clip: Option<String>,
     monitor: Monitor,
@@ -214,6 +228,11 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         } else {
             History::default()
         };
+        let todos = if smoke_dir.is_none() {
+            Todos::from_json(&std::fs::read_to_string(data_file("todos.json")).unwrap_or_default())
+        } else {
+            Todos::default()
+        };
         let volume = Volume::new();
         let last_volume = volume.get();
 
@@ -237,6 +256,12 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             clock: Clock::default(),
             clips,
             clip_scroll: 0,
+            todos,
+            todo_scroll: 0,
+            editing: None,
+            composition: (String::new(), 0),
+            high_surrogate: None,
+            previous_foreground: HWND::default(),
             own_clip: None,
             monitor: Monitor::default(),
             volume,
@@ -386,6 +411,7 @@ impl App {
             if target != IslandState::Expanded {
                 self.hovered = None;
                 self.pressed = None;
+                self.blur(true);
             }
         }
         self.update_equalizer();
@@ -482,6 +508,7 @@ impl App {
             }
         }
         self.targets = targets;
+        self.update_caret();
     }
 
     fn view_state<'a>(&'a self, today: &'a str) -> ViewState<'a> {
@@ -496,6 +523,14 @@ impl App {
             volume: self.last_volume,
             clips: &self.clips.items,
             clip_scroll: self.clip_scroll,
+            todos: &self.todos.items,
+            todo_scroll: self.todo_scroll,
+            editing: self.editing.as_ref().map(|(field, edit)| Editing {
+                field: *field,
+                edit,
+                composition: &self.composition.0,
+                composition_caret: self.composition.1,
+            }),
             today,
             sample: self.monitor.latest,
             hour: t.wHour,
@@ -515,6 +550,11 @@ impl App {
 
     pub fn monitor_sample(&self) -> Option<system::Sample> {
         self.monitor.latest
+    }
+
+    pub fn caret_rect(&self) -> Option<island::metrics::Rect> {
+        let (f, _) = self.editing.as_ref()?;
+        self.targets.field(*f)?.caret
     }
 
     pub fn accent_color(&self) -> Rgb {
@@ -697,17 +737,24 @@ impl App {
     }
 
     fn on_wheel(&mut self, delta: i32) {
+        // 有焦点时滚轮消息会发给本窗口，即使光标不在岛上
+        if self.editing.is_some() && !self.cursor_inside() {
+            return;
+        }
         // 展开在别的标签：剪贴板列表滚动，其余不处理
         if self.state == IslandState::Expanded && self.tab != Tab::Music {
-            if self.tab == Tab::Clipboard {
-                let max = self.clips.items.len().saturating_sub(CLIP_ROWS);
-                self.clip_scroll = if delta < 0 {
-                    (self.clip_scroll + 1).min(max)
-                } else {
-                    self.clip_scroll.saturating_sub(1)
-                };
-                self.redraw_expanded();
-            }
+            let (scroll, len, rows) = match self.tab {
+                Tab::Clipboard => (&mut self.clip_scroll, self.clips.items.len(), CLIP_ROWS),
+                Tab::Todo => (&mut self.todo_scroll, self.todos.items.len(), TODO_ROWS),
+                _ => return,
+            };
+            let max = len.saturating_sub(rows);
+            *scroll = if delta < 0 {
+                (*scroll + 1).min(max)
+            } else {
+                scroll.saturating_sub(1)
+            };
+            self.redraw_expanded();
             return;
         }
         let notches = self.wheel.push(delta);
@@ -731,7 +778,7 @@ impl App {
     // ───────────────────────────── 剪贴板 ─────────────────────────────
 
     fn on_clipboard_changed(&mut self) {
-        let Some(text) = system::read_clipboard_text(self.hwnd) else {
+        let Some(text) = system::read_clipboard_text(self.hwnd, true) else {
             return;
         };
         if self.own_clip.take().as_deref() == Some(text.as_str()) {
@@ -839,7 +886,7 @@ impl App {
         let busy = near || self.pressed.is_some() || self.state == IslandState::Expanded;
         self.set_poll_interval(if busy { POLL_MS } else { POLL_FAR_MS });
         self.set_interactive(inside || self.pressed.is_some());
-        let hold = self.menu_open || self.pressed.is_some();
+        let hold = self.menu_open || self.pressed.is_some() || self.editing.is_some();
         // 刚用滚轮调过音量：先不展开
         let wants_inside = inside && tick() >= self.wheel_until;
         if self.hover.update(wants_inside, hold, tick()) {
@@ -857,6 +904,10 @@ impl App {
         let (lx, ly) = self.local(x, y);
         if self.pressed == Some(Hit::Volume) {
             self.drag_volume(lx);
+            return;
+        }
+        if let Some(Hit::Field(f)) = self.pressed {
+            self.place_caret(f, lx, ly, true);
             return;
         }
         let hit = self.targets.hit(lx, ly);
@@ -878,14 +929,31 @@ impl App {
         }
         let (lx, ly) = self.local(x, y);
         let hit = self.targets.hit(lx, ly);
+        // 点到输入框以外的地方：结束编辑
+        if !matches!(hit, Some(Hit::Field(_))) {
+            self.blur(true);
+        }
         if hit.is_some() {
             self.pressed = hit;
             unsafe { SetCapture(self.hwnd) };
-            if hit == Some(Hit::Volume) {
-                self.drag_volume(lx);
-            } else {
-                self.redraw_expanded();
+            match hit {
+                Some(Hit::Volume) => self.drag_volume(lx),
+                Some(Hit::Field(f)) => {
+                    let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+                    if self.editing.as_ref().map(|(e, _)| *e) == Some(f) {
+                        self.place_caret(f, lx, ly, shift);
+                    } else {
+                        // 颜色、时间框第一次点进去时全选，方便直接改
+                        self.focus_field(f);
+                        if f == Field::Todo {
+                            self.place_caret(f, lx, ly, false);
+                        }
+                    }
+                }
+                _ => self.redraw_expanded(),
             }
+        } else {
+            self.redraw_expanded();
         }
     }
 
@@ -897,6 +965,9 @@ impl App {
             let _ = ReleaseCapture();
         }
         let (lx, ly) = self.local(x, y);
+        if matches!(pressed, Hit::Field(_)) {
+            return;
+        }
         if pressed != Hit::Volume && self.targets.hit(lx, ly) == Some(pressed) {
             self.activate(pressed);
         }
@@ -925,6 +996,26 @@ impl App {
                 self.clip_scroll = 0;
                 self.save_clips();
             }
+            Hit::Field(_) => {}
+            Hit::TodoToggle(i) => {
+                self.todos.toggle(i);
+                self.save_todos();
+            }
+            Hit::TodoDelete(i) => {
+                self.todos.remove(i);
+                self.todo_scroll = self
+                    .todo_scroll
+                    .min(self.todos.items.len().saturating_sub(TODO_ROWS));
+                self.hovered = None;
+                self.save_todos();
+            }
+            Hit::TodoClearDone => {
+                if self.todos.clear_completed() {
+                    self.todo_scroll = 0;
+                    self.hovered = None;
+                    self.save_todos();
+                }
+            }
             Hit::Theme(_)
             | Hit::Swatch(..)
             | Hit::IdleStyle(_)
@@ -937,6 +1028,7 @@ impl App {
         if tab == self.tab {
             return;
         }
+        self.blur(true);
         self.tab = tab;
         self.hovered = None;
         if tab == Tab::Monitor {
@@ -944,6 +1036,309 @@ impl App {
         }
         self.settings.last_tab = tab.name().into();
         self.save_settings();
+        self.redraw_expanded();
+    }
+
+    // ───────────────────────────── 待办 ─────────────────────────────
+
+    fn save_todos(&self) {
+        if self.smoke.is_none() {
+            save_file("todos.json", &self.todos.to_json());
+        }
+    }
+
+    fn add_todo(&mut self, text: &str) -> bool {
+        let (_, iso) = iso_now();
+        if !self.todos.add(text, &new_guid(), &iso) {
+            return false;
+        }
+        self.todo_scroll = 0;
+        self.save_todos();
+        true
+    }
+
+    // ───────────────────────────── 输入框 ─────────────────────────────
+
+    /// 没在编辑时输入框里显示的内容，也是开始编辑时的初始内容。
+    fn field_value(&self, field: Field) -> String {
+        let t = &self.settings.theme;
+        match field {
+            Field::Todo => String::new(),
+            Field::Hex(0) => t.custom_background.clone(),
+            Field::Hex(1) => t.custom_foreground.clone(),
+            Field::Hex(_) => t.custom_accent.clone(),
+            Field::DayStarts => t.day_starts.clone(),
+            Field::NightStarts => t.night_starts.clone(),
+        }
+    }
+
+    /// 让输入框获得键盘焦点：窗口临时变成可激活的。
+    pub fn focus_field(&mut self, field: Field) {
+        self.blur(true);
+        let mut edit = TextEdit::new(field.max_chars(), field.multiline());
+        edit.set_text(&self.field_value(field));
+        if field != Field::Todo {
+            edit.select_all();
+        }
+        self.editing = Some((field, edit));
+        self.composition = (String::new(), 0);
+        self.high_surrogate = None;
+        unsafe {
+            let previous = GetForegroundWindow();
+            if previous != self.hwnd {
+                self.previous_foreground = previous;
+            }
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex & !(WS_EX_NOACTIVATE.0 as isize));
+            let _ = SetForegroundWindow(self.hwnd);
+            let _ = SetFocus(Some(self.hwnd));
+            // 颜色、时间框只填 ASCII，关掉输入法免得打出全角字符
+            let _ = ImmAssociateContextEx(
+                self.hwnd,
+                HIMC::default(),
+                if field.wants_ime() { IACE_DEFAULT } else { 0 },
+            );
+        }
+        self.redraw_expanded();
+    }
+
+    /// 结束编辑。`commit` 时把颜色、时间写回设置（格式不对就放弃）。
+    pub fn blur(&mut self, commit: bool) {
+        let Some((field, edit)) = self.editing.take() else {
+            return;
+        };
+        self.composition = (String::new(), 0);
+        unsafe {
+            let himc = ImmGetContext(self.hwnd);
+            if !himc.is_invalid() {
+                let _ = ImmNotifyIME(himc, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+                let _ = ImmReleaseContext(self.hwnd, himc);
+            }
+            let ex = GetWindowLongPtrW(self.hwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(self.hwnd, GWL_EXSTYLE, ex | WS_EX_NOACTIVATE.0 as isize);
+            // 还在前台（回车、Esc、收起）：把焦点还给原来的程序；点到别处时系统已经切走了
+            let previous = std::mem::take(&mut self.previous_foreground);
+            if GetForegroundWindow() == self.hwnd && !previous.is_invalid() {
+                let _ = SetForegroundWindow(previous);
+            }
+        }
+        let _ = self.scene.set_caret(None);
+        if commit {
+            self.commit_field(field, edit.text());
+        }
+        if self.state == IslandState::Expanded {
+            self.redraw_expanded();
+        }
+    }
+
+    fn commit_field(&mut self, field: Field, text: &str) {
+        let t = &mut self.settings.theme;
+        let changed = match field {
+            Field::Todo => false,
+            Field::Hex(kind) => {
+                let Some(c) = color::parse_hex(text) else {
+                    return;
+                };
+                let hex = color::to_hex(c);
+                let slot = match kind {
+                    0 => &mut t.custom_background,
+                    1 => &mut t.custom_foreground,
+                    _ => &mut t.custom_accent,
+                };
+                let changed = *slot != hex;
+                *slot = hex;
+                changed
+            }
+            Field::DayStarts | Field::NightStarts => {
+                let Some(m) = color::parse_minutes(text) else {
+                    return;
+                };
+                let value = format!("{:02}:{:02}", m / 60, m % 60);
+                let slot = if field == Field::DayStarts {
+                    &mut t.day_starts
+                } else {
+                    &mut t.night_starts
+                };
+                let changed = *slot != value;
+                *slot = value;
+                changed
+            }
+        };
+        if changed {
+            self.save_settings();
+            self.apply_theme();
+        }
+    }
+
+    /// 回车：待办就加一条（继续输入下一条），设置框就提交并交回焦点。
+    fn submit_field(&mut self) {
+        let Some((field, edit)) = self.editing.as_mut() else {
+            return;
+        };
+        if *field == Field::Todo {
+            let text = edit.text().to_string();
+            if self.add_todo(&text)
+                && let Some((_, edit)) = self.editing.as_mut()
+            {
+                edit.clear();
+            }
+            self.redraw_expanded();
+        } else {
+            self.blur(true);
+        }
+    }
+
+    fn place_caret(&mut self, field: Field, lx: f32, ly: f32, extend: bool) {
+        let Some(geometry) = self.targets.field(field) else {
+            return;
+        };
+        let Some((f, edit)) = self.editing.as_mut().filter(|(f, _)| *f == field) else {
+            return;
+        };
+        if let Ok(i) =
+            self.gfx
+                .field_hit(edit.text(), f.font_size(), f.multiline(), &geometry, lx, ly)
+        {
+            let byte = edit.byte_index(i);
+            edit.place(byte, extend);
+        }
+        self.redraw_expanded();
+    }
+
+    /// 合成器里的光标跟着输入框走，输入法候选窗也摆到光标旁边。
+    fn update_caret(&self) {
+        let caret = self
+            .editing
+            .as_ref()
+            .and_then(|(f, _)| self.targets.field(*f))
+            .and_then(|g| g.caret)
+            .filter(|_| self.state == IslandState::Expanded);
+        let _ = self
+            .scene
+            .set_caret(caret.map(|r| (r, self.palette.foreground)));
+        if let Some(r) = caret {
+            let frame = self.metrics(self.state).frame(self.edge());
+            let s = self.scene.scale();
+            let x = ((frame.x + r.x) * s) as i32;
+            let y = ((frame.y + r.y) * s) as i32;
+            let h = (r.h * s) as i32;
+            unsafe {
+                let himc = ImmGetContext(self.hwnd);
+                if !himc.is_invalid() {
+                    let form = COMPOSITIONFORM {
+                        dwStyle: CFS_POINT,
+                        ptCurrentPos: POINT { x, y },
+                        ..Default::default()
+                    };
+                    let _ = ImmSetCompositionWindow(himc, &form);
+                    let candidate = CANDIDATEFORM {
+                        dwIndex: 0,
+                        dwStyle: CFS_EXCLUDE,
+                        ptCurrentPos: POINT { x, y: y + h },
+                        rcArea: RECT {
+                            left: x,
+                            top: y,
+                            right: x + 2,
+                            bottom: y + h,
+                        },
+                    };
+                    let _ = ImmSetCandidateWindow(himc, &candidate);
+                    let _ = ImmReleaseContext(self.hwnd, himc);
+                }
+            }
+        }
+    }
+
+    /// 编辑键。返回是否处理了。
+    pub fn on_key(&mut self, vk: VIRTUAL_KEY) -> bool {
+        if self.editing.is_none() {
+            return false;
+        }
+        let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) } < 0;
+        let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+        let Some((_, edit)) = self.editing.as_mut() else {
+            return false;
+        };
+        match vk {
+            VK_LEFT => edit.left(shift),
+            VK_RIGHT => edit.right(shift),
+            VK_HOME => edit.home(shift),
+            VK_END => edit.end(shift),
+            VK_BACK => {
+                edit.backspace();
+            }
+            VK_DELETE => {
+                edit.delete();
+            }
+            VK_RETURN => {
+                self.submit_field();
+                return true;
+            }
+            VK_ESCAPE => {
+                self.blur(false);
+                return true;
+            }
+            VK_TAB => {}
+            _ if ctrl && vk == VIRTUAL_KEY(b'A' as u16) => edit.select_all(),
+            _ if ctrl && (vk == VIRTUAL_KEY(b'C' as u16) || vk == VIRTUAL_KEY(b'X' as u16)) => {
+                if let Some(text) = edit.selected_text().map(str::to_string) {
+                    system::write_clipboard_text(self.hwnd, &text);
+                    if vk == VIRTUAL_KEY(b'X' as u16) {
+                        edit.backspace();
+                    }
+                }
+            }
+            _ if ctrl && vk == VIRTUAL_KEY(b'V' as u16) => {
+                if let Some(text) = system::read_clipboard_text(self.hwnd, false) {
+                    edit.insert(&text);
+                }
+            }
+            _ => return false,
+        }
+        self.redraw_expanded();
+        true
+    }
+
+    /// 打出来的字（WM_CHAR）。
+    pub fn on_char(&mut self, unit: u16) {
+        let Some((_, edit)) = self.editing.as_mut() else {
+            return;
+        };
+        let c = match unit {
+            0xD800..=0xDBFF => {
+                self.high_surrogate = Some(unit);
+                return;
+            }
+            0xDC00..=0xDFFF => {
+                let Some(high) = self.high_surrogate.take() else {
+                    return;
+                };
+                char::decode_utf16([high, unit]).next().and_then(|r| r.ok())
+            }
+            _ => char::from_u32(unit as u32),
+        };
+        // 回车、退格等控制字符由 on_key 处理
+        if let Some(c) = c.filter(|c| !c.is_control()) {
+            edit.insert(c.encode_utf8(&mut [0; 4]));
+            self.redraw_expanded();
+        }
+    }
+
+    /// 输入法：组字更新（`result` 是上屏的字）。
+    fn on_composition(&mut self, composition: Option<(String, usize)>, result: Option<String>) {
+        let Some((_, edit)) = self.editing.as_mut() else {
+            return;
+        };
+        if let Some(text) = result {
+            edit.insert(&text);
+        }
+        if let Some(c) = composition {
+            if !c.0.is_empty() {
+                // 开始组字时先删掉选中的文字
+                edit.insert("");
+            }
+            self.composition = c;
+        }
         self.redraw_expanded();
     }
 
@@ -1015,6 +1410,48 @@ impl App {
             let _ = self.scene.set_scale(&self.gfx, scale);
             self.redraw_all();
         }
+    }
+}
+
+/// 新的 GUID，格式和 .NET 的 Guid.ToString() 一样（小写、带连字符、没有花括号）。
+fn new_guid() -> String {
+    let g = unsafe { CoCreateGuid() }.unwrap_or_default();
+    let d4 = g.data4;
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        g.data1, g.data2, g.data3, d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]
+    )
+}
+
+/// 读输入法的组字串（GCS_COMPSTR / GCS_RESULTSTR）。
+fn ime_string(hwnd: HWND, kind: IME_COMPOSITION_STRING) -> Option<String> {
+    unsafe {
+        let himc = ImmGetContext(hwnd);
+        if himc.is_invalid() {
+            return None;
+        }
+        let bytes = ImmGetCompositionStringW(himc, kind, None, 0);
+        let text = (bytes >= 0).then(|| {
+            let mut buf = vec![0u16; bytes as usize / 2];
+            if bytes > 0 {
+                ImmGetCompositionStringW(himc, kind, Some(buf.as_mut_ptr().cast()), bytes as u32);
+            }
+            String::from_utf16_lossy(&buf)
+        });
+        let _ = ImmReleaseContext(hwnd, himc);
+        text
+    }
+}
+
+fn ime_cursor(hwnd: HWND) -> usize {
+    unsafe {
+        let himc = ImmGetContext(hwnd);
+        if himc.is_invalid() {
+            return 0;
+        }
+        let pos = ImmGetCompositionStringW(himc, GCS_CURSORPOS, None, 0);
+        let _ = ImmReleaseContext(hwnd, himc);
+        pos.max(0) as usize
     }
 }
 
@@ -1177,6 +1614,55 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(1)
         }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_KEYDOWN => {
+            let vk = VIRTUAL_KEY(wparam.0 as u16);
+            if with_app(|a| a.on_key(vk)).unwrap_or(false) {
+                LRESULT(0)
+            } else {
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+        }
+        WM_CHAR => {
+            with_app(|a| a.on_char(wparam.0 as u16));
+            LRESULT(0)
+        }
+        WM_ACTIVATE => {
+            // 点到别的程序：结束编辑
+            if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE {
+                with_app(|a| a.blur(true));
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        WM_IME_SETCONTEXT => {
+            // 组字内容由岛自己画在输入框里，不要系统的组字窗口
+            let lparam = LPARAM(lparam.0 & !(ISC_SHOWUICOMPOSITIONWINDOW as isize));
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
+        WM_IME_STARTCOMPOSITION => {
+            if with_app(|a| a.editing.is_some()).unwrap_or(false) {
+                with_app(|a| a.update_caret());
+                LRESULT(0)
+            } else {
+                unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            }
+        }
+        WM_IME_COMPOSITION => {
+            let flags = lparam.0 as u32;
+            let result = (flags & GCS_RESULTSTR.0 != 0)
+                .then(|| ime_string(hwnd, GCS_RESULTSTR))
+                .flatten();
+            let composition = (flags & GCS_COMPSTR.0 != 0)
+                .then(|| ime_string(hwnd, GCS_COMPSTR).map(|s| (s, ime_cursor(hwnd))))
+                .flatten();
+            // 只有上屏结果、没有新的组字串：组字结束
+            let composition = composition.or(result.as_ref().map(|_| (String::new(), 0)));
+            with_app(|a| a.on_composition(composition, result));
+            LRESULT(0)
+        }
+        WM_IME_ENDCOMPOSITION => {
+            with_app(|a| a.on_composition(Some((String::new(), 0)), None));
+            LRESULT(0)
+        }
         WM_MOUSEMOVE => {
             with_app(|a| {
                 let (x, y) = lparam_point(lparam, a.scene.scale());

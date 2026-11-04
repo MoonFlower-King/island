@@ -47,9 +47,152 @@ struct FormatKey {
     size_bits: u32,
     weight: i32,
     align: Align,
+    /// 输入框用的格式：顶端对齐、不截断，多行时自动换行。
+    field: Option<bool>,
+}
+
+/// 输入框左右的留白。
+pub const FIELD_PAD: f32 = 10.0;
+
+/// 画一个输入框需要的东西。下标都是 UTF-16。
+pub struct FieldDraw<'a> {
+    /// 要显示的文字（输入法正在组字时已经插进了组字内容）。
+    pub text: &'a str,
+    pub placeholder: &'a str,
+    pub rect: Rect,
+    pub size: f32,
+    pub multiline: bool,
+    pub foreground: Rgb,
+    pub accent: Rgb,
+    /// 有焦点时光标位置。
+    pub caret: Option<usize>,
+    pub selection: Option<(usize, usize)>,
+    /// 输入法组字范围（画下划线）。
+    pub composition: Option<(usize, usize)>,
+}
+
+/// 画完以后输入框的几何信息：文字原点（已经算上滚动）和光标矩形。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct FieldGeometry {
+    pub rect: Rect,
+    pub origin: (f32, f32),
+    pub caret: Option<Rect>,
 }
 
 impl Gfx {
+    fn format(&self, style: &TextStyle, field: Option<bool>) -> Result<IDWriteTextFormat> {
+        let key = FormatKey {
+            family: style.family.clone(),
+            size_bits: style.size.to_bits(),
+            weight: style.weight.0,
+            align: style.align,
+            field,
+        };
+        if let Some((_, f)) = self.formats.borrow().iter().find(|(k, _)| *k == key) {
+            return Ok(f.clone());
+        }
+        let format = unsafe {
+            let format = self.dwrite.CreateTextFormat(
+                style.family,
+                None,
+                style.weight,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                style.size,
+                w!("zh-CN"),
+            )?;
+            format.SetTextAlignment(match style.align {
+                Align::Leading => DWRITE_TEXT_ALIGNMENT_LEADING,
+                Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
+                Align::Trailing => DWRITE_TEXT_ALIGNMENT_TRAILING,
+            })?;
+            match field {
+                Some(multiline) => {
+                    format.SetWordWrapping(if multiline {
+                        DWRITE_WORD_WRAPPING_WRAP
+                    } else {
+                        DWRITE_WORD_WRAPPING_NO_WRAP
+                    })?;
+                    format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR)?;
+                }
+                None => {
+                    format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+                    format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+                    let trimming = DWRITE_TRIMMING {
+                        granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                        delimiter: 0,
+                        delimiterCount: 0,
+                    };
+                    let sign = self.dwrite.CreateEllipsisTrimmingSign(&format)?;
+                    format.SetTrimming(&trimming, &sign)?;
+                }
+            }
+            format
+        };
+        self.formats.borrow_mut().push((key, format.clone()));
+        Ok(format)
+    }
+
+    /// 输入框文字的排版。单行时宽度不限（超出部分靠滚动），多行时按框宽换行。
+    fn field_layout(
+        &self,
+        text: &str,
+        size: f32,
+        multiline: bool,
+        rect: Rect,
+    ) -> Result<IDWriteTextLayout> {
+        let style = TextStyle {
+            family: &self.text_font,
+            size,
+            weight: DWRITE_FONT_WEIGHT_NORMAL,
+            align: Align::Leading,
+        };
+        let format = self.format(&style, Some(multiline))?;
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let width = if multiline {
+            (rect.w - 2.0 * FIELD_PAD).max(1.0)
+        } else {
+            100_000.0
+        };
+        unsafe {
+            self.dwrite
+                .CreateTextLayout(&wide, &format, width, 100_000.0)
+        }
+    }
+
+    /// 点在输入框里 (x, y)（DIP，和绘制时同一坐标系）对应的 UTF-16 下标。
+    pub fn field_hit(
+        &self,
+        text: &str,
+        size: f32,
+        multiline: bool,
+        geometry: &FieldGeometry,
+        x: f32,
+        y: f32,
+    ) -> Result<usize> {
+        let layout = self.field_layout(text, size, multiline, geometry.rect)?;
+        let (mut trailing, mut inside) = (
+            windows::core::BOOL::default(),
+            windows::core::BOOL::default(),
+        );
+        let mut m = DWRITE_HIT_TEST_METRICS::default();
+        unsafe {
+            layout.HitTestPoint(
+                x - geometry.origin.0,
+                y - geometry.origin.1,
+                &mut trailing,
+                &mut inside,
+                &mut m,
+            )?;
+        }
+        Ok(m.textPosition as usize
+            + if trailing.as_bool() {
+                m.length as usize
+            } else {
+                0
+            })
+    }
+
     pub fn new(compositor: &Compositor) -> Result<Self> {
         let d3d = create_d3d_device()?;
         let dxgi: IDXGIDevice = d3d.cast()?;
@@ -221,46 +364,6 @@ impl Painter<'_> {
         Ok(b)
     }
 
-    fn text_format(&self, style: &TextStyle) -> Result<IDWriteTextFormat> {
-        let key = FormatKey {
-            family: style.family.clone(),
-            size_bits: style.size.to_bits(),
-            weight: style.weight.0,
-            align: style.align,
-        };
-        if let Some((_, f)) = self.gfx.formats.borrow().iter().find(|(k, _)| *k == key) {
-            return Ok(f.clone());
-        }
-        let format = unsafe {
-            let format = self.gfx.dwrite.CreateTextFormat(
-                style.family,
-                None,
-                style.weight,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                style.size,
-                w!("zh-CN"),
-            )?;
-            format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-            format.SetTextAlignment(match style.align {
-                Align::Leading => DWRITE_TEXT_ALIGNMENT_LEADING,
-                Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
-                Align::Trailing => DWRITE_TEXT_ALIGNMENT_TRAILING,
-            })?;
-            let trimming = DWRITE_TRIMMING {
-                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                delimiter: 0,
-                delimiterCount: 0,
-            };
-            let sign = self.gfx.dwrite.CreateEllipsisTrimmingSign(&format)?;
-            format.SetTrimming(&trimming, &sign)?;
-            format
-        };
-        self.gfx.formats.borrow_mut().push((key, format.clone()));
-        Ok(format)
-    }
-
     pub fn fill_round(&self, r: Rect, radius: f32, c: D2D1_COLOR_F) -> Result<()> {
         let brush = self.brush(c)?;
         unsafe {
@@ -296,7 +399,7 @@ impl Painter<'_> {
         if s.is_empty() {
             return Ok(());
         }
-        let format = self.text_format(style)?;
+        let format = self.gfx.format(style, None)?;
         unsafe {
             let wide: Vec<u16> = s.encode_utf16().collect();
             let brush = self.brush(c)?;
@@ -310,6 +413,157 @@ impl Painter<'_> {
             );
         }
         Ok(())
+    }
+
+    /// 带删除线的单行文字（完成的待办）。
+    pub fn text_struck(&self, s: &str, r: Rect, style: &TextStyle, c: D2D1_COLOR_F) -> Result<()> {
+        if s.is_empty() {
+            return Ok(());
+        }
+        let format = self.gfx.format(style, None)?;
+        let wide: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let layout = self.gfx.dwrite.CreateTextLayout(&wide, &format, r.w, r.h)?;
+            layout.SetStrikethrough(
+                true,
+                DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length: wide.len() as u32,
+                },
+            )?;
+            let brush = self.brush(c)?;
+            self.dc
+                .PushAxisAlignedClip(&rect_f(r), D2D1_ANTIALIAS_MODE_ALIASED);
+            self.dc.DrawTextLayout(
+                windows_numerics::Vector2 { X: r.x, Y: r.y },
+                &layout,
+                &brush,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+            );
+            self.dc.PopAxisAlignedClip();
+        }
+        Ok(())
+    }
+
+    /// 输入框：底色、文字（或灰色提示）、选区、组字下划线。光标本身由合成器画（会闪）。
+    pub fn field(&self, f: &FieldDraw) -> Result<FieldGeometry> {
+        let r = f.rect;
+        let focused = f.caret.is_some();
+        self.fill_round(
+            r,
+            if f.multiline {
+                10.0
+            } else {
+                r.h.min(30.0) / 2.0
+            },
+            color(f.foreground, if focused { 0.14 } else { 0.08 }),
+        )?;
+        let empty = f.text.is_empty();
+        let layout = self.gfx.field_layout(
+            if empty { f.placeholder } else { f.text },
+            f.size,
+            f.multiline,
+            r,
+        )?;
+        let mut metrics = DWRITE_TEXT_METRICS::default();
+        unsafe { layout.GetMetrics(&mut metrics)? };
+        let line_h = if metrics.lineCount > 0 {
+            metrics.height / metrics.lineCount as f32
+        } else {
+            f.size * 1.3
+        };
+
+        // 光标位置（相对文字原点）
+        let caret_at = |pos: usize| -> Result<(f32, f32, f32)> {
+            let (mut x, mut y) = (0.0f32, 0.0f32);
+            let mut m = DWRITE_HIT_TEST_METRICS::default();
+            unsafe { layout.HitTestTextPosition(pos as u32, false, &mut x, &mut y, &mut m)? };
+            Ok((x, y, if m.height > 0.0 { m.height } else { line_h }))
+        };
+        let caret = match f.caret {
+            Some(pos) if !empty => Some(caret_at(pos)?),
+            Some(_) => Some((0.0, 0.0, line_h)),
+            None => None,
+        };
+
+        // 滚动：保证光标看得见
+        let mut origin = if f.multiline {
+            (r.x + FIELD_PAD, r.y + 7.0)
+        } else {
+            (r.x + FIELD_PAD, r.y + (r.h - line_h) / 2.0)
+        };
+        if let Some((cx, cy, ch)) = caret {
+            if f.multiline {
+                let visible = r.h - 14.0;
+                origin.1 -= (cy + ch - visible).max(0.0);
+            } else {
+                let visible = r.w - 2.0 * FIELD_PAD;
+                origin.0 -= (cx - visible + 2.0).max(0.0);
+            }
+        }
+
+        unsafe {
+            self.dc.PushAxisAlignedClip(
+                &rect_f(Rect::new(r.x + 4.0, r.y + 2.0, r.w - 8.0, r.h - 4.0)),
+                D2D1_ANTIALIAS_MODE_ALIASED,
+            );
+            if !empty {
+                if let Some((a, b)) = f.selection.filter(|(a, b)| b > a) {
+                    let mut rects = [DWRITE_HIT_TEST_METRICS::default(); 32];
+                    let mut count = 0u32;
+                    if layout
+                        .HitTestTextRange(
+                            a as u32,
+                            (b - a) as u32,
+                            origin.0,
+                            origin.1,
+                            Some(&mut rects),
+                            &mut count,
+                        )
+                        .is_ok()
+                    {
+                        for m in &rects[..(count as usize).min(rects.len())] {
+                            self.fill_round(
+                                Rect::new(m.left, m.top, m.width.max(2.0), m.height),
+                                2.0,
+                                color(f.accent, 0.45),
+                            )?;
+                        }
+                    }
+                }
+                if let Some((a, b)) = f.composition.filter(|(a, b)| b > a) {
+                    layout.SetUnderline(
+                        true,
+                        DWRITE_TEXT_RANGE {
+                            startPosition: a as u32,
+                            length: (b - a) as u32,
+                        },
+                    )?;
+                }
+            }
+            let brush = self.brush(color(f.foreground, if empty { 0.4 } else { 0.95 }))?;
+            self.dc.DrawTextLayout(
+                windows_numerics::Vector2 {
+                    X: origin.0,
+                    Y: origin.1,
+                },
+                &layout,
+                &brush,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+            );
+            self.dc.PopAxisAlignedClip();
+        }
+
+        let caret = caret.and_then(|(cx, cy, ch)| {
+            let c = Rect::new(origin.0 + cx - 0.5, origin.1 + cy, 1.5, ch);
+            // 滚出可见范围的不画
+            (c.y + c.h > r.y && c.y < r.bottom()).then_some(c)
+        });
+        Ok(FieldGeometry {
+            rect: r,
+            origin,
+            caret,
+        })
     }
 
     /// 图标字体里的一个字形，居中画在 `r` 里。

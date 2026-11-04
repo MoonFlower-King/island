@@ -23,10 +23,12 @@ use windows::core::{HSTRING, Result};
 
 use island::color::{DARK, LIGHT, Rgb};
 use island::metrics::{Edge, IslandState, Metrics};
+use island::settings::ThemeMode;
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_ESCAPE, VK_LEFT, VK_RETURN};
 
 use super::app::{App, TIMER_SMOKE, tick};
 use super::media::{Art, Snapshot};
-use super::views::{Hit, Tab};
+use super::views::{Field, Hit, Tab};
 
 pub struct Smoke {
     dir: PathBuf,
@@ -247,6 +249,10 @@ fn fake_media(playing: bool) -> Snapshot {
     }
 }
 
+fn has_caret(app: &App) -> bool {
+    app.caret_rect().is_some()
+}
+
 fn reschedule(app: &App, ms: u32) {
     unsafe {
         SetTimer(Some(app.hwnd), TIMER_SMOKE, ms, None);
@@ -450,6 +456,97 @@ pub fn step(app: &mut App) {
             );
             snapshot(app, &mut smoke, "15b-idle-clock", None);
             app.activate(Hit::IdleStyle(true));
+            // 待办：输入框获得焦点，打字（含中文和表情的代理对），回车添加
+            app.set_pinned(true);
+            app.set_tab(Tab::Todo);
+            app.focus_field(Field::Todo);
+            for unit in "买牛奶 smoke 😀".encode_utf16() {
+                app.on_char(unit);
+            }
+        }
+        61 => {
+            smoke.check(
+                app.editing
+                    .as_ref()
+                    .is_some_and(|(f, e)| *f == Field::Todo && e.text() == "买牛奶 smoke 😀"),
+                "待办输入框收到输入",
+            );
+            smoke.check(has_caret(app), "输入框有光标");
+            snapshot(app, &mut smoke, "17-todo-typing", None);
+            app.on_key(VK_LEFT);
+            app.on_key(VK_BACK); // 删掉表情前的空格
+            app.on_key(VK_RETURN);
+            app.on_char('第' as u16);
+            app.on_char('二' as u16);
+            app.on_key(VK_RETURN);
+        }
+        62 => {
+            let texts: Vec<&str> = app.todos.items.iter().map(|t| t.text.as_str()).collect();
+            smoke.check(
+                texts == ["第二", "买牛奶 smoke😀"],
+                &format!("回车添加待办，新的在前（{texts:?}）"),
+            );
+            smoke.check(
+                app.editing.as_ref().is_some_and(|(_, e)| e.is_empty()),
+                "添加后输入框清空、继续编辑",
+            );
+            app.activate(Hit::TodoToggle(0));
+            smoke.check(
+                app.todos
+                    .items
+                    .last()
+                    .is_some_and(|t| t.done && t.text == "第二"),
+                "勾选完成的待办沉到底部",
+            );
+            snapshot(app, &mut smoke, "18-todo-list", None);
+            // 自定义主题：直接填强调色
+            app.set_tab(Tab::Appearance);
+            app.activate(Hit::Theme(ThemeMode::Custom));
+            app.focus_field(Field::Hex(2));
+            for unit in "#30d158".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.on_key(VK_RETURN);
+        }
+        63 => {
+            smoke.check(app.editing.is_none(), "回车结束编辑");
+            smoke.check(
+                app.settings.theme.custom_accent == "#30D158",
+                &format!("填写的颜色写进设置（{}）", app.settings.theme.custom_accent),
+            );
+            snapshot(app, &mut smoke, "19-custom-hex", None);
+            // 格式不对的颜色不接受
+            app.focus_field(Field::Hex(0));
+            for unit in "#12".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.on_key(VK_RETURN);
+            smoke.check(
+                app.settings.theme.custom_background == "#1C1C1E",
+                "格式不对的颜色被忽略",
+            );
+            app.activate(Hit::Theme(ThemeMode::Schedule));
+            app.focus_field(Field::DayStarts);
+            for unit in "6:30".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.on_key(VK_ESCAPE);
+            smoke.check(app.settings.theme.day_starts == "07:00", "Esc 放弃修改");
+            app.focus_field(Field::DayStarts);
+            for unit in "6:30".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.blur(true);
+            smoke.check(
+                app.settings.theme.day_starts == "06:30",
+                &format!("时间规范成 HH:MM（{}）", app.settings.theme.day_starts),
+            );
+        }
+        64 => {
+            snapshot(app, &mut smoke, "20-schedule", None);
+            app.activate(Hit::Theme(ThemeMode::Dark));
+            app.set_tab(Tab::Music);
+            app.set_pinned(false);
             smoke.step = 15;
             next = 35;
         }

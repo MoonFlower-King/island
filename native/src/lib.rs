@@ -3,9 +3,11 @@
 
 pub mod clip;
 pub mod color;
+pub mod edit;
 pub mod level;
 pub mod metrics;
 pub mod playback;
 pub mod settings;
 pub mod state;
 pub mod text;
+pub mod todo;
