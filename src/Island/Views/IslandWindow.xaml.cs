@@ -48,6 +48,7 @@ public partial class IslandWindow : Window
     private bool _isHovering;
     private bool _hasNotification;
     private bool _holdExpanded;           // 强制保持展开（冒烟测试用）
+    private bool _pinned;                 // 用户点了置顶：鼠标移开也不收起
     private bool _autoHideForFullscreen = true;
     private bool _hiddenForFullscreen;
 
@@ -228,6 +229,10 @@ public partial class IslandWindow : Window
             _isHovering = false;
             EndTyping(restoreFocus: false);
             UpdateState();
+        }
+        else if (_pinned)
+        {
+            Expand(); // 全屏结束，置顶的岛恢复展开
         }
         Log.Info(hidden ? "检测到全屏程序，隐藏" : "全屏结束，恢复显示");
     }
@@ -432,7 +437,9 @@ public partial class IslandWindow : Window
         IdleClock.Text = time;
         CompactClock.Text = time;
         ExpandedClock.Text = time;
-        ExpandedDate.Text = now.ToString("M月d日 ddd", DateCulture);
+        // 标题栏放了 7 个标签和置顶按钮，只留得下星期；完整日期放在悬停提示里
+        ExpandedDate.Text = now.ToString("ddd", DateCulture);
+        ExpandedClock.ToolTip = now.ToString("yyyy年M月d日 dddd", DateCulture);
         CheckScheduledTheme();
 
         // 对齐到下一分钟再刷新，而不是每秒都跑
@@ -495,7 +502,7 @@ public partial class IslandWindow : Window
     }
 
     private bool ShouldStayExpanded() =>
-        _holdExpanded || IsCursorOverIsland() || CapsuleMenu.IsOpen || _isDraggingOver || IsComposingText();
+        _holdExpanded || _pinned || IsCursorOverIsland() || CapsuleMenu.IsOpen || _isDraggingOver || IsComposingText();
 
     /// <summary>直接问系统光标在哪里，比 WPF 的 IsMouseOver 可靠（拖放、快速移动时也准）。</summary>
     private bool IsCursorOverIsland()
@@ -545,6 +552,21 @@ public partial class IslandWindow : Window
         _collapseWatchdog.Stop();
         _isHovering = false;
         ShowNotification("新消息", "这是一条来自灵动岛的演示通知", "💬");
+    }
+
+    // ───────────────────────────── 置顶 ─────────────────────────────
+
+    private void OnTogglePin(object sender, RoutedEventArgs e) => SetPinned(!_pinned);
+
+    /// <summary>置顶时岛一直保持展开，方便从别的窗口往中转站拖文件、边看边用。</summary>
+    private void SetPinned(bool pinned)
+    {
+        _pinned = pinned;
+        PinButton.Content = pinned ? "\uE77A" : "\uE718";
+        PinButton.ToolTip = pinned ? "取消置顶" : "置顶：鼠标移开也保持展开，方便拖文件";
+        PinButton.SetResourceReference(ForegroundProperty, pinned ? "IslandAccent" : "IslandSecondary");
+        if (pinned) Expand();
+        else TryCollapse();
     }
 
     private void OnExit(object sender, RoutedEventArgs e) => Application.Current.Shutdown();

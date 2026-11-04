@@ -226,7 +226,10 @@
                                              Tag="Appearance" ToolTip="外观" Checked="OnTabChecked" />
                             </StackPanel>
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                <TextBlock x:Name="ExpandedDate" FontSize="11" Margin="0,0,8,0"
+                                <Button x:Name="PinButton" Style="{StaticResource IslandSmallButton}" Content="&#xE718;"
+                                        Margin="0,0,6,0" ToolTip="置顶：鼠标移开也保持展开，方便拖文件"
+                                        Click="OnTogglePin" />
+                                <TextBlock x:Name="ExpandedDate" FontSize="11" Margin="0,0,6,0"
                                            Foreground="{DynamicResource IslandTertiary}" VerticalAlignment="Center" />
                                 <TextBlock x:Name="ExpandedClock" Text="00:00" FontSize="14" FontWeight="SemiBold"
                                            VerticalAlignment="Center" />

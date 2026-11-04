@@ -48,7 +48,7 @@ public partial class IslandWindow
         TodoPanel.Attach(_todo);
         ClipboardPanel.Attach(_clipboard);
         ShelfPanel.Attach(_shelf);
-        TranslatePanel.Attach(new TranslationService(_settings));
+        TranslatePanel.Attach(new TranslationService(_settings), _settings);
 
         PersistClipboardMenu.IsChecked = _settings.PersistClipboardHistory;
         StartupMenu.IsChecked = StartupRegistration.IsEnabled;
@@ -222,6 +222,7 @@ public partial class IslandWindow
         // Esc：收起岛，焦点还给之前的程序
         if (e.Key != Key.Escape) return;
         e.Handled = true;
+        if (_pinned) SetPinned(false);
         EndTyping(restoreFocus: true);
         _collapseWatchdog.Stop();
         _isHovering = false;
