@@ -12,9 +12,9 @@ use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::CoCreateGuid;
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::DataExchange::AddClipboardFormatListener;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Ole::{OleInitialize, RegisterDragDrop, RevokeDragDrop};
 use windows::Win32::System::Power::{POWERBROADCAST_SETTING, RegisterPowerSettingNotification};
 use windows::Win32::System::SystemInformation::GetLocalTime;
 use windows::Win32::System::SystemServices::GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS;
@@ -28,7 +28,7 @@ use windows::Win32::UI::Input::Ime::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::*;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
-use windows::core::{Interface, PCWSTR, Result, w};
+use windows::core::{HSTRING, Interface, PCWSTR, Result, w};
 
 use island::clip::History;
 use island::color::{self, Palette, Rgb};
@@ -37,16 +37,20 @@ use island::level::{self, WheelAccumulator};
 use island::metrics::{Edge, IslandState, WINDOW_HEIGHT, WINDOW_WIDTH};
 use island::playback::Clock;
 use island::settings::{Settings, ThemeMode};
+use island::shelf::Shelf;
 use island::state::{self, HoverTracker, Inputs, MEDIA_LINGER_MS};
 use island::todo::Todos;
 
+use super::drag::{self, WM_DRAG};
 use super::gfx::Gfx;
 use super::media::{self, Command, Snapshot, WM_MEDIA};
 use super::net::{self, WM_TRANSLATE};
 use super::scene::{self, Scene, View};
 use super::system::{self, Monitor, Volume};
 use super::translator::{Draft, Status, TranslateUi};
-use super::views::{self, CLIP_ROWS, Editing, Field, Hit, TODO_ROWS, Tab, Targets, ViewState};
+use super::views::{
+    self, CLIP_ROWS, Editing, Field, Hit, SHELF_ROWS, TODO_ROWS, Tab, Targets, ViewState,
+};
 use super::{log, smoke};
 
 const TIMER_POLL: usize = 1;
@@ -92,6 +96,14 @@ pub struct App {
     clip_scroll: usize,
     pub todos: Todos,
     todo_scroll: usize,
+    pub shelf: Shelf,
+    shelf_scroll: usize,
+    /// 正拖着文件经过岛：保持展开，显示"松开放进中转站"。
+    drag_over: bool,
+    /// 在中转站某一行按下的位置（窗口 DIP），移动够远就开始拖出。
+    drag_start: Option<(f32, f32)>,
+    /// 等消息处理完再开始的拖出（拖动期间系统跑自己的消息循环，不能借着 App）。
+    drag_out: Option<(usize, String)>,
     /// 正在编辑的输入框。有焦点时窗口才变成可激活的，键盘输入才会进来。
     pub editing: Option<(Field, TextEdit)>,
     /// 输入法正在组的字、组字内的光标（UTF-16）。
@@ -155,7 +167,8 @@ fn save_file(name: &str, content: &str) {
 pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-        CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
+        // OLE（拖放需要）会顺带把线程初始化成单线程套间
+        OleInitialize(None)?;
 
         // 只允许运行一个（冒烟测试除外）
         if smoke_dir.is_none() {
@@ -177,6 +190,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         let wc = WNDCLASSEXW {
             cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
             lpfnWndProc: Some(wndproc),
+            style: CS_DBLCLKS,
             hInstance: instance.into(),
             lpszClassName: class,
             hCursor: LoadCursorW(None, IDC_ARROW)?,
@@ -238,6 +252,16 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         } else {
             Todos::default()
         };
+        let shelf = if smoke_dir.is_none() {
+            let mut s = Shelf::from_json(
+                &std::fs::read_to_string(data_file("shelf.json")).unwrap_or_default(),
+            );
+            // 启动时去掉已被删除或移走的文件
+            s.items.retain(|i| std::path::Path::new(&i.path).exists());
+            s
+        } else {
+            Shelf::default()
+        };
         let volume = Volume::new();
         let last_volume = volume.get();
 
@@ -264,6 +288,11 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             clip_scroll: 0,
             todos,
             todo_scroll: 0,
+            shelf,
+            shelf_scroll: 0,
+            drag_over: false,
+            drag_start: None,
+            drag_out: None,
             editing: None,
             composition: (String::new(), 0),
             high_surrogate: None,
@@ -289,8 +318,14 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         };
         app.apply_accent();
         app.redraw_all();
+        app.shelf_fill_info();
         let smoking = app.smoke.is_some();
         APP.with(|cell| *cell.borrow_mut() = Some(app));
+        // 接收拖进来的文件
+        let drop_target = drag::DropTarget::create(hwnd);
+        if let Err(e) = RegisterDragDrop(hwnd, &drop_target) {
+            log::warn(&format!("注册拖放失败：{e}"));
+        }
 
         let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
         SetTimer(Some(hwnd), TIMER_POLL, POLL_MS, None);
@@ -315,6 +350,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+        let _ = RevokeDragDrop(hwnd);
         APP.with(|cell| cell.borrow_mut().take());
         Ok(msg.wParam.0 as i32)
     }
@@ -533,6 +569,9 @@ impl App {
             clip_scroll: self.clip_scroll,
             todos: &self.todos.items,
             todo_scroll: self.todo_scroll,
+            shelf: &self.shelf.items,
+            shelf_scroll: self.shelf_scroll,
+            drag_over: self.drag_over,
             translate: &self.translate,
             translate_summary: (TranslateUi::summary(&self.settings), self.translate_ready()),
             editing: self.editing.as_ref().map(|(field, edit)| Editing {
@@ -765,6 +804,7 @@ impl App {
             let (scroll, len, rows) = match self.tab {
                 Tab::Clipboard => (&mut self.clip_scroll, self.clips.items.len(), CLIP_ROWS),
                 Tab::Todo => (&mut self.todo_scroll, self.todos.items.len(), TODO_ROWS),
+                Tab::Shelf => (&mut self.shelf_scroll, self.shelf.items.len(), SHELF_ROWS),
                 _ => return,
             };
             let max = len.saturating_sub(rows);
@@ -905,7 +945,8 @@ impl App {
         let busy = near || self.pressed.is_some() || self.state == IslandState::Expanded;
         self.set_poll_interval(if busy { POLL_MS } else { POLL_FAR_MS });
         self.set_interactive(inside || self.pressed.is_some());
-        let hold = self.menu_open || self.pressed.is_some() || self.editing.is_some();
+        let hold =
+            self.menu_open || self.pressed.is_some() || self.editing.is_some() || self.drag_over;
         // 刚用滚轮调过音量：先不展开
         let wants_inside = inside && tick() >= self.wheel_until;
         if self.hover.update(wants_inside, hold, tick()) {
@@ -927,6 +968,26 @@ impl App {
         }
         if let Some(Hit::Field(f)) = self.pressed {
             self.place_caret(f, lx, ly, true);
+            return;
+        }
+        if let (Some(Hit::ShelfItem(i)), Some((sx, sy))) = (self.pressed, self.drag_start) {
+            let s = self.scene.scale();
+            let (dx, dy) = unsafe {
+                (
+                    GetSystemMetrics(SM_CXDRAG) as f32 / s,
+                    GetSystemMetrics(SM_CYDRAG) as f32 / s,
+                )
+            };
+            if (x - sx).abs() >= dx || (y - sy).abs() >= dy {
+                if let Some(item) = self.shelf.items.get(i) {
+                    self.drag_out = Some((i, item.path.clone()));
+                }
+                self.pressed = None;
+                self.drag_start = None;
+                unsafe {
+                    let _ = ReleaseCapture();
+                }
+            }
             return;
         }
         let hit = self.targets.hit(lx, ly);
@@ -957,6 +1018,10 @@ impl App {
             unsafe { SetCapture(self.hwnd) };
             match hit {
                 Some(Hit::Volume) => self.drag_volume(lx),
+                Some(Hit::ShelfItem(_)) => {
+                    self.drag_start = Some((x, y));
+                    self.redraw_expanded();
+                }
                 Some(Hit::Field(f)) => {
                     let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
                     if self.editing.as_ref().map(|(e, _)| *e) == Some(f) {
@@ -983,8 +1048,12 @@ impl App {
         unsafe {
             let _ = ReleaseCapture();
         }
+        self.drag_start = None;
         let (lx, ly) = self.local(x, y);
-        if matches!(pressed, Hit::Field(_)) {
+        if matches!(pressed, Hit::Field(_) | Hit::ShelfItem(_)) {
+            if matches!(pressed, Hit::ShelfItem(_)) {
+                self.redraw_expanded();
+            }
             return;
         }
         if pressed != Hit::Volume && self.targets.hit(lx, ly) == Some(pressed) {
@@ -1015,7 +1084,36 @@ impl App {
                 self.clip_scroll = 0;
                 self.save_clips();
             }
-            Hit::Field(_) => {}
+            Hit::Field(_) | Hit::ShelfItem(_) => {}
+            Hit::ShelfReveal(i) => {
+                if let Some(item) = self.shelf.items.get(i) {
+                    let args = HSTRING::from(format!("/select,\"{}\"", item.path));
+                    unsafe {
+                        ShellExecuteW(
+                            None,
+                            w!("open"),
+                            w!("explorer.exe"),
+                            &args,
+                            None,
+                            SW_SHOWNORMAL,
+                        );
+                    }
+                }
+            }
+            Hit::ShelfRemove(i) => {
+                self.shelf.remove(i);
+                self.shelf_scroll = self
+                    .shelf_scroll
+                    .min(self.shelf.items.len().saturating_sub(SHELF_ROWS));
+                self.hovered = None;
+                self.save_shelf();
+            }
+            Hit::ShelfClear => {
+                self.shelf.items.clear();
+                self.shelf_scroll = 0;
+                self.hovered = None;
+                self.save_shelf();
+            }
             Hit::TranslateGo => {
                 if self.translate.status == Status::Busy {
                     self.stop_translation();
@@ -1115,6 +1213,88 @@ impl App {
         self.settings.last_tab = tab.name().into();
         self.save_settings();
         self.redraw_expanded();
+    }
+
+    // ───────────────────────────── 中转站 ─────────────────────────────
+
+    fn save_shelf(&self) {
+        if self.smoke.is_none() {
+            save_file("shelf.json", &self.shelf.to_json());
+        }
+    }
+
+    /// 读一次磁盘，记下每项是文件夹还是文件、多大。
+    fn shelf_fill_info(&mut self) {
+        for item in self.shelf.items.iter_mut().filter(|i| i.info.is_none()) {
+            item.info = Some(match std::fs::metadata(&item.path) {
+                Ok(m) if m.is_dir() => (true, "文件夹".into()),
+                Ok(m) => (false, island::shelf::format_size(m.len())),
+                Err(_) => (false, "文件已不存在".into()),
+            });
+        }
+    }
+
+    /// 放进中转站（拖进来的文件）。
+    pub fn shelf_add(&mut self, paths: &[String]) {
+        if self.shelf.add(paths.iter().map(String::as_str)) > 0 {
+            self.shelf_scroll = 0;
+            self.shelf_fill_info();
+            self.save_shelf();
+        }
+        if self.tab != Tab::Shelf {
+            self.set_tab(Tab::Shelf);
+        }
+        self.redraw_expanded();
+    }
+
+    pub fn on_drag(&mut self, state: usize) {
+        match state {
+            1 => {
+                self.drag_over = true;
+                self.hover.set(true);
+                self.hide_level();
+                if self.tab != Tab::Shelf {
+                    self.set_tab(Tab::Shelf);
+                }
+            }
+            2 => {
+                self.drag_over = false;
+                let paths = drag::take_dropped();
+                if !paths.is_empty() {
+                    self.shelf_add(&paths);
+                }
+            }
+            _ => self.drag_over = false,
+        }
+        self.update_state();
+        self.redraw_expanded();
+    }
+
+    /// 拖出结束：文件被"移动"走了就移出中转站。
+    fn after_drag_out(&mut self, index: usize, path: &str) {
+        if !std::path::Path::new(path).exists()
+            && self.shelf.items.get(index).is_some_and(|i| i.path == path)
+        {
+            self.shelf.remove(index);
+            self.save_shelf();
+        }
+        self.hovered = None;
+        self.redraw_expanded();
+    }
+
+    fn on_double_click(&mut self, x: f32, y: f32) {
+        if self.state != IslandState::Expanded {
+            return;
+        }
+        let (lx, ly) = self.local(x, y);
+        if let Some(Hit::ShelfItem(i)) = self.targets.hit(lx, ly)
+            && let Some(item) = self.shelf.items.get(i)
+        {
+            let path = HSTRING::from(item.path.as_str());
+            unsafe {
+                ShellExecuteW(None, w!("open"), &path, None, None, SW_SHOWNORMAL);
+            }
+        }
     }
 
     // ───────────────────────────── 待办 ─────────────────────────────
@@ -1907,6 +2087,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 let (x, y) = lparam_point(lparam, a.scene.scale());
                 a.on_mouse_move(x, y)
             });
+            // 拖出文件：系统的拖放循环会一直跑到放下为止，这期间不能借着 App
+            if let Some((index, path)) = with_app(|a| a.drag_out.take()).flatten() {
+                if let Err(e) = drag::drag_out(hwnd, &path) {
+                    log::warn(&format!("拖出文件失败：{e}"));
+                }
+                with_app(|a| a.after_drag_out(index, &path));
+            }
+            LRESULT(0)
+        }
+        WM_LBUTTONDBLCLK => {
+            with_app(|a| {
+                let (x, y) = lparam_point(lparam, a.scene.scale());
+                a.on_double_click(x, y)
+            });
+            LRESULT(0)
+        }
+        WM_DRAG => {
+            with_app(|a| a.on_drag(wparam.0));
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {

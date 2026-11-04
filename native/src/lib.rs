@@ -8,6 +8,7 @@ pub mod level;
 pub mod metrics;
 pub mod playback;
 pub mod settings;
+pub mod shelf;
 pub mod state;
 pub mod text;
 pub mod todo;

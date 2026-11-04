@@ -14,6 +14,7 @@ use island::edit::TextEdit;
 use island::level;
 use island::metrics::{COMPACT, EXPANDED, Edge, IDLE_CLOCK, LEVEL, Rect};
 use island::settings::{Settings, ThemeMode};
+use island::shelf::Item as ShelfEntry;
 use island::text::{clock, format_duration, speed, weekday_zh};
 use island::todo::Todo;
 
@@ -29,16 +30,18 @@ pub enum Tab {
     Music,
     Todo,
     Clipboard,
+    Shelf,
     Translate,
     Monitor,
     Appearance,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [
+    pub const ALL: [Tab; 7] = [
         Tab::Music,
         Tab::Todo,
         Tab::Clipboard,
+        Tab::Shelf,
         Tab::Translate,
         Tab::Monitor,
         Tab::Appearance,
@@ -50,6 +53,7 @@ impl Tab {
             Tab::Music => "Music",
             Tab::Todo => "Todo",
             Tab::Clipboard => "Clipboard",
+            Tab::Shelf => "Shelf",
             Tab::Translate => "Translate",
             Tab::Monitor => "Monitor",
             Tab::Appearance => "Appearance",
@@ -68,6 +72,7 @@ impl Tab {
             Tab::Music => '\u{E8D6}',
             Tab::Todo => '\u{E762}',
             Tab::Clipboard => '\u{E77F}',
+            Tab::Shelf => '\u{E8B7}',
             Tab::Translate => '\u{E8C1}',
             Tab::Monitor => '\u{E9D9}',
             Tab::Appearance => '\u{E790}',
@@ -172,6 +177,11 @@ pub enum Hit {
     TodoToggle(usize),
     TodoDelete(usize),
     TodoClearDone,
+    /// 中转站：一行（按下拖出、双击打开）、在资源管理器中显示、移出、清空。
+    ShelfItem(usize),
+    ShelfReveal(usize),
+    ShelfRemove(usize),
+    ShelfClear,
     /// 翻译（翻译中时是"停止"）。
     TranslateGo,
     TranslatePaste,
@@ -230,6 +240,10 @@ pub struct ViewState<'a> {
     pub clips: &'a [Entry],
     pub clip_scroll: usize,
     pub todos: &'a [Todo],
+    pub shelf: &'a [ShelfEntry],
+    pub shelf_scroll: usize,
+    /// 正拖着文件经过岛。
+    pub drag_over: bool,
     pub todo_scroll: usize,
     pub editing: Option<Editing<'a>>,
     pub translate: &'a TranslateUi,
@@ -361,6 +375,7 @@ pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<Targets> {
         },
         Tab::Todo => draw_todos(p, v, &mut t)?,
         Tab::Clipboard => draw_clipboard(p, v, &mut t)?,
+        Tab::Shelf => draw_shelf(p, v, &mut t)?,
         Tab::Translate if v.translate.settings_open => draw_translate_settings(p, v, &mut t)?,
         Tab::Translate => draw_translate(p, v, &mut t)?,
         Tab::Monitor => draw_monitor(p, v)?,
@@ -841,6 +856,126 @@ fn draw_clipboard(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
                 v.clip_scroll + 1,
                 shown_to,
                 v.clips.len()
+            ),
+            Rect::new(16.0, 240.0, 408.0, 14.0),
+            &style(&family, 10.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.35),
+        )?;
+    }
+    Ok(())
+}
+
+// ───────────────────────────── 中转站 ─────────────────────────────
+
+/// 中转站每页几行。
+pub const SHELF_ROWS: usize = 5;
+const SHELF_TOP: f32 = 80.0;
+const SHELF_ROW_HEIGHT: f32 = 32.0;
+
+fn draw_shelf(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let w = EXPANDED.width;
+    p.text(
+        "拖进来暂存，拖出去使用，双击打开",
+        Rect::new(16.0, 50.0, 340.0, 24.0),
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(fg, 0.4),
+    )?;
+
+    if v.drag_over {
+        let r = Rect::new(12.0, 78.0, 416.0, 166.0);
+        p.fill_round(r, 14.0, color(v.accent, 0.18))?;
+        p.icon(
+            '\u{E896}',
+            Rect::new(0.0, 120.0, w, 36.0),
+            26.0,
+            color(v.accent, 1.0),
+        )?;
+        return p.text(
+            "松开就放进中转站",
+            Rect::new(0.0, 160.0, w, 22.0),
+            &style(&family, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center),
+            color(fg, 0.9),
+        );
+    }
+
+    if v.shelf.is_empty() {
+        p.icon(
+            '\u{E898}',
+            Rect::new(0.0, 112.0, w, 32.0),
+            24.0,
+            color(fg, 0.3),
+        )?;
+        return p.text(
+            "把文件拖到灵动岛上",
+            Rect::new(0.0, 148.0, w, 22.0),
+            &style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.5),
+        );
+    }
+
+    let clear = Rect::new(398.0, 49.0, 26.0, 26.0);
+    hover_bg(p, v, Hit::ShelfClear, clear, 13.0)?;
+    p.icon(glyph::DELETE, clear, 12.0, color(fg, 0.6))?;
+    t.add(clear, Hit::ShelfClear);
+
+    let name = style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    let detail = style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing);
+    for (row, (i, item)) in v
+        .shelf
+        .iter()
+        .enumerate()
+        .skip(v.shelf_scroll)
+        .take(SHELF_ROWS)
+        .enumerate()
+    {
+        let y = SHELF_TOP + row as f32 * SHELF_ROW_HEIGHT;
+        let r = Rect::new(12.0, y, 416.0, SHELF_ROW_HEIGHT - 4.0);
+        let hovered = matches!(
+            v.hovered,
+            Some(Hit::ShelfItem(h) | Hit::ShelfReveal(h) | Hit::ShelfRemove(h)) if h == i
+        );
+        p.fill_round(r, 10.0, color(fg, if hovered { 0.12 } else { 0.06 }))?;
+        p.icon(
+            item.glyph(),
+            Rect::new(r.x + 6.0, y, 26.0, r.h),
+            13.0,
+            color(v.accent, 1.0),
+        )?;
+        p.text(
+            item.name(),
+            Rect::new(r.x + 36.0, y, 250.0, r.h),
+            &name,
+            color(fg, 0.95),
+        )?;
+        t.add(r, Hit::ShelfItem(i));
+        if hovered {
+            let reveal = Rect::new(r.right() - 58.0, y + 2.0, 24.0, 24.0);
+            hover_bg(p, v, Hit::ShelfReveal(i), reveal, 12.0)?;
+            p.icon('\u{E8DA}', reveal, 11.0, color(fg, 0.7))?;
+            t.add(reveal, Hit::ShelfReveal(i));
+            let remove = Rect::new(r.right() - 30.0, y + 2.0, 24.0, 24.0);
+            hover_bg(p, v, Hit::ShelfRemove(i), remove, 12.0)?;
+            p.icon(glyph::CLOSE, remove, 10.0, color(fg, 0.7))?;
+            t.add(remove, Hit::ShelfRemove(i));
+        } else {
+            p.text(
+                item.detail(),
+                Rect::new(r.right() - 120.0, y, 110.0, r.h),
+                &detail,
+                color(fg, 0.4),
+            )?;
+        }
+    }
+
+    if v.shelf.len() > SHELF_ROWS {
+        p.text(
+            &format!(
+                "{}–{} / {}，滚动滚轮查看更多",
+                v.shelf_scroll + 1,
+                (v.shelf_scroll + SHELF_ROWS).min(v.shelf.len()),
+                v.shelf.len()
             ),
             Rect::new(16.0, 240.0, 408.0, 14.0),
             &style(&family, 10.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
@@ -1449,7 +1584,7 @@ mod tests {
         for t in Tab::ALL {
             assert_eq!(Tab::parse(t.name()), t);
         }
-        assert_eq!(Tab::parse("Shelf"), Tab::Music); // 还没移植的标签回到音乐
+        assert_eq!(Tab::parse("Nope"), Tab::Music); // 不认识的标签回到音乐
         assert_eq!(display_text(Field::ApiKey, "sk-1"), "••••");
         assert_eq!(display_text(Field::Model, "m"), "m");
     }

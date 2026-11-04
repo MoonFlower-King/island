@@ -31,6 +31,9 @@ use super::media::{Art, Snapshot};
 use super::translator::Status;
 use super::views::{Field, Hit, Tab};
 use island::translate::Format;
+use windows::Win32::Foundation::{DRAGDROP_E_ALREADYREGISTERED, POINTL};
+use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_MOVE, RegisterDragDrop};
+use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 
 pub struct Smoke {
     dir: PathBuf,
@@ -333,6 +336,10 @@ fn fake_server() -> u16 {
         }
     });
     port
+}
+
+fn has_target(app: &App, f: impl Fn(Hit) -> bool) -> bool {
+    app.has_target(f)
 }
 
 fn has_caret(app: &App) -> bool {
@@ -735,6 +742,66 @@ pub fn step(app: &mut App) {
                 &format!("错误状态码变成可读的提示（{:?}）", app.translate.status),
             );
             snapshot(app, &mut smoke, "24-translate-error", None);
+            // 中转站：用真实的外壳数据对象模拟从资源管理器拖进来一个文件
+            app.set_tab(Tab::Shelf);
+            let file = smoke.dir.join("shelf-test.txt");
+            let _ = std::fs::write(&file, vec![b'x'; 1536]);
+            let target = super::drag::DropTarget::create(app.hwnd);
+            let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
+            let dropped =
+                super::drag::data_object_for(&file.to_string_lossy()).and_then(|data| unsafe {
+                    target.DragEnter(
+                        &data,
+                        MODIFIERKEYS_FLAGS(0),
+                        POINTL::default(),
+                        &mut effect,
+                    )?;
+                    let entered = effect;
+                    target.Drop(&data, MODIFIERKEYS_FLAGS(0), POINTL::default(), &mut effect)?;
+                    Ok(entered)
+                });
+            smoke.check(
+                dropped.as_ref().is_ok_and(|e| *e == DROPEFFECT_COPY),
+                &format!("拖进文件：接受为复制（{dropped:?}）"),
+            );
+            // 窗口已经注册成放置目标（再注册一次会报"已注册"）
+            let again = unsafe { RegisterDragDrop(app.hwnd, &target) };
+            smoke.check(
+                again
+                    .as_ref()
+                    .err()
+                    .is_some_and(|e| e.code() == DRAGDROP_E_ALREADYREGISTERED),
+                &format!("窗口已注册为拖放目标（{again:?}）"),
+            );
+        }
+        68 => {
+            let first = app.shelf.items.first();
+            smoke.check(
+                first.is_some_and(|i| i.name() == "shelf-test.txt" && i.detail() == "1.5 KB"),
+                &format!(
+                    "放下后进了中转站（{:?}）",
+                    first.map(|i| (i.name().to_string(), i.detail().to_string()))
+                ),
+            );
+            app.shelf_add(&[smoke.dir.to_string_lossy().to_string()]);
+            smoke.check(
+                app.shelf.items.len() == 2
+                    && app.shelf.items[0].is_folder()
+                    && app.shelf.items[0].detail() == "文件夹",
+                "文件夹也能放",
+            );
+            app.shelf_add(&[smoke
+                .dir
+                .join("shelf-test.txt")
+                .to_string_lossy()
+                .to_string()]);
+            smoke.check(app.shelf.items.len() == 2, "重复的不再加");
+            smoke.check(
+                has_target(app, |h| h == Hit::ShelfClear),
+                "中转站有清空按钮",
+            );
+            snapshot(app, &mut smoke, "25-shelf", None);
+            app.activate(Hit::ShelfClear);
             app.set_tab(Tab::Music);
             app.set_pinned(false);
             smoke.step = 15;
