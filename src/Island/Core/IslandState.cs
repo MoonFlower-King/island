@@ -12,6 +12,9 @@ public enum IslandState
     /// <summary>通知：临时弹出几秒后自动缩回。</summary>
     Notification,
 
+    /// <summary>音量 / 亮度提示：调节时显示一条进度，停手后很快缩回。</summary>
+    Level,
+
     /// <summary>展开：鼠标悬停时变成带功能标签的面板。</summary>
     Expanded,
 }
@@ -34,6 +37,7 @@ public readonly record struct IslandMetrics(double Width, double Height, double 
         IslandState.Idle => new(140, 34, 17, TopMargin),
         IslandState.Compact => new(260, 38, 19, TopMargin),
         IslandState.Notification => new(340, 64, 32, TopMargin),
+        IslandState.Level => new(300, 40, 20, TopMargin),
         IslandState.Expanded => new(440, 260, 32, TopMargin),
         _ => throw new ArgumentOutOfRangeException(nameof(state), state, null),
     };
