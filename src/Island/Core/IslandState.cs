@@ -24,13 +24,13 @@ public readonly record struct IslandMetrics(double Width, double Height, double 
         IslandState.Idle => new(140, 34, 17),
         IslandState.Compact => new(260, 38, 19),
         IslandState.Notification => new(340, 64, 32),
-        IslandState.Expanded => new(400, 180, 36),
+        IslandState.Expanded => new(400, 190, 38),
         _ => throw new ArgumentOutOfRangeException(nameof(state), state, null),
     };
 
     /// <summary>窗口要能容纳最大的状态，再留出阴影的空间。</summary>
     public const double WindowWidth = 460;
-    public const double WindowHeight = 220;
+    public const double WindowHeight = 240;
 
     /// <summary>胶囊距离屏幕（工作区）顶部的距离。</summary>
     public const double TopMargin = 8;

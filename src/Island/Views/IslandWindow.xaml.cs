@@ -18,7 +18,9 @@ namespace Island.Views;
 /// 显示哪个状态由三件事决定（优先级从高到低）：
 ///   1. 鼠标悬停 → 展开
 ///   2. 有临时通知 → 通知
-///   3. 否则 → 基础状态（待机或紧凑）
+///   3. 否则 → 基础状态（有音乐在播放或手动设置时为紧凑，否则待机）
+///
+/// 同一个状态可能对应不同的内容视图（例如展开态有音乐时显示播放器），见 <see cref="ViewFor"/>。
 /// </summary>
 public partial class IslandWindow : Window
 {
@@ -45,6 +47,7 @@ public partial class IslandWindow : Window
     private IntPtr _hwnd;
     private IslandState _baseState = IslandState.Idle;
     private IslandState _currentState = IslandState.Idle;
+    private FrameworkElement? _currentView;
     private bool _isHovering;
     private bool _hasNotification;
 
@@ -89,11 +92,15 @@ public partial class IslandWindow : Window
         SystemParameters.StaticPropertyChanged += OnSystemParametersChanged;
         Closed += OnClosed;
 
+        _currentView = IdleView;
+        InitializeMedia();
+
         PositionWindow();
         UpdateClock();
     }
 
-    private FrameworkElement[] AllViews => [IdleView, CompactView, NotificationView, ExpandedView];
+    private FrameworkElement[] AllViews =>
+        [IdleView, CompactView, MediaCompactView, NotificationView, ExpandedView, MediaExpandedView];
 
     // ───────────────────────────── 窗口与 Win32 ─────────────────────────────
 
@@ -144,6 +151,8 @@ public partial class IslandWindow : Window
 
         foreach (var timer in new[] { _hoverInTimer, _hoverOutTimer, _notificationTimer, _clockTimer, _topmostTimer })
             timer.Stop();
+
+        ShutdownMedia();
     }
 
     // ───────────────────────────── 状态机 ─────────────────────────────
@@ -152,20 +161,28 @@ public partial class IslandWindow : Window
     {
         if (_isHovering) return IslandState.Expanded;
         if (_hasNotification) return IslandState.Notification;
-        return _baseState;
+        return _baseState == IslandState.Compact || MediaWantsCompact ? IslandState.Compact : IslandState.Idle;
     }
 
     private void UpdateState()
     {
         IslandState target = ResolveState();
-        if (target == _currentState) return;
+        FrameworkElement view = ViewFor(target);
+        if (target == _currentState && ReferenceEquals(view, _currentView)) return;
 
         IslandState previous = _currentState;
         _currentState = target;
-        TransitionTo(previous, target);
+        _currentView = view;
+
+        if (previous == target)
+            CrossFadeTo(view, growing: false); // 尺寸不变，只换内容（例如展开时开始放歌）
+        else
+            TransitionTo(previous, target, view);
+
+        OnActiveViewChanged();
     }
 
-    private void TransitionTo(IslandState from, IslandState to)
+    private void TransitionTo(IslandState from, IslandState to, FrameworkElement view)
     {
         IslandMetrics a = IslandMetrics.For(from);
         IslandMetrics b = IslandMetrics.For(to);
@@ -181,18 +198,24 @@ public partial class IslandWindow : Window
         Animate(CapsuleHost, HeightProperty, b.Height, duration, ease);
         Animate(this, CapsuleRadiusProperty, b.CornerRadius, duration, ease);
 
-        CrossFadeTo(ViewFor(to), growing);
-        UpdateCompactPulse(to == IslandState.Compact);
+        CrossFadeTo(view, growing);
     }
 
     private FrameworkElement ViewFor(IslandState state) => state switch
     {
         IslandState.Idle => IdleView,
-        IslandState.Compact => CompactView,
+        IslandState.Compact => MediaWantsCompact ? MediaCompactView : CompactView,
         IslandState.Notification => NotificationView,
-        IslandState.Expanded => ExpandedView,
+        IslandState.Expanded => HasMedia ? MediaExpandedView : ExpandedView,
         _ => IdleView,
     };
+
+    /// <summary>可见内容变了：只让当前可见的视图跑动画和定时器，其余全部停掉。</summary>
+    private void OnActiveViewChanged()
+    {
+        UpdateCompactPulse(ReferenceEquals(_currentView, CompactView));
+        RefreshMediaAnimations();
+    }
 
     /// <summary>旧内容快速淡出，新内容等胶囊长出一点后再淡入并轻微放大。</summary>
     private void CrossFadeTo(FrameworkElement target, bool growing)
@@ -318,6 +341,7 @@ public partial class IslandWindow : Window
         IdleClock.Text = time;
         CompactClock.Text = time;
         ExpandedClock.Text = time;
+        MediaExpandedClock.Text = time;
         ExpandedDate.Text = now.ToString("M月d日 dddd", DateCulture);
 
         // 对齐到下一分钟再刷新，而不是每秒都跑

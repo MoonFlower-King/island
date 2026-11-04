@@ -16,6 +16,60 @@
         FontFamily="{StaticResource IslandFont}"
         Foreground="{StaticResource IslandForeground}">
 
+    <Window.Resources>
+        <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
+
+        <!-- 圆形图标按钮：上一首 / 播放暂停 / 下一首 -->
+        <Style x:Key="IslandIconButton" TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{StaticResource IslandForeground}" />
+            <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="Width" Value="44" />
+            <Setter Property="Height" Value="36" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bg" Background="Transparent" CornerRadius="18"
+                                RenderTransformOrigin="0.5,0.5">
+                            <Border.RenderTransform>
+                                <ScaleTransform x:Name="PressScale" />
+                            </Border.RenderTransform>
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#1FFFFFFF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="#33FFFFFF" />
+                                <Setter TargetName="Bg" Property="RenderTransform">
+                                    <Setter.Value>
+                                        <ScaleTransform ScaleX="0.9" ScaleY="0.9" />
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.3" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 律动条 -->
+        <Style x:Key="EqualizerBar" TargetType="Rectangle">
+            <Setter Property="Width" Value="3" />
+            <Setter Property="RadiusX" Value="1.5" />
+            <Setter Property="RadiusY" Value="1.5" />
+            <Setter Property="Margin" Value="1.5,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+        </Style>
+    </Window.Resources>
+
     <!--
       整个窗口是透明的，只有中间的胶囊是实心的。
       分层窗口（AllowsTransparency）里完全透明的像素不接收鼠标，点击会直接落到下面的窗口上。
@@ -88,6 +142,33 @@
                                    VerticalAlignment="Center" />
                     </Grid>
 
+                    <!-- 紧凑（音乐）：封面 + 歌名 + 律动条 -->
+                    <Grid x:Name="MediaCompactView" Opacity="0" IsHitTestVisible="False" Margin="8,0,14,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="MediaCompactArt" Width="24" Height="24" CornerRadius="7"
+                                Background="#FF2C2C2E" VerticalAlignment="Center">
+                            <TextBlock x:Name="MediaCompactArtPlaceholder" Text="&#xE8D6;"
+                                       FontFamily="{StaticResource IconFont}" FontSize="12"
+                                       Foreground="{StaticResource IslandSecondary}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock x:Name="MediaCompactTitle" Grid.Column="1" Margin="10,0"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                        <StackPanel x:Name="Equalizer" Grid.Column="2" Orientation="Horizontal"
+                                    Height="16" VerticalAlignment="Center">
+                            <Rectangle x:Name="EqBar1" Style="{StaticResource EqualizerBar}" Height="16" />
+                            <Rectangle x:Name="EqBar2" Style="{StaticResource EqualizerBar}" Height="16" />
+                            <Rectangle x:Name="EqBar3" Style="{StaticResource EqualizerBar}" Height="16" />
+                            <Rectangle x:Name="EqBar4" Style="{StaticResource EqualizerBar}" Height="16" />
+                        </StackPanel>
+                    </Grid>
+
                     <!-- 通知：图标 + 标题 + 正文 -->
                     <Grid x:Name="NotificationView" Opacity="0" IsHitTestVisible="False" Margin="14,0,20,0">
                         <Grid.ColumnDefinitions>
@@ -138,6 +219,72 @@
                                        Foreground="{StaticResource IslandSecondary}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
+                    </Grid>
+
+                    <!-- 展开（音乐）：封面、歌曲信息、进度、播放控制 -->
+                    <Grid x:Name="MediaExpandedView" Opacity="0" IsHitTestVisible="False" Margin="20,20,20,14">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="MediaExpandedArt" Width="64" Height="64" CornerRadius="14"
+                                    Background="#FF2C2C2E">
+                                <TextBlock x:Name="MediaExpandedArtPlaceholder" Text="&#xE8D6;"
+                                           FontFamily="{StaticResource IconFont}" FontSize="26"
+                                           Foreground="{StaticResource IslandSecondary}"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Grid.Column="1" Margin="14,0,10,0" VerticalAlignment="Center">
+                                <TextBlock x:Name="MediaTitle" FontSize="16" FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="MediaArtist" FontSize="13" Margin="0,2,0,0"
+                                           Foreground="{StaticResource IslandSecondary}"
+                                           TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="MediaSource" FontSize="11" Margin="0,3,0,0"
+                                           Foreground="#66FFFFFF"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <TextBlock x:Name="MediaExpandedClock" Grid.Column="2" Text="00:00"
+                                       FontSize="12" VerticalAlignment="Top"
+                                       Foreground="{StaticResource IslandSecondary}" />
+                        </Grid>
+
+                        <Grid x:Name="MediaTimeline" Grid.Row="1" Margin="0,14,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Border x:Name="ProgressTrack" Height="4" CornerRadius="2" Background="#33FFFFFF"
+                                    SizeChanged="OnProgressTrackSizeChanged">
+                                <Border x:Name="ProgressFill" HorizontalAlignment="Left" Width="0"
+                                        CornerRadius="2" Background="#FF30D158" />
+                            </Border>
+                            <TextBlock x:Name="MediaPosition" Grid.Row="1" Margin="0,4,0,0"
+                                       FontSize="11" Foreground="{StaticResource IslandSecondary}"
+                                       HorizontalAlignment="Left" Text="0:00" />
+                            <TextBlock x:Name="MediaDuration" Grid.Row="1" Margin="0,4,0,0"
+                                       FontSize="11" Foreground="{StaticResource IslandSecondary}"
+                                       HorizontalAlignment="Right" Text="0:00" />
+                        </Grid>
+
+                        <StackPanel Grid.Row="2" Orientation="Horizontal"
+                                    HorizontalAlignment="Center" VerticalAlignment="Bottom">
+                            <Button x:Name="PreviousButton" Style="{StaticResource IslandIconButton}"
+                                    Content="&#xE892;" ToolTip="上一首" Click="OnPreviousClick" />
+                            <Button x:Name="PlayPauseButton" Style="{StaticResource IslandIconButton}"
+                                    Content="&#xE768;" FontSize="20" Width="52" Margin="12,0"
+                                    ToolTip="播放/暂停" Click="OnPlayPauseClick" />
+                            <Button x:Name="NextButton" Style="{StaticResource IslandIconButton}"
+                                    Content="&#xE893;" ToolTip="下一首" Click="OnNextClick" />
+                        </StackPanel>
                     </Grid>
                 </Grid>
             </Border>
