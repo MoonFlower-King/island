@@ -140,6 +140,8 @@ pub struct App {
     /// 窗口左上角（物理像素），用来把光标换算成窗口内的 DIP 坐标。
     origin: POINT,
     pub smoke: Option<smoke::Smoke>,
+    /// 冒烟测试中（不随 `smoke` 变化：测试每一步执行时会暂时把 `smoke` 取走）。
+    testing: bool,
 }
 
 thread_local! {
@@ -320,12 +322,13 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             menu_open: false,
             last_minute: u16::MAX,
             origin,
+            testing: smoke_dir.is_some(),
             smoke: smoke_dir.map(smoke::Smoke::new),
         };
         app.apply_accent();
         app.redraw_all();
         app.shelf_fill_info();
-        let smoking = app.smoke.is_some();
+        let smoking = app.testing;
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         // 接收拖进来的文件
         let drop_target = drag::DropTarget::create(hwnd);
@@ -380,7 +383,12 @@ fn place(hwnd: HWND, edge: Edge, monitor_name: &str) -> (f32, POINT) {
             .unwrap_or_else(|| MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY));
         let (mut dx, mut dy) = (96u32, 96u32);
         let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
-        let scale = dx as f32 / 96.0;
+        // ISLAND_FORCE_SCALE=1.5：按 150% 缩放显示（测试高 DPI 用，CI 的屏幕是 100%）
+        let scale = std::env::var("ISLAND_FORCE_SCALE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| (0.5..=4.0).contains(v))
+            .unwrap_or(dx as f32 / 96.0);
 
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
@@ -417,7 +425,7 @@ impl App {
             || (self.media.is_some() && tick() < self.linger_until)
     }
 
-    fn inputs(&self) -> Inputs {
+    pub(super) fn inputs(&self) -> Inputs {
         Inputs {
             hovering: self.hover.hovering(),
             pinned: self.pinned,
@@ -673,7 +681,7 @@ impl App {
     // ───────────────────────────── 设置与主题 ─────────────────────────────
 
     fn save_settings(&self) {
-        if self.smoke.is_none() {
+        if !self.testing {
             save_file("settings.json", &self.settings.to_json());
         }
     }
@@ -931,7 +939,7 @@ impl App {
     }
 
     fn save_clips(&self) {
-        if self.settings.persist_clipboard && self.smoke.is_none() {
+        if self.settings.persist_clipboard && !self.testing {
             save_file("clipboard.json", &self.clips.to_json());
         }
     }
@@ -971,7 +979,8 @@ impl App {
 
     /// (光标在热区里, 光标在热区附近)。
     fn cursor_zone(&self) -> (bool, bool) {
-        if self.hidden {
+        // 冒烟测试自己控制悬停，不看真实光标（CI 屏幕小，150% 时窗口会盖到屏幕中间的光标）
+        if self.hidden || self.testing {
             return (false, false);
         }
         let zone = self.metrics(self.state).hover_zone(self.edge());
@@ -1010,11 +1019,11 @@ impl App {
 
     fn poll(&mut self) {
         let now = tick();
-        if now.saturating_sub(self.last_volume_poll) >= VOLUME_POLL_MS && self.smoke.is_none() {
+        if now.saturating_sub(self.last_volume_poll) >= VOLUME_POLL_MS && !self.testing {
             self.last_volume_poll = now;
             self.poll_volume();
         }
-        if self.smoke.as_ref().is_some_and(|s| s.drives_input()) {
+        if self.testing {
             return;
         }
         let (inside, near) = self.cursor_zone();
@@ -1301,7 +1310,7 @@ impl App {
     // ───────────────────────────── 中转站 ─────────────────────────────
 
     fn save_shelf(&self) {
-        if self.smoke.is_none() {
+        if !self.testing {
             save_file("shelf.json", &self.shelf.to_json());
         }
     }
@@ -1383,7 +1392,7 @@ impl App {
     // ───────────────────────────── 待办 ─────────────────────────────
 
     fn save_todos(&self) {
-        if self.smoke.is_none() {
+        if !self.testing {
             save_file("todos.json", &self.todos.to_json());
         }
     }

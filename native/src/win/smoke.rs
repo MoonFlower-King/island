@@ -58,10 +58,6 @@ impl Smoke {
     }
 
     /// 冒烟测试自己控制悬停和可点击状态，不让真实光标干扰。
-    pub fn drives_input(&self) -> bool {
-        true
-    }
-
     fn check(&mut self, ok: bool, what: &str) {
         self.lines
             .push(format!("{} {what}", if ok { "PASS" } else { "FAIL" }));
@@ -389,6 +385,25 @@ fn bright_pixels(app: &App, m: Metrics) -> usize {
     count
 }
 
+/// 截一次屏，在胶囊内若干点（相对胶囊左上角的 DIP 坐标）取样。
+fn sample_points(app: &App, m: Metrics, points: &[(f32, f32)]) -> Vec<Rgb> {
+    let Some((w, h, pixels)) = capture(app) else {
+        return Vec::new();
+    };
+    let s = app.scene.scale();
+    let r = m.frame(app.settings.dock);
+    points
+        .iter()
+        .filter_map(|(lx, ly)| {
+            let (x, y) = (((r.x + lx) * s) as u32, ((r.y + ly) * s) as u32);
+            (x < w && y < h).then(|| {
+                let i = ((y * w + x) * 4) as usize;
+                Rgb::new(pixels[i + 2], pixels[i + 1], pixels[i])
+            })
+        })
+        .collect()
+}
+
 fn has_target(app: &App, f: impl Fn(Hit) -> bool) -> bool {
     app.has_target(f)
 }
@@ -479,6 +494,21 @@ pub fn step(app: &mut App) {
                 &format!(
                     "屏幕上画出了浅色胶囊（取样 {}）",
                     c.map(island::color::to_hex).unwrap_or_default()
+                ),
+            );
+            // 面板四角（让开圆角和顶部的标签栏）都应该是背景色：背景和内容的大小、位置对得上（缩放时尤其容易错）
+            let corners = [(40.0, 46.0), (400.0, 46.0), (40.0, 244.0), (400.0, 244.0)];
+            let got = sample_points(app, expanded, &corners);
+            let all =
+                got.len() == corners.len() && got.iter().all(|c| near(*c, LIGHT.background, 16));
+            smoke.check(
+                all,
+                &format!(
+                    "面板四角都是背景色（缩放 {}，取样 {:?}）",
+                    app.scene.scale(),
+                    got.iter()
+                        .map(|c| island::color::to_hex(*c))
+                        .collect::<Vec<_>>()
                 ),
             );
             app.set_interactive(true);
@@ -862,7 +892,10 @@ pub fn step(app: &mut App) {
             app.show_notification('\u{E8BD}', "冒烟测试", "这是一条测试通知");
         }
         69 => {
-            smoke.check(app.state == IslandState::Notification, "显示通知");
+            smoke.check(
+                app.state == IslandState::Notification,
+                &format!("显示通知（{:?}，{:?}）", app.state, app.inputs()),
+            );
             let lit = bright_pixels(app, island::metrics::NOTIFICATION);
             smoke.check(lit > 50, &format!("通知里画出了文字（亮像素 {lit}）"));
             snapshot(app, &mut smoke, "26-notification", None);
@@ -893,7 +926,10 @@ pub fn step(app: &mut App) {
             app.set_pinned(false);
         }
         36 => {
-            smoke.check(app.state == IslandState::Idle, "快速切换后回到待机");
+            smoke.check(
+                app.state == IslandState::Idle,
+                &format!("快速切换后回到待机（{:?}，{:?}）", app.state, app.inputs()),
+            );
             snapshot(app, &mut smoke, "16-after-stress", None);
 
             smoke.note(&format!("内存（用过全部功能后）：{}", memory()));
