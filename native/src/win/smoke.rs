@@ -172,6 +172,25 @@ fn snapshot(
         at(w / 2, h / 2),
         at(w / 2, (10.0 * s) as u32)
     ));
+    // 粗略的亮度图，直接看日志就知道屏幕上画了什么：# 纯黑  + 很暗  : 暗  . 中等  空格 亮
+    for row in 0..20u32 {
+        let y = row * h / 20 + h / 40;
+        let line: String = (0..62u32)
+            .map(|col| {
+                let x = col * w / 62 + w / 124;
+                let i = ((y * w + x) * 4) as usize;
+                let l = (pixels[i] as u32 + pixels[i + 1] as u32 + pixels[i + 2] as u32) / 3;
+                match l {
+                    0..=8 => '#',
+                    9..=40 => '+',
+                    41..=120 => ':',
+                    121..=200 => '.',
+                    _ => ' ',
+                }
+            })
+            .collect();
+        smoke.lines.push(format!("     |{line}|"));
+    }
     let path = smoke.dir.join(format!("{name}.png"));
     if let Err(e) = save_png(&path, w, h, &pixels) {
         smoke.note(&format!("{name}：保存截图失败 {e}"));
