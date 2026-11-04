@@ -81,24 +81,30 @@ jobs:
           Get-Item target/release/Island.exe, target/aarch64-pc-windows-msvc/release/Island.exe |
             Format-Table FullName, @{ n = 'KB'; e = { [math]::Round($_.Length / 1KB) } }
 
-      # 在真实 Windows 桌面上启动，走一遍待机、音乐胶囊、展开、浅色主题，截图并检查屏幕上真的画出了胶囊
+      # 在真实 Windows 桌面上启动，走一遍所有功能，截图并检查屏幕上真的画对了。
+      # CI 的屏幕是 100% 缩放，再按 150% 强制跑一遍（很多笔记本是 150%，缩放相关的问题只有这样才测得到）
       - name: Smoke test
         shell: pwsh
         run: |
-          $out = Join-Path $env:RUNNER_TEMP 'native-smoke'
-          $env:ISLAND_DATA_DIR = Join-Path $env:RUNNER_TEMP 'native-smoke-data'
-          $p = Start-Process -FilePath target/release/Island.exe -ArgumentList '--smoke-test', $out -PassThru
-          $null = $p.Handle
-          $finished = $p.WaitForExit(150000)
-          if (-not $finished) { $p.Kill() }
+          $failed = @()
+          foreach ($scale in @('1', '1.5')) {
+            $out = Join-Path $env:RUNNER_TEMP "native-smoke/scale-$scale"
+            $env:ISLAND_DATA_DIR = Join-Path $env:RUNNER_TEMP "native-smoke-data-$scale"
+            $env:ISLAND_FORCE_SCALE = $scale
+            $p = Start-Process -FilePath target/release/Island.exe -ArgumentList '--smoke-test', $out -PassThru
+            $null = $p.Handle
+            $finished = $p.WaitForExit(150000)
+            if (-not $finished) { $p.Kill() }
 
-          Write-Host '===== report.txt ====='
-          Get-Content (Join-Path $out 'report.txt') -ErrorAction SilentlyContinue
-          Write-Host '===== island.log ====='
-          Get-Content (Join-Path $env:ISLAND_DATA_DIR 'island.log') -ErrorAction SilentlyContinue
+            Write-Host "===== 缩放 $scale：report.txt ====="
+            Get-Content (Join-Path $out 'report.txt') -ErrorAction SilentlyContinue
+            Write-Host "===== 缩放 $scale：island.log ====="
+            Get-Content (Join-Path $env:ISLAND_DATA_DIR 'island.log') -ErrorAction SilentlyContinue
 
-          if (-not $finished) { throw 'Smoke test timed out' }
-          if ($p.ExitCode -ne 0) { throw "Smoke test failed with exit code $($p.ExitCode)" }
+            if (-not $finished) { $failed += "缩放 $scale 超时" }
+            elseif ($p.ExitCode -ne 0) { $failed += "缩放 $scale 有 $($p.ExitCode) 项失败" }
+          }
+          if ($failed.Count -gt 0) { throw ($failed -join '；') }
 
       - name: Upload smoke test screenshots
         if: always()

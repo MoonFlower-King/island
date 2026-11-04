@@ -389,6 +389,25 @@ fn bright_pixels(app: &App, m: Metrics) -> usize {
     count
 }
 
+/// 截一次屏，在胶囊内若干点（相对胶囊左上角的 DIP 坐标）取样。
+fn sample_points(app: &App, m: Metrics, points: &[(f32, f32)]) -> Vec<Rgb> {
+    let Some((w, h, pixels)) = capture(app) else {
+        return Vec::new();
+    };
+    let s = app.scene.scale();
+    let r = m.frame(app.settings.dock);
+    points
+        .iter()
+        .filter_map(|(lx, ly)| {
+            let (x, y) = (((r.x + lx) * s) as u32, ((r.y + ly) * s) as u32);
+            (x < w && y < h).then(|| {
+                let i = ((y * w + x) * 4) as usize;
+                Rgb::new(pixels[i + 2], pixels[i + 1], pixels[i])
+            })
+        })
+        .collect()
+}
+
 fn has_target(app: &App, f: impl Fn(Hit) -> bool) -> bool {
     app.has_target(f)
 }
@@ -479,6 +498,21 @@ pub fn step(app: &mut App) {
                 &format!(
                     "屏幕上画出了浅色胶囊（取样 {}）",
                     c.map(island::color::to_hex).unwrap_or_default()
+                ),
+            );
+            // 面板四角（让开圆角）都应该是背景色：背景和内容的大小、位置对得上（缩放时尤其容易错）
+            let corners = [(40.0, 20.0), (400.0, 20.0), (40.0, 244.0), (400.0, 244.0)];
+            let got = sample_points(app, expanded, &corners);
+            let all =
+                got.len() == corners.len() && got.iter().all(|c| near(*c, LIGHT.background, 16));
+            smoke.check(
+                all,
+                &format!(
+                    "面板四角都是背景色（缩放 {}，取样 {:?}）",
+                    app.scene.scale(),
+                    got.iter()
+                        .map(|c| island::color::to_hex(*c))
+                        .collect::<Vec<_>>()
                 ),
             );
             app.set_interactive(true);

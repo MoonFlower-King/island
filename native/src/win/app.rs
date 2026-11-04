@@ -380,7 +380,12 @@ fn place(hwnd: HWND, edge: Edge, monitor_name: &str) -> (f32, POINT) {
             .unwrap_or_else(|| MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY));
         let (mut dx, mut dy) = (96u32, 96u32);
         let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
-        let scale = dx as f32 / 96.0;
+        // ISLAND_FORCE_SCALE=1.5：按 150% 缩放显示（测试高 DPI 用，CI 的屏幕是 100%）
+        let scale = std::env::var("ISLAND_FORCE_SCALE")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .filter(|v| (0.5..=4.0).contains(v))
+            .unwrap_or(dx as f32 / 96.0);
 
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
