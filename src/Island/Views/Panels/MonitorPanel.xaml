@@ -1,0 +1,53 @@
+<UserControl x:Class="Island.Views.Panels.MonitorPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid VerticalAlignment="Center">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="20" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- CPU -->
+        <StackPanel>
+            <Grid>
+                <TextBlock Text="CPU" FontSize="12" Foreground="{StaticResource IslandSecondary}" />
+                <TextBlock x:Name="CpuText" Text="--" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Right" />
+            </Grid>
+            <ProgressBar x:Name="CpuBar" Style="{StaticResource IslandMeter}" Margin="0,6,0,0" />
+        </StackPanel>
+
+        <!-- 内存 -->
+        <StackPanel Grid.Column="2">
+            <Grid>
+                <TextBlock Text="内存" FontSize="12" Foreground="{StaticResource IslandSecondary}" />
+                <TextBlock x:Name="MemText" Text="--" FontSize="12" FontWeight="SemiBold" HorizontalAlignment="Right" />
+            </Grid>
+            <ProgressBar x:Name="MemBar" Style="{StaticResource IslandMeter}" Margin="0,6,0,0"
+                         Foreground="{StaticResource IslandAccent}" />
+            <TextBlock x:Name="MemDetail" FontSize="11" Margin="0,4,0,0" Foreground="{StaticResource IslandTertiary}" />
+        </StackPanel>
+
+        <!-- 网速 -->
+        <Border Grid.Row="2" Margin="0,16,0,0" CornerRadius="12" Padding="12,10"
+                Background="{StaticResource IslandSurface}">
+            <StackPanel>
+                <TextBlock Text="↓ 下载" FontSize="11"
+                           Foreground="{StaticResource IslandSecondary}" />
+                <TextBlock x:Name="DownText" Text="--" FontSize="18" FontWeight="SemiBold" Margin="0,2,0,0" />
+            </StackPanel>
+        </Border>
+        <Border Grid.Row="2" Grid.Column="2" Margin="0,16,0,0" CornerRadius="12" Padding="12,10"
+                Background="{StaticResource IslandSurface}">
+            <StackPanel>
+                <TextBlock Text="↑ 上传" FontSize="11" Foreground="{StaticResource IslandSecondary}" />
+                <TextBlock x:Name="UpText" Text="--" FontSize="18" FontWeight="SemiBold" Margin="0,2,0,0" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

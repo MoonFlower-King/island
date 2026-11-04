@@ -15,4 +15,9 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- 官方 Anthropic C# SDK，用于 AI 翻译 -->
+    <PackageReference Include="Anthropic" Version="13.1.0" />
+  </ItemGroup>
+
 </Project>

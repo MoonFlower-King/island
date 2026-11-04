@@ -3,6 +3,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using Island.Core;
 using Island.Media;
 
 namespace Island.Views;
@@ -10,7 +11,7 @@ namespace Island.Views;
 /// <summary>
 /// 岛上的“正在播放”：
 ///   · 播放中 → 紧凑胶囊：封面 + 歌名 + 律动条
-///   · 悬停   → 展开播放器：封面、歌曲信息、进度条、上一首/播放暂停/下一首
+///   · 悬停   → 展开面板的“音乐”标签：封面、歌曲信息、进度条、上一首/播放暂停/下一首
 ///   · 暂停后 → 继续显示一会儿再缩回待机，方便马上恢复播放
 /// </summary>
 public partial class IslandWindow
@@ -94,6 +95,8 @@ public partial class IslandWindow
         }
 
         if (snapshot is not null) ApplyMediaToUi(snapshot);
+        MediaPlayer.Visibility = snapshot is null ? Visibility.Collapsed : Visibility.Visible;
+        MusicEmpty.Visibility = snapshot is null ? Visibility.Visible : Visibility.Collapsed;
 
         UpdateState();
         RefreshMediaAnimations();
@@ -168,7 +171,8 @@ public partial class IslandWindow
     {
         bool playing = _media?.IsPlaying == true;
 
-        bool runProgress = playing && _media!.HasTimeline && ReferenceEquals(_currentView, MediaExpandedView);
+        bool musicVisible = ReferenceEquals(_currentView, ExpandedView) && _activeTab == IslandTab.Music;
+        bool runProgress = playing && _media!.HasTimeline && musicVisible;
         if (runProgress)
         {
             UpdateProgress();

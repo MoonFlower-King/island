@@ -15,12 +15,13 @@ namespace Island.Views;
 /// <summary>
 /// 灵动岛主窗口：一个透明、置顶、不抢焦点的窗口，中间放一个会变形的黑色胶囊。
 ///
-/// 显示哪个状态由三件事决定（优先级从高到低）：
-///   1. 鼠标悬停 → 展开
+/// 显示哪个状态由这几件事决定（优先级从高到低）：
+///   1. 鼠标在岛上（或正拖着文件经过） → 展开
 ///   2. 有临时通知 → 通知
 ///   3. 否则 → 基础状态（有音乐在播放或手动设置时为紧凑，否则待机）
 ///
-/// 同一个状态可能对应不同的内容视图（例如展开态有音乐时显示播放器），见 <see cref="ViewFor"/>。
+/// 同一个状态可能对应不同的内容视图（例如紧凑态放音乐时显示封面），见 <see cref="ViewFor"/>。
+/// 各功能标签的逻辑在 IslandWindow.Features.cs，音乐在 IslandWindow.Media.cs。
 /// </summary>
 public partial class IslandWindow : Window
 {
@@ -38,8 +39,11 @@ public partial class IslandWindow : Window
         set => SetValue(CapsuleRadiusProperty, value);
     }
 
-    private readonly DispatcherTimer _hoverInTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
-    private readonly DispatcherTimer _hoverOutTimer = new() { Interval = TimeSpan.FromMilliseconds(320) };
+    // 进入稍等一下再展开，避免鼠标只是路过顶部（比如去点浏览器标签）就弹开；离开则很快收起
+    private readonly DispatcherTimer _hoverInTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
+    private readonly DispatcherTimer _hoverOutTimer = new() { Interval = TimeSpan.FromMilliseconds(120) };
+    // 展开期间定时确认鼠标还在岛上，防止快速甩出时漏掉 MouseLeave 导致不收起
+    private readonly DispatcherTimer _collapseWatchdog = new() { Interval = TimeSpan.FromMilliseconds(200) };
     private readonly DispatcherTimer _notificationTimer = new();
     private readonly DispatcherTimer _clockTimer = new();
     private readonly DispatcherTimer _topmostTimer = new() { Interval = TimeSpan.FromSeconds(3) };
@@ -72,15 +76,15 @@ public partial class IslandWindow : Window
         _hoverInTimer.Tick += (_, _) =>
         {
             _hoverInTimer.Stop();
-            _isHovering = true;
-            UpdateState();
+            if (!IsCursorOverIsland()) return;
+            Expand();
         };
         _hoverOutTimer.Tick += (_, _) =>
         {
             _hoverOutTimer.Stop();
-            _isHovering = false;
-            UpdateState();
+            TryCollapse();
         };
+        _collapseWatchdog.Tick += (_, _) => TryCollapse();
         _notificationTimer.Tick += (_, _) => DismissNotification();
         _clockTimer.Tick += (_, _) => UpdateClock();
         _topmostTimer.Tick += (_, _) =>
@@ -94,13 +98,14 @@ public partial class IslandWindow : Window
 
         _currentView = IdleView;
         InitializeMedia();
+        InitializeFeatures();
 
         PositionWindow();
         UpdateClock();
     }
 
     private FrameworkElement[] AllViews =>
-        [IdleView, CompactView, MediaCompactView, NotificationView, ExpandedView, MediaExpandedView];
+        [IdleView, CompactView, MediaCompactView, NotificationView, ExpandedView];
 
     // ───────────────────────────── 窗口与 Win32 ─────────────────────────────
 
@@ -111,17 +116,24 @@ public partial class IslandWindow : Window
         _hwnd = new WindowInteropHelper(this).Handle;
         NativeMethods.MakeOverlay(_hwnd);
         HwndSource.FromHwnd(_hwnd)?.AddHook(WndProc);
+        NativeMethods.AddClipboardFormatListener(_hwnd);
 
         _topmostTimer.Start();
     }
 
-    private static IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+    private IntPtr WndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
-        // 点击岛时不要激活窗口，否则用户正在打字的窗口会失去焦点
-        if (msg == NativeMethods.WM_MOUSEACTIVATE)
+        switch (msg)
         {
-            handled = true;
-            return new IntPtr(NativeMethods.MA_NOACTIVATE);
+            // 点击岛时不要激活窗口，否则用户正在打字的窗口会失去焦点（需要打字时另行激活，见 BeginTyping）
+            case NativeMethods.WM_MOUSEACTIVATE:
+                handled = true;
+                return new IntPtr(NativeMethods.MA_NOACTIVATE);
+
+            case NativeMethods.WM_CLIPBOARDUPDATE:
+                // 不在消息处理中直接读剪贴板，排到之后执行
+                Dispatcher.BeginInvoke(new Action(OnClipboardUpdated));
+                break;
         }
         return IntPtr.Zero;
     }
@@ -148,11 +160,16 @@ public partial class IslandWindow : Window
         // SystemEvents 是静态事件，不取消订阅会泄漏
         SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
         SystemParameters.StaticPropertyChanged -= OnSystemParametersChanged;
+        if (_hwnd != IntPtr.Zero) NativeMethods.RemoveClipboardFormatListener(_hwnd);
 
-        foreach (var timer in new[] { _hoverInTimer, _hoverOutTimer, _notificationTimer, _clockTimer, _topmostTimer })
+        foreach (var timer in new[]
+                 {
+                     _hoverInTimer, _hoverOutTimer, _collapseWatchdog, _notificationTimer, _clockTimer, _topmostTimer,
+                 })
             timer.Stop();
 
         ShutdownMedia();
+        ShutdownFeatures();
     }
 
     // ───────────────────────────── 状态机 ─────────────────────────────
@@ -175,7 +192,7 @@ public partial class IslandWindow : Window
         _currentView = view;
 
         if (previous == target)
-            CrossFadeTo(view, growing: false); // 尺寸不变，只换内容（例如展开时开始放歌）
+            CrossFadeTo(view, growing: false); // 尺寸不变，只换内容
         else
             TransitionTo(previous, target, view);
 
@@ -188,11 +205,11 @@ public partial class IslandWindow : Window
         IslandMetrics b = IslandMetrics.For(to);
         bool growing = b.Width * b.Height > a.Width * a.Height;
 
-        // 变大时更有弹性，缩小时干脆一些
+        // 变大时有弹性，缩小时又快又稳——离开后要立刻让出屏幕
         var ease = growing
-            ? new SpringEase { DampingRatio = 0.66, Stiffness = 11 }
-            : new SpringEase { DampingRatio = 0.86, Stiffness = 12 };
-        var duration = TimeSpan.FromMilliseconds(growing ? 560 : 440);
+            ? new SpringEase { DampingRatio = 0.7, Stiffness = 11 }
+            : new SpringEase { DampingRatio = 0.92, Stiffness = 12 };
+        var duration = TimeSpan.FromMilliseconds(growing ? 480 : 300);
 
         Animate(CapsuleHost, WidthProperty, b.Width, duration, ease);
         Animate(CapsuleHost, HeightProperty, b.Height, duration, ease);
@@ -206,7 +223,7 @@ public partial class IslandWindow : Window
         IslandState.Idle => IdleView,
         IslandState.Compact => MediaWantsCompact ? MediaCompactView : CompactView,
         IslandState.Notification => NotificationView,
-        IslandState.Expanded => HasMedia ? MediaExpandedView : ExpandedView,
+        IslandState.Expanded => ExpandedView,
         _ => IdleView,
     };
 
@@ -214,15 +231,15 @@ public partial class IslandWindow : Window
     private void OnActiveViewChanged()
     {
         UpdateCompactPulse(ReferenceEquals(_currentView, CompactView));
-        RefreshMediaAnimations();
+        UpdatePanelActivity();
     }
 
     /// <summary>旧内容快速淡出，新内容等胶囊长出一点后再淡入并轻微放大。</summary>
     private void CrossFadeTo(FrameworkElement target, bool growing)
     {
-        var fadeOut = TimeSpan.FromMilliseconds(90);
-        var fadeIn = TimeSpan.FromMilliseconds(200);
-        var delay = TimeSpan.FromMilliseconds(growing ? 140 : 80);
+        var fadeOut = TimeSpan.FromMilliseconds(80);
+        var fadeIn = TimeSpan.FromMilliseconds(180);
+        var delay = TimeSpan.FromMilliseconds(growing ? 120 : 60);
         var easeOut = new CubicEase { EasingMode = EasingMode.EaseOut };
 
         foreach (var view in AllViews)
@@ -299,7 +316,7 @@ public partial class IslandWindow : Window
 
     // ───────────────────────────── 对外接口 ─────────────────────────────
 
-    /// <summary>设置常驻的基础状态（以后由音乐、计时器等模块调用）。</summary>
+    /// <summary>设置常驻的基础状态（以后由计时器等模块调用；音乐会自动处理）。</summary>
     public void SetBaseState(IslandState state, string? compactTitle = null)
     {
         if (state is not (IslandState.Idle or IslandState.Compact))
@@ -341,8 +358,7 @@ public partial class IslandWindow : Window
         IdleClock.Text = time;
         CompactClock.Text = time;
         ExpandedClock.Text = time;
-        MediaExpandedClock.Text = time;
-        ExpandedDate.Text = now.ToString("M月d日 dddd", DateCulture);
+        ExpandedDate.Text = now.ToString("M月d日 ddd", DateCulture);
 
         // 对齐到下一分钟再刷新，而不是每秒都跑
         _clockTimer.Stop();
@@ -351,53 +367,96 @@ public partial class IslandWindow : Window
         _clockTimer.Start();
     }
 
-    // ───────────────────────────── 鼠标交互 ─────────────────────────────
+    // ───────────────────────────── 悬停展开 / 离开收起 ─────────────────────────────
 
-    private void OnCapsuleMouseEnter(object sender, MouseEventArgs e)
+    private void OnIslandMouseEnter(object sender, MouseEventArgs e)
     {
         _hoverOutTimer.Stop();
-        if (!_isHovering) _hoverInTimer.Start();
+        if (!_isHovering && !_hoverInTimer.IsEnabled) _hoverInTimer.Start();
     }
 
-    private void OnCapsuleMouseLeave(object sender, MouseEventArgs e)
+    private void OnIslandMouseLeave(object sender, MouseEventArgs e)
     {
-        _hoverInTimer.Stop();
-        if (CapsuleMenu.IsOpen) return; // 右键菜单打开时先不收起
         if (_isHovering) _hoverOutTimer.Start();
+        else if (!IsCursorOverIsland()) _hoverInTimer.Stop();
+    }
+
+    private void Expand(IslandTab? forcedTab = null)
+    {
+        if (!_isHovering)
+        {
+            // 从音乐胶囊展开时直接显示播放器，其他情况回到上次用的标签
+            IslandTab tab = forcedTab
+                            ?? (ReferenceEquals(_currentView, MediaCompactView) ? IslandTab.Music : PreferredTab);
+            ShowTab(tab, remember: false);
+            _isHovering = true;
+            UpdateState();
+        }
+        else if (forcedTab is { } t)
+        {
+            ShowTab(t, remember: false);
+        }
+
+        _collapseWatchdog.Start();
+    }
+
+    /// <summary>鼠标不在岛上、也没有在打字或拖文件时收起。</summary>
+    private void TryCollapse()
+    {
+        if (!_isHovering)
+        {
+            _collapseWatchdog.Stop();
+            return;
+        }
+        if (ShouldStayExpanded()) return;
+
+        _collapseWatchdog.Stop();
+        _hoverOutTimer.Stop();
+        _isHovering = false;
+        EndTyping(restoreFocus: true);
+        UpdateState();
+    }
+
+    private bool ShouldStayExpanded() =>
+        IsCursorOverIsland() || CapsuleMenu.IsOpen || _isDraggingOver || (_isTyping && IsActive);
+
+    /// <summary>直接问系统光标在哪里，比 WPF 的 IsMouseOver 可靠（拖放、快速移动时也准）。</summary>
+    private bool IsCursorOverIsland()
+    {
+        if (PresentationSource.FromVisual(this) is null || !NativeMethods.GetCursorPos(out var pt)) return false;
+
+        Point cursor = PointFromScreen(new Point(pt.X, pt.Y));
+        return BoundsOf(CapsuleHost).Contains(cursor) || BoundsOf(HotZone).Contains(cursor);
+    }
+
+    private Rect BoundsOf(FrameworkElement element)
+    {
+        Rect bounds = element.TransformToAncestor(this).TransformBounds(new Rect(element.RenderSize));
+        bounds.Inflate(2, 2);
+        return bounds;
     }
 
     private void OnContextMenuClosed(object sender, RoutedEventArgs e)
     {
-        if (!CapsuleHost.IsMouseOver && _isHovering) _hoverOutTimer.Start();
+        if (_isHovering) _hoverOutTimer.Start();
     }
 
     private void OnCapsuleClick(object sender, MouseButtonEventArgs e)
     {
         // 点击通知直接关掉它
-        if (_hasNotification) DismissNotification();
+        if (_hasNotification && !_isHovering) DismissNotification();
     }
 
-    // ───────────────────────────── 右键菜单（演示用） ─────────────────────────────
-
-    private void OnDemoToggleCompact(object sender, RoutedEventArgs e)
-    {
-        ReleaseHover();
-        SetBaseState(_baseState == IslandState.Compact ? IslandState.Idle : IslandState.Compact,
-            "专注计时进行中");
-    }
+    // ───────────────────────────── 右键菜单 ─────────────────────────────
 
     private void OnDemoNotification(object sender, RoutedEventArgs e)
     {
-        ReleaseHover();
-        ShowNotification("新消息", "这是一条来自灵动岛的演示通知", "💬");
-    }
-
-    /// <summary>点菜单时鼠标还停在岛上，先强制收起展开态，好让演示效果立刻可见。</summary>
-    private void ReleaseHover()
-    {
+        // 点菜单时鼠标还停在岛上，先强制收起展开态，好让通知立刻可见
         _hoverInTimer.Stop();
         _hoverOutTimer.Stop();
+        _collapseWatchdog.Stop();
         _isHovering = false;
+        ShowNotification("新消息", "这是一条来自灵动岛的演示通知", "💬");
     }
 
     private void OnExit(object sender, RoutedEventArgs e) => Application.Current.Shutdown();

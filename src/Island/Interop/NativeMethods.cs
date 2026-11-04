@@ -23,6 +23,8 @@ internal static class NativeMethods
     public const int WM_MOUSEACTIVATE = 0x0021;
     public const int MA_NOACTIVATE = 3;
 
+    public const int WM_CLIPBOARDUPDATE = 0x031D;
+
     public static readonly IntPtr HWND_TOPMOST = new(-1);
 
     public const uint SWP_NOSIZE = 0x0001;
@@ -46,6 +48,36 @@ internal static class NativeMethods
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetWindowPos(
         IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool AddClipboardFormatListener(IntPtr hwnd);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool RemoveClipboardFormatListener(IntPtr hwnd);
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct POINT
+    {
+        public int X;
+        public int Y;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool GetCursorPos(out POINT point);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static extern bool IsWindow(IntPtr hWnd);
 
     public static long GetWindowLong(IntPtr hWnd, int nIndex) =>
         IntPtr.Size == 8
