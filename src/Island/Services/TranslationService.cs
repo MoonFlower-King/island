@@ -69,7 +69,7 @@ public sealed class TranslationService
         if (string.IsNullOrWhiteSpace(profile.Model))
             throw new TranslationException("请先填写模型名称。", needsSetup: true);
         if (!ApiEndpoint.IsValid(profile.BaseUrl))
-            throw new TranslationException("请求地址格式不对，应该以 http:// 或 https:// 开头。", needsSetup: true);
+            throw new TranslationException(ApiEndpoint.InvalidUrlHint + "。", needsSetup: true);
 
         string? key = _settings.GetApiKey(_settings.TranslateProvider);
         if (string.IsNullOrWhiteSpace(key) && !ApiEndpoint.IsLoopback(profile.BaseUrl))
@@ -268,9 +268,14 @@ public sealed class TranslationService
 
     private static async Task<string> SafeReadAsync(HttpResponseMessage response, CancellationToken cancellationToken)
     {
+        // 错误信息只读开头一段，免得异常的服务返回巨大的内容占满内存
         try
         {
-            return await response.Content.ReadAsStringAsync(cancellationToken);
+            await using Stream stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var reader = new StreamReader(stream, Encoding.UTF8);
+            char[] buffer = new char[16 * 1024];
+            int read = await reader.ReadBlockAsync(buffer, cancellationToken);
+            return new string(buffer, 0, read);
         }
         catch
         {

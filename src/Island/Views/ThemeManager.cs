@@ -45,8 +45,6 @@ public sealed class ThemeManager
     /// <summary>当前显示中的颜色（过渡期间是中间色）。</summary>
     public Color ColorOf(string key) => _shown.TryGetValue(key, out var color) ? color : default;
 
-    public bool IsTransitioning => _transitioning;
-
     public void Apply(ThemePalette palette, bool animate)
     {
         if (palette == Current) return;

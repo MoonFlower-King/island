@@ -49,11 +49,16 @@ const TIMER_TICK: usize = 3;
 pub const TIMER_SMOKE: usize = 4;
 const TIMER_LEVEL: usize = 5;
 
+/// 光标在岛附近时每 40 ms 看一次，悬停反应及时。
 const POLL_MS: u32 = 40;
+/// 光标离得远时放慢到 120 ms，空闲时少唤醒 CPU。
+const POLL_FAR_MS: u32 = 120;
+/// 离热区多远（DIP）算"附近"：120 ms 内光标很难跨过这段距离。
+const NEAR_DIP: f32 = 160.0;
 /// 停手后音量提示停留多久。
 const LEVEL_HUD_MS: u32 = 1600;
-/// 每隔几次轮询看一次系统音量（约 120 ms）。
-const VOLUME_POLL_EVERY: u32 = 3;
+/// 系统音量多久看一次。
+const VOLUME_POLL_MS: u64 = 110;
 
 pub fn tick() -> u64 {
     unsafe { windows::Win32::System::SystemInformation::GetTickCount64() }
@@ -89,7 +94,8 @@ pub struct App {
     wheel_until: u64,
     /// 音量 / 亮度提示正在显示。
     pub level_hud: Option<(char, f64, String)>,
-    poll_count: u32,
+    poll_ms: u32,
+    last_volume_poll: u64,
     targets: Targets,
     hovered: Option<Hit>,
     pressed: Option<Hit>,
@@ -238,7 +244,8 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             wheel: WheelAccumulator::default(),
             wheel_until: 0,
             level_hud: None,
-            poll_count: 0,
+            poll_ms: POLL_MS,
+            last_volume_poll: 0,
             targets: Targets::default(),
             hovered: None,
             pressed: None,
@@ -606,7 +613,16 @@ impl App {
             ),
             None => self.clock.reset(),
         }
+        let unchanged = match (&self.media, &snapshot) {
+            (Some(a), Some(b)) => a.looks_same(b, tick()),
+            (None, None) => true,
+            _ => false,
+        };
         self.media = snapshot;
+        // 有的播放器每秒都报一次进度：内容没变就不重画
+        if unchanged {
+            return;
+        }
         self.apply_accent();
         self.redraw_compact();
         if self.state == IslandState::Expanded {
@@ -767,11 +783,28 @@ impl App {
     }
 
     fn cursor_inside(&self) -> bool {
-        let edge = self.edge();
-        !self.hidden
-            && self
-                .cursor()
-                .is_some_and(|(x, y)| self.metrics(self.state).hover_zone(edge).contains(x, y))
+        self.cursor_zone().0
+    }
+
+    /// (光标在热区里, 光标在热区附近)。
+    fn cursor_zone(&self) -> (bool, bool) {
+        if self.hidden {
+            return (false, false);
+        }
+        let zone = self.metrics(self.state).hover_zone(self.edge());
+        self.cursor().map_or((false, false), |(x, y)| {
+            (zone.contains(x, y), zone.inflate(NEAR_DIP).contains(x, y))
+        })
+    }
+
+    /// 按光标远近调整轮询间隔。
+    fn set_poll_interval(&mut self, ms: u32) {
+        if self.poll_ms != ms {
+            self.poll_ms = ms;
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_POLL, ms, None);
+            }
+        }
     }
 
     /// 窗口坐标 → 相对胶囊左上角（展开面板的坐标系）。
@@ -793,14 +826,18 @@ impl App {
     }
 
     fn poll(&mut self) {
-        self.poll_count = self.poll_count.wrapping_add(1);
-        if self.poll_count.is_multiple_of(VOLUME_POLL_EVERY) && self.smoke.is_none() {
+        let now = tick();
+        if now.saturating_sub(self.last_volume_poll) >= VOLUME_POLL_MS && self.smoke.is_none() {
+            self.last_volume_poll = now;
             self.poll_volume();
         }
         if self.smoke.as_ref().is_some_and(|s| s.drives_input()) {
             return;
         }
-        let inside = self.cursor_inside();
+        let (inside, near) = self.cursor_zone();
+        // 展开、按住或悬停计时中都保持快速轮询
+        let busy = near || self.pressed.is_some() || self.state == IslandState::Expanded;
+        self.set_poll_interval(if busy { POLL_MS } else { POLL_FAR_MS });
         self.set_interactive(inside || self.pressed.is_some());
         let hold = self.menu_open || self.pressed.is_some();
         // 刚用滚轮调过音量：先不展开

@@ -15,6 +15,8 @@
 //! 形状只由属性集 p 的 Size / Radius / Top 三个值决定，状态切换时对它们启动弹簧动画，
 //! 其余视觉元素用表达式动画绑定到 p 上。整个过程界面线程不参与逐帧计算。
 
+use std::cell::Cell;
+
 use windows::Foundation::{IReference, PropertyValue, TimeSpan};
 use windows::UI::Color;
 use windows::UI::Composition::*;
@@ -78,6 +80,9 @@ pub struct Scene {
     bars: Vec<SpriteVisual>,
     bar_brush: CompositionColorBrush,
     scale: f32,
+    /// 上一次设置的细线染色和律动条状态：没变就不重新启动动画（重启会让动画跳一下）。
+    line_state: Cell<Option<(Option<Rgb>, bool)>>,
+    equalizer: Cell<Option<bool>>,
 }
 
 fn ui_color(c: Rgb, alpha: u8) -> Color {
@@ -218,6 +223,8 @@ impl Scene {
             bars,
             bar_brush,
             scale,
+            line_state: Cell::new(None),
+            equalizer: Cell::new(None),
         };
         scene.set_edge(Edge::Top)?;
         Ok(scene)
@@ -283,6 +290,9 @@ impl Scene {
 
     /// 细线的颜色：`Some` 时细线染成这个颜色（放音乐时），`None` 时是普通的背景色。
     pub fn set_line_tint(&self, tint: Option<Rgb>, line_visible: bool) -> Result<()> {
+        if self.line_state.replace(Some((tint, line_visible))) == Some((tint, line_visible)) {
+            return Ok(());
+        }
         if let Some(c) = tint {
             self.line_brush.SetColor(ui_color(c, 255))?;
         }
@@ -372,6 +382,9 @@ impl Scene {
 
     /// 律动条：播放时随机高度来回跳，暂停时缩成短条。
     pub fn set_equalizer(&self, playing: bool) -> Result<()> {
+        if self.equalizer.replace(Some(playing)) == Some(playing) {
+            return Ok(());
+        }
         const PATTERNS: [[f32; 5]; 4] = [
             [0.35, 1.0, 0.55, 0.85, 0.35],
             [0.8, 0.4, 1.0, 0.5, 0.8],

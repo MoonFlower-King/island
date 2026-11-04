@@ -248,7 +248,7 @@ public partial class TranslatePanel : UserControl
     {
         if (!ApiEndpoint.IsValid(BaseUrlInput.Text))
         {
-            SetHint("地址应该以 http:// 或 https:// 开头", isError: true);
+            SetHint(ApiEndpoint.InvalidUrlHint, isError: true);
             return;
         }
         SetHint("请求 " + ApiEndpoint.Describe(SelectedFormat, BaseUrlInput.Text), isError: false);
@@ -324,7 +324,7 @@ public partial class TranslatePanel : UserControl
 
         if (!ApiEndpoint.IsValid(baseUrl))
         {
-            SetHint("地址应该以 http:// 或 https:// 开头", isError: true);
+            SetHint(ApiEndpoint.InvalidUrlHint, isError: true);
             return false;
         }
         if (model.Length == 0)

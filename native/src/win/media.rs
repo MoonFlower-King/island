@@ -4,7 +4,7 @@
 //! 整理好的快照放进一个共享槽，再 PostMessage 通知界面线程去取。
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
 
 use windows::Foundation::TypedEventHandler;
 use windows::Media::Control::*;
@@ -27,10 +27,24 @@ const ART_SIZE: u32 = 240;
 
 #[derive(Clone, Debug, Default)]
 pub struct Art {
+    /// 每张解码出来的封面一个编号，绘制时据此复用已上传的位图。
+    pub id: u64,
     pub width: u32,
     pub height: u32,
     /// BGRA，预乘 alpha。
     pub pixels: Vec<u8>,
+}
+
+impl Art {
+    pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            width,
+            height,
+            pixels,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -54,6 +68,22 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// 界面上看起来一样（只是进度按时间正常往前走）：不用重画。
+    pub fn looks_same(&self, other: &Snapshot, now: u64) -> bool {
+        self.title == other.title
+            && self.artist == other.artist
+            && self.app == other.app
+            && self.playing == other.playing
+            && self.duration == other.duration
+            && self.known_duration == other.known_duration
+            && self.can_previous == other.can_previous
+            && self.can_next == other.can_next
+            && self.accent == other.accent
+            && self.art.as_ref().map(|a| a.id) == other.art.as_ref().map(|a| a.id)
+            // 拖动了进度条：位置对不上，要重画
+            && (self.position_at(now) - other.position_at(now)).abs() < 1.0
+    }
+
     pub fn position_at(&self, now: u64) -> f64 {
         let p = if self.playing {
             self.position + (now.saturating_sub(self.taken_at)) as f64 / 1000.0
@@ -305,11 +335,7 @@ fn decode_art(reference: &windows::Storage::Streams::IRandomAccessStreamReferenc
         )?;
         let mut pixels = vec![0u8; (size * size * 4) as usize];
         converter.CopyPixels(std::ptr::null(), size * 4, &mut pixels)?;
-        Ok(Art {
-            width: size,
-            height: size,
-            pixels,
-        })
+        Ok(Art::new(size, size, pixels))
     }
 }
 

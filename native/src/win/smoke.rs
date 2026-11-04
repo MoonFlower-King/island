@@ -226,11 +226,7 @@ fn fake_art() -> Arc<Art> {
             pixels.extend_from_slice(&[(x * 3) as u8, (y * 2) as u8, 200, 255]);
         }
     }
-    Arc::new(Art {
-        width: size,
-        height: size,
-        pixels,
-    })
+    Arc::new(Art::new(size, size, pixels))
 }
 
 fn fake_media(playing: bool) -> Snapshot {

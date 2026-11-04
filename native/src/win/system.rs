@@ -198,9 +198,12 @@ pub fn read_clipboard_text(hwnd: HWND) -> Option<String> {
                     // CanIncludeInClipboardHistory 为 0 表示不要记录；另外两个只要存在就不记录
                     if name == w!("CanIncludeInClipboardHistory") {
                         if let Ok(h) = GetClipboardData(format) {
-                            let p = GlobalLock(HGLOBAL(h.0)) as *const u32;
-                            let allowed = !p.is_null() && *p != 0;
-                            let _ = GlobalUnlock(HGLOBAL(h.0));
+                            let global = HGLOBAL(h.0);
+                            let p = GlobalLock(global) as *const u32;
+                            let allowed = !p.is_null()
+                                && GlobalSize(global) >= 4
+                                && std::ptr::read_unaligned(p) != 0;
+                            let _ = GlobalUnlock(global);
                             if !allowed {
                                 return None;
                             }
@@ -216,14 +219,17 @@ pub fn read_clipboard_text(hwnd: HWND) -> Option<String> {
             if p.is_null() {
                 return None;
             }
-            let max = GlobalSize(global) / 2;
+            // 太长的不记录（历史只存 MAX_LENGTH 个字以内的），也就不必整段解码
+            let limit = island::clip::MAX_LENGTH * 2 + 1;
+            let max = (GlobalSize(global) / 2).min(limit);
             let mut len = 0;
             while len < max && *p.add(len) != 0 {
                 len += 1;
             }
-            let text = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+            let text =
+                (len < limit).then(|| String::from_utf16_lossy(std::slice::from_raw_parts(p, len)));
             let _ = GlobalUnlock(global);
-            Some(text)
+            text
         })();
         let _ = CloseClipboard();
         result

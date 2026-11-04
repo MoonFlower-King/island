@@ -454,7 +454,7 @@ fn draw_empty_music(p: &Painter, v: &ViewState) -> Result<()> {
 
 fn draw_art(p: &Painter, m: &Snapshot, r: Rect, radius: f32, v: &ViewState) -> Result<()> {
     match &m.art {
-        Some(art) => p.image(&art.pixels, art.width, art.height, r, radius),
+        Some(art) => p.image(art.id, &art.pixels, art.width, art.height, r, radius),
         None => {
             p.fill_round(r, radius, color(v.palette.foreground, 0.12))?;
             p.icon(
