@@ -1,0 +1,11 @@
+<Application x:Class="Island.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <Application.Resources>
+        <FontFamily x:Key="IslandFont">Segoe UI Variable Display, Segoe UI, Microsoft YaHei UI</FontFamily>
+        <SolidColorBrush x:Key="IslandBackground" Color="#FF000000" />
+        <SolidColorBrush x:Key="IslandForeground" Color="#FFFFFFFF" />
+        <SolidColorBrush x:Key="IslandSecondary" Color="#99FFFFFF" />
+    </Application.Resources>
+</Application>
