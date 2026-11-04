@@ -338,6 +338,28 @@ fn fake_server() -> u16 {
     port
 }
 
+/// 当前进程的工作集和私有内存。
+fn memory() -> String {
+    let mut mem = PROCESS_MEMORY_COUNTERS_EX::default();
+    let ok = unsafe {
+        K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            (&mut mem as *mut PROCESS_MEMORY_COUNTERS_EX).cast(),
+            std::mem::size_of_val(&mem) as u32,
+        )
+    }
+    .as_bool();
+    if ok {
+        format!(
+            "工作集 {:.1} MB，私有 {:.1} MB",
+            mem.WorkingSetSize as f64 / 1048576.0,
+            mem.PrivateUsage as f64 / 1048576.0
+        )
+    } else {
+        "读取失败".into()
+    }
+}
+
 fn has_target(app: &App, f: impl Fn(Hit) -> bool) -> bool {
     app.has_target(f)
 }
@@ -393,6 +415,7 @@ pub fn step(app: &mut App) {
             smoke.check(unsafe { IsWindowVisible(app.hwnd) }.as_bool(), "窗口已显示");
             smoke.check(app.state == IslandState::Idle, "启动后是待机细线");
             smoke.check(placed_at(app, Edge::Top), "窗口在屏幕顶部正中");
+            smoke.note(&format!("内存（刚启动）：{}", memory()));
             snapshot(app, &mut smoke, "01-idle", None);
             app.set_media(Some(fake_media(true)));
         }
@@ -819,22 +842,7 @@ pub fn step(app: &mut App) {
             smoke.check(app.state == IslandState::Idle, "快速切换后回到待机");
             snapshot(app, &mut smoke, "16-after-stress", None);
 
-            let mut mem = PROCESS_MEMORY_COUNTERS_EX::default();
-            let ok = unsafe {
-                K32GetProcessMemoryInfo(
-                    GetCurrentProcess(),
-                    (&mut mem as *mut PROCESS_MEMORY_COUNTERS_EX).cast(),
-                    std::mem::size_of_val(&mem) as u32,
-                )
-            }
-            .as_bool();
-            if ok {
-                smoke.note(&format!(
-                    "内存：工作集 {:.1} MB，私有 {:.1} MB",
-                    mem.WorkingSetSize as f64 / 1048576.0,
-                    mem.PrivateUsage as f64 / 1048576.0
-                ));
-            }
+            smoke.note(&format!("内存（用过全部功能后）：{}", memory()));
             if let Ok(size) = std::env::current_exe()
                 .and_then(std::fs::metadata)
                 .map(|m| m.len())
