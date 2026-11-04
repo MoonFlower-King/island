@@ -309,7 +309,32 @@ pub fn step(app: &mut App) {
                 c.is_some_and(|c| near(c, LIGHT.background, 16)),
                 "可点击模式下照样显示",
             );
+            // 诊断：把内容层藏起来，只剩背景形状，看它是什么颜色
+            let _ = app
+                .scene
+                .expanded
+                .visual
+                .StopAnimation(&HSTRING::from("Opacity"));
+            let _ = app.scene.expanded.visual.SetOpacity(0.0);
             app.set_interactive(false);
+            next = 300;
+            smoke.step = 40;
+        }
+        40 => {
+            let c = snapshot(
+                app,
+                &mut smoke,
+                "05b-shape-only",
+                Some((IslandState::Expanded.metrics(), 220.0, 244.0)),
+            );
+            if let Some(c) = c {
+                smoke.note(&format!(
+                    "只有背景形状时取样 #{:02X}{:02X}{:02X}",
+                    c.r, c.g, c.b
+                ));
+            }
+            let _ = app.scene.expanded.visual.SetOpacity(1.0);
+            smoke.step = 5;
             app.set_palette(DARK);
             app.set_media(Some(fake_media(false)));
             next = 400;
