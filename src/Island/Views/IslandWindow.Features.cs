@@ -31,6 +31,7 @@ public partial class IslandWindow
     private bool _suppressTabEvent;
     private bool _isDraggingOver;
     private bool _isTyping;
+    private DateTime _lastKeyAt;
     private IntPtr _previousForeground;
 
     private IslandTab PreferredTab =>
@@ -202,8 +203,22 @@ public partial class IslandWindow
         _previousForeground = IntPtr.Zero;
     }
 
+    /// <summary>打字中途鼠标移开时，多久没按键就算“不打了”。</summary>
+    private static readonly TimeSpan TypingGrace = TimeSpan.FromSeconds(8);
+
+    /// <summary>
+    /// 正在输入、鼠标移开时不应收起（否则写了一半的内容就被收走了）。
+    /// 但只是点开了输入框、什么都没写，或者已经好一会儿没按键了，就照常收起。
+    /// </summary>
+    private bool IsComposingText() =>
+        _isTyping && IsActive &&
+        Keyboard.FocusedElement is TextBox { Text.Length: > 0 } &&
+        DateTime.UtcNow - _lastKeyAt < TypingGrace;
+
     private void OnWindowPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        _lastKeyAt = DateTime.UtcNow;
+
         // Esc：收起岛，焦点还给之前的程序
         if (e.Key != Key.Escape) return;
         e.Handled = true;

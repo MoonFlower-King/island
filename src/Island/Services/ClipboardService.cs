@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json.Serialization;
 using System.Windows;
 using Island.Core;
 
@@ -12,6 +13,7 @@ public sealed class ClipboardEntry
     public DateTime CopiedAt { get; set; } = DateTime.Now;
 
     /// <summary>列表里显示的单行预览。</summary>
+    [JsonIgnore]
     public string Preview
     {
         get
@@ -21,6 +23,7 @@ public sealed class ClipboardEntry
         }
     }
 
+    [JsonIgnore]
     public string TimeLabel => CopiedAt.Date == DateTime.Today ? CopiedAt.ToString("HH:mm") : CopiedAt.ToString("M/d HH:mm");
 }
 
@@ -55,9 +58,18 @@ public sealed class ClipboardService
         _save = new Debouncer(TimeSpan.FromSeconds(1), Save);
     }
 
-    public void OnClipboardUpdated()
+    public async void OnClipboardUpdated()
     {
-        string? text = TryReadText();
+        string? text;
+        try
+        {
+            text = await TryReadTextAsync();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("读取剪贴板失败", ex);
+            return;
+        }
         if (string.IsNullOrWhiteSpace(text) || text.Length > MaxLength) return;
 
         // 自己“复制回剪贴板”触发的更新不重复记录
@@ -114,19 +126,28 @@ public sealed class ClipboardService
         if (_settings.PersistClipboardHistory) JsonStore.Save(FileName, Items.ToList());
     }
 
-    private static string? TryReadText()
+    /// <summary>读取文字；剪贴板被占用时异步等待重试，不阻塞界面线程。</summary>
+    private static async Task<string?> TryReadTextAsync()
     {
-        string? result = null;
-        Retry(() =>
+        for (int attempt = 0; attempt < 5; attempt++)
         {
-            IDataObject? data = Clipboard.GetDataObject();
-            if (data is null) return;
-            foreach (string format in ExcludeFormats)
-                if (data.GetDataPresent(format)) return;
-            if (data.GetDataPresent(DataFormats.UnicodeText))
-                result = data.GetData(DataFormats.UnicodeText) as string;
-        });
-        return result;
+            try
+            {
+                IDataObject? data = Clipboard.GetDataObject();
+                if (data is null) return null;
+                foreach (string format in ExcludeFormats)
+                    if (data.GetDataPresent(format)) return null;
+                return data.GetDataPresent(DataFormats.UnicodeText)
+                    ? data.GetData(DataFormats.UnicodeText) as string
+                    : null;
+            }
+            catch (ExternalException ex)
+            {
+                Debug.WriteLine($"[Clipboard] 第 {attempt + 1} 次读取失败：{ex.Message}");
+                await Task.Delay(40);
+            }
+        }
+        return null;
     }
 
     /// <summary>剪贴板可能正被别的程序占用（CLIPBRD_E_CANT_OPEN），稍等重试几次。</summary>

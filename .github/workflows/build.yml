@@ -57,8 +57,10 @@ jobs:
       - name: Publish
         shell: pwsh
         run: |
+          # ReadyToRun：发布时预编译，启动和第一次展开时不用等 JIT，避免首次动画卡顿
           $common = @('-c', 'Release', "-p:Version=${{ steps.version.outputs.version }}",
                       '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
+                      '-p:PublishReadyToRun=true',
                       '-p:DebugType=None', '-p:DebugSymbols=false')
           # 自带运行时：下载即用，不需要安装 .NET
           dotnet publish src/Island/Island.csproj -r win-x64 --self-contained true -p:EnableCompressionInSingleFile=true @common -o dist/win-x64
