@@ -98,6 +98,8 @@ git push origin v1.2.3
 
 CI 会用标签里的版本号构建，并自动创建 GitHub Release，附上 x64、arm64 和依赖运行时的三个压缩包，以及 SHA256 校验文件。
 
+不想在本地打标签的话，也可以在 GitHub 的 Actions 页面选择 build 工作流，点 Run workflow，在 `main` 上运行并填入版本标签（如 `v1.2.3`）。CI 会在这个提交上创建标签和 Release。
+
 ## 目录结构
 
 ```
