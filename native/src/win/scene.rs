@@ -77,7 +77,7 @@ pub struct Scene {
     pub clock: Layer,
     edge: Edge,
     bg_brush: CompositionColorBrush,
-    shadow: DropShadow,
+    edge_brush: CompositionColorBrush,
     pub compact: Layer,
     pub expanded: Layer,
     bars: Vec<SpriteVisual>,
@@ -130,42 +130,42 @@ impl Scene {
         bind(c, &capsule, "Size", "Vector2(p.W, p.H)", &props, &[])?;
         root.Children()?.InsertAtTop(&capsule)?;
 
-        // 背景形状 + 阴影
-        // 背景：纯色 SpriteVisual，用圆角矩形裁剪。
-        // （ShapeVisual 放在 LayerVisual 里时，填充色改了不生效，所以不用它。）
+        // 描边：比胶囊大一圈的淡色圆角矩形垫在背景下面，浅色胶囊放在白色网页上也看得清边界。
+        // 以前用 LayerVisual + DropShadow 做阴影：LayerVisual 在缩放过的父节点下会按未缩放的尺寸
+        // 渲染（150% 缩放时背景变小、内容溢出），没有显卡时阴影还会变成黑块，所以不用了。
+        let edge_brush = c.CreateColorBrushWithColor(edge_color(palette))?;
+        let edge_visual = c.CreateSpriteVisual()?;
+        edge_visual.SetBrush(&edge_brush)?;
+        bind(
+            c,
+            &edge_visual,
+            "Size",
+            "Vector2(p.W + 2 * G, p.H + 2 * G)",
+            &props,
+            &[("G", EDGE)],
+        )?;
+        edge_visual.SetOffset(Vector3 {
+            X: -EDGE,
+            Y: -EDGE,
+            Z: 0.0,
+        })?;
+        edge_visual
+            .SetClip(&c.CreateGeometricClipWithGeometry(&rounded_geometry(c, &props, EDGE)?)?)?;
+        capsule.Children()?.InsertAtTop(&edge_visual)?;
+
+        // 背景：纯色 SpriteVisual，用圆角矩形裁剪，直接挂在缩放过的树里
         let bg_brush = c.CreateColorBrushWithColor(ui_color(palette.background, 255))?;
         let background = c.CreateSpriteVisual()?;
         background.SetBrush(&bg_brush)?;
         bind(c, &background, "Size", "Vector2(p.W, p.H)", &props, &[])?;
-        background.SetClip(&c.CreateGeometricClipWithGeometry(&rounded_geometry(c, &props)?)?)?;
-
-        let layer = c.CreateLayerVisual()?;
-        bind(c, &layer, "Size", "Vector2(p.W, p.H)", &props, &[])?;
-        let shadow = c.CreateDropShadow()?;
-        shadow.SetBlurRadius(18.0)?;
-        shadow.SetOffset(Vector3 {
-            X: 0.0,
-            Y: 3.0,
-            Z: 0.0,
-        })?;
-        shadow.SetColor(Color {
-            A: 255,
-            R: 0,
-            G: 0,
-            B: 0,
-        })?;
-        shadow.SetOpacity(0.45)?;
-        // 没有显卡、合成器跑在软件渲染上时（虚拟机、远程桌面），LayerVisual 的阴影会画成一整块黑色，干脆不要阴影
-        if !gfx.software {
-            layer.SetShadow(&shadow)?;
-        }
-        layer.Children()?.InsertAtTop(&background)?;
-        capsule.Children()?.InsertAtTop(&layer)?;
+        background
+            .SetClip(&c.CreateGeometricClipWithGeometry(&rounded_geometry(c, &props, 0.0)?)?)?;
+        capsule.Children()?.InsertAtTop(&background)?;
 
         // 内容：用同样的形状裁剪
         let content = c.CreateContainerVisual()?;
         bind(c, &content, "Size", "Vector2(p.W, p.H)", &props, &[])?;
-        content.SetClip(&c.CreateGeometricClipWithGeometry(&rounded_geometry(c, &props)?)?)?;
+        content.SetClip(&c.CreateGeometricClipWithGeometry(&rounded_geometry(c, &props, 0.0)?)?)?;
         capsule.Children()?.InsertAtTop(&content)?;
 
         // 细线的颜色：铺满整个胶囊，只在细线状态下可见
@@ -234,7 +234,7 @@ impl Scene {
             clock,
             edge: Edge::Top,
             bg_brush,
-            shadow,
+            edge_brush,
             compact,
             expanded,
             bars,
@@ -297,18 +297,7 @@ impl Scene {
                 Z: 0.0,
             })?;
         }
-
-        // 阴影落向屏幕里面
-        let (dx, dy) = match edge {
-            Edge::Top => (0.0, 3.0),
-            Edge::Left => (3.0, 0.0),
-            Edge::Right => (-3.0, 0.0),
-        };
-        self.shadow.SetOffset(Vector3 {
-            X: dx,
-            Y: dy,
-            Z: 0.0,
-        })
+        Ok(())
     }
 
     /// 细线的颜色：`Some` 时细线染成这个颜色（放音乐时），`None` 时是普通的背景色。
@@ -421,10 +410,10 @@ impl Scene {
         a.InsertKeyFrame(1.0, ui_color(palette.background, 255))?;
         a.SetDuration(ms(320.0))?;
         self.bg_brush.StartAnimation(&HSTRING::from("Color"), &a)?;
-        // 浅色背景上阴影淡一些
-        let light = island::color::luminance(palette.background) > 0.45;
-        self.shadow.SetOpacity(if light { 0.18 } else { 0.45 })?;
-        Ok(())
+        let e = self.compositor.CreateColorKeyFrameAnimation()?;
+        e.InsertKeyFrame(1.0, edge_color(palette))?;
+        e.SetDuration(ms(320.0))?;
+        self.edge_brush.StartAnimation(&HSTRING::from("Color"), &e)
     }
 
     pub fn set_accent(&self, accent: Rgb) -> Result<()> {
@@ -500,19 +489,50 @@ impl Scene {
     }
 }
 
+/// 描边宽度（DIP）。
+const EDGE: f32 = 1.0;
+
+/// 描边颜色：浅色胶囊用淡淡的黑边，深色胶囊用淡淡的白边。
+fn edge_color(palette: &Palette) -> Color {
+    if island::color::luminance(palette.background) > 0.45 {
+        Color {
+            A: 36,
+            R: 0,
+            G: 0,
+            B: 0,
+        }
+    } else {
+        Color {
+            A: 28,
+            R: 255,
+            G: 255,
+            B: 255,
+        }
+    }
+}
+
+/// 跟着属性集变化的圆角矩形；`grow` 是向外扩出的距离（描边用）。
 fn rounded_geometry(
     c: &Compositor,
     props: &CompositionPropertySet,
+    grow: f32,
 ) -> Result<CompositionRoundedRectangleGeometry> {
     let g = c.CreateRoundedRectangleGeometry()?;
-    bind(c, &g, "Size", "Vector2(p.W, p.H)", props, &[])?;
+    bind(
+        c,
+        &g,
+        "Size",
+        "Vector2(p.W + 2 * G, p.H + 2 * G)",
+        props,
+        &[("G", grow)],
+    )?;
     bind(
         c,
         &g,
         "CornerRadius",
-        "Vector2(p.Radius, p.Radius)",
+        "Vector2(p.Radius + G, p.Radius + G)",
         props,
-        &[],
+        &[("G", grow)],
     )?;
     Ok(g)
 }
