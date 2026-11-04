@@ -314,7 +314,9 @@ impl App {
 
     pub fn set_palette(&mut self, palette: Palette) {
         self.palette = palette;
-        let _ = self.scene.set_palette(&palette);
+        if let Err(e) = self.scene.set_palette(&palette) {
+            log::warn(&format!("切换主题失败：{e}"));
+        }
         self.apply_accent();
         self.redraw_all();
     }

@@ -53,7 +53,7 @@ pub struct Scene {
     pub compositor: Compositor,
     pub root: ContainerVisual,
     props: CompositionPropertySet,
-    shape: CompositionSpriteShape,
+    bg_brush: CompositionColorBrush,
     shadow: DropShadow,
     pub compact: Layer,
     pub expanded: Layer,
@@ -113,7 +113,8 @@ impl Scene {
         // 背景形状 + 阴影
         let geometry = rounded_geometry(c, &props)?;
         let shape = c.CreateSpriteShapeWithGeometry(&geometry)?;
-        shape.SetFillBrush(&c.CreateColorBrushWithColor(ui_color(palette.background, 255))?)?;
+        let bg_brush = c.CreateColorBrushWithColor(ui_color(palette.background, 255))?;
+        shape.SetFillBrush(&bg_brush)?;
         let shape_visual = c.CreateShapeVisual()?;
         bind(c, &shape_visual, "Size", "Vector2(p.W, p.H)", &props, &[])?;
         shape_visual.Shapes()?.Append(&shape)?;
@@ -179,7 +180,7 @@ impl Scene {
             compositor: c.clone(),
             root,
             props,
-            shape,
+            bg_brush,
             shadow,
             compact,
             expanded,
@@ -240,12 +241,12 @@ impl Scene {
         self.root.StartAnimation(&HSTRING::from("Opacity"), &a)
     }
 
+    /// 换主题：背景色在合成器里平滑过渡。
     pub fn set_palette(&self, palette: &Palette) -> Result<()> {
-        self.shape.SetFillBrush(
-            &self
-                .compositor
-                .CreateColorBrushWithColor(ui_color(palette.background, 255))?,
-        )?;
+        let a = self.compositor.CreateColorKeyFrameAnimation()?;
+        a.InsertKeyFrame(1.0, ui_color(palette.background, 255))?;
+        a.SetDuration(ms(320.0))?;
+        self.bg_brush.StartAnimation(&HSTRING::from("Color"), &a)?;
         // 浅色背景上阴影淡一些
         let light = island::color::luminance(palette.background) > 0.45;
         self.shadow.SetOpacity(if light { 0.18 } else { 0.45 })?;
