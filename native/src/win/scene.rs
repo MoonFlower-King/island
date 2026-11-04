@@ -55,6 +55,7 @@ pub struct Layer {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
     Line,
+    Clock,
     Compact,
     Level,
     Expanded,
@@ -68,6 +69,7 @@ pub struct Scene {
     line: SpriteVisual,
     line_brush: CompositionColorBrush,
     pub level: Layer,
+    pub clock: Layer,
     edge: Edge,
     bg_brush: CompositionColorBrush,
     shadow: DropShadow,
@@ -166,6 +168,8 @@ impl Scene {
 
         let compact = make_layer(c, gfx, metrics::COMPACT, scale)?;
         let level = make_layer(c, gfx, metrics::LEVEL, scale)?;
+        let clock = make_layer(c, gfx, metrics::IDLE_CLOCK, scale)?;
+        content.Children()?.InsertAtTop(&clock.visual)?;
         let expanded = make_layer(c, gfx, metrics::EXPANDED, scale)?;
         content.Children()?.InsertAtTop(&compact.visual)?;
         content.Children()?.InsertAtTop(&level.visual)?;
@@ -205,6 +209,7 @@ impl Scene {
             line,
             line_brush,
             level,
+            clock,
             edge: Edge::Top,
             bg_brush,
             shadow,
@@ -241,7 +246,7 @@ impl Scene {
             Edge::Left => "Vector3(0, (p.H - VH) / 2, 0)",
             Edge::Right => "Vector3(p.W - VW, (p.H - VH) / 2, 0)",
         };
-        for layer in [&self.compact, &self.level, &self.expanded] {
+        for layer in [&self.compact, &self.level, &self.clock, &self.expanded] {
             bind(
                 c,
                 &layer.visual,
@@ -410,7 +415,12 @@ impl Scene {
             Y: scale,
             Z: 1.0,
         })?;
-        for layer in [&mut self.compact, &mut self.level, &mut self.expanded] {
+        for layer in [
+            &mut self.compact,
+            &mut self.level,
+            &mut self.clock,
+            &mut self.expanded,
+        ] {
             layer.surface = gfx.surface(
                 (layer.width * scale).ceil() as u32,
                 (layer.height * scale).ceil() as u32,

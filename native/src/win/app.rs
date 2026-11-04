@@ -198,7 +198,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         let mut scene = Scene::new(&compositor, &gfx, scale, &palette)?;
         scene.set_edge(settings.dock)?;
         target.SetRoot(&scene.root)?;
-        scene.jump_to(IslandState::Idle.metrics(settings.dock))?;
+        scene.jump_to(IslandState::Idle.metrics_with(settings.dock, settings.idle_as_line))?;
         let _ = scene.set_palette(&palette);
 
         let clips = if settings.persist_clipboard && smoke_dir.is_none() {
@@ -341,9 +341,15 @@ impl App {
         }
     }
 
-    fn view_for(state: IslandState) -> View {
+    /// 某个状态在当前停靠边和待机样式下的形状。
+    fn metrics(&self, state: IslandState) -> island::metrics::Metrics {
+        state.metrics_with(self.edge(), self.settings.idle_as_line)
+    }
+
+    fn view_for(&self, state: IslandState) -> View {
         match state {
-            IslandState::Idle => View::Line,
+            IslandState::Idle if self.settings.idle_as_line => View::Line,
+            IslandState::Idle => View::Clock,
             IslandState::Compact => View::Compact,
             IslandState::Level => View::Level,
             IslandState::Expanded => View::Expanded,
@@ -353,10 +359,9 @@ impl App {
     pub fn update_state(&mut self) {
         let target = state::resolve(self.inputs());
         if target != self.state {
-            let edge = self.edge();
             let previous = self.state;
             self.state = target;
-            let (a, b) = (previous.metrics(edge), target.metrics(edge));
+            let (a, b) = (self.metrics(previous), self.metrics(target));
             let growing = b.width * b.height > a.width * a.height;
             if target == IslandState::Expanded {
                 if self.tab == Tab::Monitor {
@@ -370,7 +375,7 @@ impl App {
                 scene::COLLAPSE
             };
             let _ = self.scene.animate_to(b, spring);
-            let _ = self.scene.show(Self::view_for(target), growing);
+            let _ = self.scene.show(self.view_for(target), growing);
             if target != IslandState::Expanded {
                 self.hovered = None;
                 self.pressed = None;
@@ -409,6 +414,7 @@ impl App {
     }
 
     fn redraw_all(&mut self) {
+        self.redraw_clock();
         self.redraw_compact();
         self.redraw_level();
         self.redraw_expanded();
@@ -424,6 +430,18 @@ impl App {
             })
         {
             log::warn(&format!("绘制音乐胶囊失败：{e}"));
+        }
+    }
+
+    fn redraw_clock(&self) {
+        let t = unsafe { GetLocalTime() };
+        let r = self
+            .gfx
+            .draw(&self.scene.clock.surface, self.scene.scale(), |p| {
+                views::draw_clock(p, &self.palette, t.wHour, t.wMinute)
+            });
+        if let Err(e) = r {
+            log::warn(&format!("绘制时钟失败：{e}"));
         }
     }
 
@@ -535,7 +553,7 @@ impl App {
     pub fn set_dock(&mut self, edge: Edge) {
         self.settings.dock = edge;
         let _ = self.scene.set_edge(edge);
-        let _ = self.scene.jump_to(self.state.metrics(edge));
+        let _ = self.scene.jump_to(self.metrics(self.state));
         self.relayout();
         log::info(&format!("停靠位置：{}", edge.name()));
     }
@@ -552,7 +570,16 @@ impl App {
                     _ => t.custom_accent = color::ACCENT_PRESETS[i].into(),
                 }
             }
-            Hit::IdleStyle(line) => self.settings.idle_as_line = line,
+            Hit::IdleStyle(line) => {
+                self.settings.idle_as_line = line;
+                // 正在待机：形状和内容立刻换成新样式
+                if self.state == IslandState::Idle {
+                    let _ = self
+                        .scene
+                        .animate_to(self.metrics(IslandState::Idle), scene::EXPAND);
+                    let _ = self.scene.show(self.view_for(IslandState::Idle), !line);
+                }
+            }
             Hit::MediaStyle(line) => self.settings.media_as_line = line,
             Hit::Dock(edge) if edge != self.edge() => self.set_dock(edge),
             _ => return,
@@ -744,12 +771,12 @@ impl App {
         !self.hidden
             && self
                 .cursor()
-                .is_some_and(|(x, y)| self.state.metrics(edge).hover_zone(edge).contains(x, y))
+                .is_some_and(|(x, y)| self.metrics(self.state).hover_zone(edge).contains(x, y))
     }
 
     /// 窗口坐标 → 相对胶囊左上角（展开面板的坐标系）。
     fn local(&self, x: f32, y: f32) -> (f32, f32) {
-        let r = self.state.metrics(self.edge()).frame(self.edge());
+        let r = self.metrics(self.state).frame(self.edge());
         (x - r.x, y - r.y)
     }
 
@@ -921,8 +948,11 @@ impl App {
         let t = unsafe { GetLocalTime() };
         let minute_changed = t.wMinute != self.last_minute;
         self.last_minute = t.wMinute;
-        if minute_changed && self.settings.theme.mode == ThemeMode::Schedule {
-            self.apply_theme();
+        if minute_changed {
+            self.redraw_clock();
+            if self.settings.theme.mode == ThemeMode::Schedule {
+                self.apply_theme();
+            }
         }
         let playing = self.media.as_ref().is_some_and(|m| m.playing);
         if self.state == IslandState::Expanded {

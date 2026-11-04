@@ -11,7 +11,7 @@ use windows::core::{HSTRING, Result};
 use island::clip::Entry;
 use island::color::{self, ACCENT_PRESETS, BACKGROUND_PRESETS, FOREGROUND_PRESETS, Palette, Rgb};
 use island::level;
-use island::metrics::{COMPACT, EXPANDED, Edge, LEVEL, Rect};
+use island::metrics::{COMPACT, EXPANDED, Edge, IDLE_CLOCK, LEVEL, Rect};
 use island::settings::{Settings, ThemeMode};
 use island::text::{clock, format_duration, speed, weekday_zh};
 
@@ -174,6 +174,18 @@ pub fn draw_compact(p: &Painter, v: &ViewState) -> Result<()> {
         Rect::new(42.0, 0.0, 170.0, COMPACT.height),
         &style(&family, 12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
         color(fg, 0.95),
+    )
+}
+
+// ───────────────────────────── 待机时钟 ─────────────────────────────
+
+pub fn draw_clock(p: &Painter, palette: &Palette, hour: u16, minute: u16) -> Result<()> {
+    let family = p.gfx.text_font.clone();
+    p.text(
+        &clock(hour, minute),
+        Rect::new(0.0, 0.0, IDLE_CLOCK.width, IDLE_CLOCK.height),
+        &style(&family, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center),
+        color(palette.foreground, 1.0),
     )
 }
 

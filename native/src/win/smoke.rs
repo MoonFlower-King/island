@@ -443,6 +443,18 @@ pub fn step(app: &mut App) {
                 "回到顶部、没有音乐后是待机细线",
             );
             snapshot(app, &mut smoke, "15-idle-again", None);
+            // 待机样式换成“显示时间”
+            app.activate(Hit::IdleStyle(false));
+            smoke.step = 60;
+        }
+        60 => {
+            smoke.check(
+                app.state == IslandState::Idle && !app.settings.idle_as_line,
+                "待机样式：显示时间",
+            );
+            snapshot(app, &mut smoke, "15b-idle-clock", None);
+            app.activate(Hit::IdleStyle(true));
+            smoke.step = 15;
             next = 35;
         }
         // 快速反复展开收起：动画应能被打断，最后收敛到待机

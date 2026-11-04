@@ -76,6 +76,13 @@ pub const VERTICAL_LINE: Metrics = Metrics {
     radius: LINE_VISIBLE_HEIGHT,
     top: -LINE_VISIBLE_HEIGHT,
 };
+/// 待机样式选“显示时间”时的小胶囊。
+pub const IDLE_CLOCK: Metrics = Metrics {
+    width: 140.0,
+    height: 34.0,
+    radius: 17.0,
+    top: TOP_MARGIN,
+};
 pub const COMPACT: Metrics = Metrics {
     width: 260.0,
     height: 38.0,
@@ -96,6 +103,14 @@ pub const EXPANDED: Metrics = Metrics {
 };
 
 impl IslandState {
+    /// `idle_as_line` 为 false 时，待机是显示时间的小胶囊。
+    pub fn metrics_with(self, edge: Edge, idle_as_line: bool) -> Metrics {
+        if self == IslandState::Idle && !idle_as_line {
+            return IDLE_CLOCK;
+        }
+        self.metrics(edge)
+    }
+
     pub fn metrics(self, edge: Edge) -> Metrics {
         match self {
             IslandState::Idle if edge == Edge::Top => LINE,
@@ -227,6 +242,23 @@ impl Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn idle_clock_style() {
+        assert_eq!(
+            IslandState::Idle.metrics_with(Edge::Left, false),
+            IDLE_CLOCK
+        );
+        assert_eq!(
+            IslandState::Idle.metrics_with(Edge::Left, true),
+            VERTICAL_LINE
+        );
+        assert_eq!(
+            IslandState::Expanded.metrics_with(Edge::Top, false),
+            EXPANDED
+        );
+        const { assert!(IDLE_CLOCK.radius * 2.0 <= IDLE_CLOCK.height) };
+    }
 
     const STATES: [IslandState; 4] = [
         IslandState::Idle,
