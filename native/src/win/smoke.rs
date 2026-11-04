@@ -58,10 +58,6 @@ impl Smoke {
     }
 
     /// 冒烟测试自己控制悬停和可点击状态，不让真实光标干扰。
-    pub fn drives_input(&self) -> bool {
-        true
-    }
-
     fn check(&mut self, ok: bool, what: &str) {
         self.lines
             .push(format!("{} {what}", if ok { "PASS" } else { "FAIL" }));
