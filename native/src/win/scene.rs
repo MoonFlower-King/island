@@ -6,7 +6,9 @@
 //!     ├ layer（LayerVisual，带 DropShadow：阴影跟着形状实时变化）
 //!     │   └ background（纯色，用圆角矩形裁剪）
 //!     └ content（用同样的圆角矩形裁剪）
+//!         ├ line（细线的颜色：放音乐时变成封面主题色）
 //!         ├ compact（音乐胶囊：封面、歌名、律动条）
+//!         ├ level（音量 / 亮度提示）
 //!         └ expanded（展开面板）
 //! ```
 //!
@@ -20,7 +22,7 @@ use windows::core::{HSTRING, Interface, Result};
 use windows_numerics::{Vector2, Vector3};
 
 use island::color::{Palette, Rgb};
-use island::metrics::{self, Metrics, WINDOW_HEIGHT, WINDOW_WIDTH};
+use island::metrics::{self, Edge, Metrics, WINDOW_HEIGHT, WINDOW_WIDTH};
 
 use super::gfx::Gfx;
 
@@ -40,7 +42,7 @@ pub const COLLAPSE: Spring = Spring {
     damping: 0.92,
 };
 
-/// 一块固定尺寸的内容：画在合成表面上，按最终尺寸摆放一次，顶部居中对齐胶囊。
+/// 一块固定尺寸的内容：画在合成表面上，按最终尺寸摆放一次，对齐胶囊贴边的那一侧。
 /// 胶囊动画时只是裁出它的可见部分，内容本身不需要重新布局或重画。
 pub struct Layer {
     pub visual: SpriteVisual,
@@ -49,10 +51,24 @@ pub struct Layer {
     pub height: f32,
 }
 
+/// 当前显示哪块内容。
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum View {
+    Line,
+    Compact,
+    Level,
+    Expanded,
+}
+
 pub struct Scene {
     pub compositor: Compositor,
     pub root: ContainerVisual,
     props: CompositionPropertySet,
+    capsule: ContainerVisual,
+    line: SpriteVisual,
+    line_brush: CompositionColorBrush,
+    pub level: Layer,
+    edge: Edge,
     bg_brush: CompositionColorBrush,
     shadow: DropShadow,
     pub compact: Layer,
@@ -100,14 +116,6 @@ impl Scene {
 
         let capsule = c.CreateContainerVisual()?;
         bind(c, &capsule, "Size", "Vector2(p.W, p.H)", &props, &[])?;
-        bind(
-            c,
-            &capsule,
-            "Offset",
-            "Vector3((WW - p.W) / 2, p.Top, 0)",
-            &props,
-            &[("WW", WINDOW_WIDTH)],
-        )?;
         root.Children()?.InsertAtTop(&capsule)?;
 
         // 背景形状 + 阴影
@@ -148,9 +156,19 @@ impl Scene {
         content.SetClip(&c.CreateGeometricClipWithGeometry(&rounded_geometry(c, &props)?)?)?;
         capsule.Children()?.InsertAtTop(&content)?;
 
-        let compact = make_layer(c, gfx, &props, metrics::COMPACT, scale)?;
-        let expanded = make_layer(c, gfx, &props, metrics::EXPANDED, scale)?;
+        // 细线的颜色：铺满整个胶囊，只在细线状态下可见
+        let line_brush = c.CreateColorBrushWithColor(ui_color(palette.accent, 255))?;
+        let line = c.CreateSpriteVisual()?;
+        line.SetBrush(&line_brush)?;
+        line.SetOpacity(0.0)?;
+        bind(c, &line, "Size", "Vector2(p.W, p.H)", &props, &[])?;
+        content.Children()?.InsertAtTop(&line)?;
+
+        let compact = make_layer(c, gfx, metrics::COMPACT, scale)?;
+        let level = make_layer(c, gfx, metrics::LEVEL, scale)?;
+        let expanded = make_layer(c, gfx, metrics::EXPANDED, scale)?;
         content.Children()?.InsertAtTop(&compact.visual)?;
+        content.Children()?.InsertAtTop(&level.visual)?;
         content.Children()?.InsertAtTop(&expanded.visual)?;
 
         // 律动条：4 根，挂在音乐胶囊右侧，动画全在合成器里跑
@@ -179,10 +197,15 @@ impl Scene {
             bars.push(bar);
         }
 
-        Ok(Self {
+        let mut scene = Self {
             compositor: c.clone(),
             root,
             props,
+            capsule,
+            line,
+            line_brush,
+            level,
+            edge: Edge::Top,
             bg_brush,
             shadow,
             compact,
@@ -190,7 +213,85 @@ impl Scene {
             bars,
             bar_brush,
             scale,
+        };
+        scene.set_edge(Edge::Top)?;
+        Ok(scene)
+    }
+
+    /// 换停靠边：胶囊和各块内容的对齐方式、阴影方向都跟着变。调用后再 `jump_to` 到新形状。
+    pub fn set_edge(&mut self, edge: Edge) -> Result<()> {
+        self.edge = edge;
+        let c = &self.compositor;
+        let offset = match edge {
+            Edge::Top => "Vector3((WW - p.W) / 2, p.Top, 0)",
+            Edge::Left => "Vector3(p.Top, (WH - p.H) / 2, 0)",
+            Edge::Right => "Vector3(WW - p.W - p.Top, (WH - p.H) / 2, 0)",
+        };
+        bind(
+            c,
+            &self.capsule,
+            "Offset",
+            offset,
+            &self.props,
+            &[("WW", WINDOW_WIDTH), ("WH", WINDOW_HEIGHT)],
+        )?;
+
+        let layer_offset = match edge {
+            Edge::Top => "Vector3((p.W - VW) / 2, 0, 0)",
+            Edge::Left => "Vector3(0, (p.H - VH) / 2, 0)",
+            Edge::Right => "Vector3(p.W - VW, (p.H - VH) / 2, 0)",
+        };
+        for layer in [&self.compact, &self.level, &self.expanded] {
+            bind(
+                c,
+                &layer.visual,
+                "Offset",
+                layer_offset,
+                &self.props,
+                &[("VW", layer.width), ("VH", layer.height)],
+            )?;
+            // 缩放从贴边的一侧展开
+            let (cx, cy) = match edge {
+                Edge::Top => (layer.width / 2.0, 0.0),
+                Edge::Left => (0.0, layer.height / 2.0),
+                Edge::Right => (layer.width, layer.height / 2.0),
+            };
+            layer.visual.SetCenterPoint(Vector3 {
+                X: cx,
+                Y: cy,
+                Z: 0.0,
+            })?;
+        }
+
+        // 阴影落向屏幕里面
+        let (dx, dy) = match edge {
+            Edge::Top => (0.0, 3.0),
+            Edge::Left => (3.0, 0.0),
+            Edge::Right => (-3.0, 0.0),
+        };
+        self.shadow.SetOffset(Vector3 {
+            X: dx,
+            Y: dy,
+            Z: 0.0,
         })
+    }
+
+    /// 细线的颜色：`Some` 时细线染成这个颜色（放音乐时），`None` 时是普通的背景色。
+    pub fn set_line_tint(&self, tint: Option<Rgb>, line_visible: bool) -> Result<()> {
+        if let Some(c) = tint {
+            self.line_brush.SetColor(ui_color(c, 255))?;
+        }
+        let a = self.compositor.CreateScalarKeyFrameAnimation()?;
+        a.InsertKeyFrame(
+            1.0,
+            if tint.is_some() && line_visible {
+                1.0
+            } else {
+                0.0
+            },
+        )?;
+        a.SetDuration(ms(if line_visible { 220.0 } else { 80.0 }))?;
+        self.line.StartAnimation(&HSTRING::from("Opacity"), &a)
     }
 
     pub fn scale(&self) -> f32 {
@@ -229,9 +330,13 @@ impl Scene {
     }
 
     /// 内容切换：旧的淡出，新的稍等一下再淡入，并从略小一点放大到原尺寸。
-    pub fn show(&self, compact: bool, expanded: bool, growing: bool) -> Result<()> {
-        for (layer, visible) in [(&self.compact, compact), (&self.expanded, expanded)] {
-            fade(&self.compositor, &layer.visual, visible, growing)?;
+    pub fn show(&self, view: View, growing: bool) -> Result<()> {
+        for (layer, v) in [
+            (&self.compact, View::Compact),
+            (&self.level, View::Level),
+            (&self.expanded, View::Expanded),
+        ] {
+            fade(&self.compositor, &layer.visual, view == v, growing)?;
         }
         Ok(())
     }
@@ -305,7 +410,7 @@ impl Scene {
             Y: scale,
             Z: 1.0,
         })?;
-        for layer in [&mut self.compact, &mut self.expanded] {
+        for layer in [&mut self.compact, &mut self.level, &mut self.expanded] {
             layer.surface = gfx.surface(
                 (layer.width * scale).ceil() as u32,
                 (layer.height * scale).ceil() as u32,
@@ -337,13 +442,7 @@ fn rounded_geometry(
     Ok(g)
 }
 
-fn make_layer(
-    c: &Compositor,
-    gfx: &Gfx,
-    props: &CompositionPropertySet,
-    m: Metrics,
-    scale: f32,
-) -> Result<Layer> {
+fn make_layer(c: &Compositor, gfx: &Gfx, m: Metrics, scale: f32) -> Result<Layer> {
     let surface = gfx.surface(
         (m.width * scale).ceil() as u32,
         (m.height * scale).ceil() as u32,
@@ -357,19 +456,7 @@ fn make_layer(
         Y: m.height,
     })?;
     visual.SetOpacity(0.0)?;
-    visual.SetCenterPoint(Vector3 {
-        X: m.width / 2.0,
-        Y: 0.0,
-        Z: 0.0,
-    })?;
-    bind(
-        c,
-        &visual,
-        "Offset",
-        "Vector3((p.W - VW) / 2, 0, 0)",
-        props,
-        &[("VW", m.width)],
-    )?;
+    // 位置和缩放中心由 Scene::set_edge 按停靠边设置
     Ok(Layer {
         visual,
         surface,

@@ -37,6 +37,10 @@ pub struct Art {
 pub struct Snapshot {
     pub title: String,
     pub artist: String,
+    /// 播放器名字（网易云音乐、Spotify……）。
+    pub app: String,
+    /// 播放器不报告时长时，从别处查到的时长（网易云音乐的本地播放记录），秒。
+    pub known_duration: Option<f64>,
     pub playing: bool,
     /// 拿到快照时的播放位置和总时长（秒）。
     pub position: f64,
@@ -171,6 +175,12 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
     let timeline = session.GetTimelineProperties()?;
     let controls = playback.Controls()?;
 
+    let app = island::text::friendly_app(
+        &session
+            .SourceAppUserModelId()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default(),
+    );
     let title = clean(&props.Title()?.to_string_lossy()).unwrap_or_default();
     let artist = clean(&props.Artist()?.to_string_lossy()).unwrap_or_default();
     let playing = playback.PlaybackStatus()?
@@ -203,14 +213,32 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
                 .and_then(|t| decode_art(&t).ok())
                 .map(std::sync::Arc::new);
             let accent = art.as_ref().and_then(|a| color::dominant(&a.pixels));
-            *ART_CACHE.lock().unwrap() = Some((key, art.clone(), accent));
+            *ART_CACHE.lock().unwrap() = Some((key.clone(), art.clone(), accent));
             (art, accent)
+        }
+    };
+
+    // 网易云音乐不报告时长：去它的本地播放记录里查（只在换歌时查一次）
+    let known_duration = if duration > 0.0 || app != "网易云音乐" {
+        None
+    } else {
+        let mut cache = DURATION_CACHE.lock().unwrap();
+        match cache.as_ref() {
+            Some((k, d)) if *k == key => *d,
+            _ => {
+                let d = netease_history()
+                    .and_then(|json| island::playback::netease_duration(&json, &title, &artist));
+                *cache = Some((key.clone(), d));
+                d
+            }
         }
     };
 
     Ok(Snapshot {
         title,
         artist,
+        app,
+        known_duration,
         playing,
         position,
         duration,
@@ -220,6 +248,20 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
         art,
         accent,
     })
+}
+
+static DURATION_CACHE: Mutex<Option<(String, Option<f64>)>> = Mutex::new(None);
+
+/// 网易云音乐的播放记录：%LOCALAPPDATA%\NetEase\CloudMusic\webdata\file\history。
+fn netease_history() -> Option<String> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    let path = std::path::Path::new(&base)
+        .join("NetEase")
+        .join("CloudMusic")
+        .join("webdata")
+        .join("file")
+        .join("history");
+    std::fs::read_to_string(path).ok()
 }
 
 fn filetime_now() -> i64 {

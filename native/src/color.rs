@@ -158,3 +158,150 @@ mod tests {
         assert_eq!(dominant(&[0, 0, 0, 0]), None);
     }
 }
+
+/// 解析 `#RRGGBB` 或 `#RGB`。
+pub fn parse_hex(text: &str) -> Option<Rgb> {
+    let hex = text.trim().trim_start_matches('#');
+    let full: String = if hex.len() == 3 {
+        hex.chars().flat_map(|c| [c, c]).collect()
+    } else {
+        hex.to_string()
+    };
+    if full.len() != 6 {
+        return None;
+    }
+    let v = u32::from_str_radix(&full, 16).ok()?;
+    Some(Rgb::new((v >> 16) as u8, (v >> 8) as u8, v as u8))
+}
+
+pub fn to_hex(c: Rgb) -> String {
+    format!("#{:02X}{:02X}{:02X}", c.r, c.g, c.b)
+}
+
+/// 在这个背景上黑字和白字哪个更清楚。
+pub fn best_text_on(background: Rgb) -> Rgb {
+    let white = Rgb::new(255, 255, 255);
+    let dark = Rgb::new(0x1C, 0x1C, 0x1E);
+    if contrast(white, background) >= contrast(dark, background) {
+        white
+    } else {
+        dark
+    }
+}
+
+/// `HH:mm` → 当天第几分钟。
+pub fn parse_minutes(text: &str) -> Option<u32> {
+    let (h, m) = text.trim().split_once(':')?;
+    let (h, m): (u32, u32) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60 && m.to_string().len() <= 2).then_some(h * 60 + m)
+}
+
+/// 是否处在白天时段，支持跨午夜（例如白天 20:00 到次日 06:00 这种反常设置）。
+pub fn is_daytime(day_starts: &str, night_starts: &str, minute_of_day: u32) -> bool {
+    let day = parse_minutes(day_starts).unwrap_or(7 * 60);
+    let night = parse_minutes(night_starts).unwrap_or(19 * 60);
+    if day == night {
+        return true;
+    }
+    if day < night {
+        minute_of_day >= day && minute_of_day < night
+    } else {
+        minute_of_day >= day || minute_of_day < night
+    }
+}
+
+/// 根据设置、当前时间和系统偏好，算出此刻应该用的配色。和 WPF 版的 ThemeResolver 一致。
+pub fn resolve(
+    theme: &crate::settings::ThemeSettings,
+    minute_of_day: u32,
+    system_prefers_light: bool,
+) -> Palette {
+    use crate::settings::ThemeMode;
+    match theme.mode {
+        ThemeMode::Light => LIGHT,
+        ThemeMode::System => {
+            if system_prefers_light {
+                LIGHT
+            } else {
+                DARK
+            }
+        }
+        ThemeMode::Schedule => {
+            if is_daytime(&theme.day_starts, &theme.night_starts, minute_of_day) {
+                LIGHT
+            } else {
+                DARK
+            }
+        }
+        ThemeMode::Custom => {
+            let background = parse_hex(&theme.custom_background).unwrap_or(DARK.background);
+            let foreground =
+                parse_hex(&theme.custom_foreground).unwrap_or_else(|| best_text_on(background));
+            let accent = parse_hex(&theme.custom_accent).unwrap_or(DARK.accent);
+            Palette {
+                background,
+                foreground,
+                accent,
+            }
+        }
+        ThemeMode::Dark => DARK,
+    }
+}
+
+/// 自定义主题的预设色块（和 WPF 版一样）。
+pub const BACKGROUND_PRESETS: [&str; 6] = [
+    "#000000", "#1C1C1E", "#0B1F3A", "#2A1B47", "#F7F7F8", "#FFF4DE",
+];
+pub const FOREGROUND_PRESETS: [&str; 6] = [
+    "#FFFFFF", "#E5E5EA", "#FFD60A", "#1C1C1E", "#3A2E1F", "#0B1F3A",
+];
+pub const ACCENT_PRESETS: [&str; 6] = [
+    "#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#64D2FF",
+];
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+    use crate::settings::{ThemeMode, ThemeSettings};
+
+    #[test]
+    fn parses_hex() {
+        assert_eq!(parse_hex("#0A84FF"), Some(Rgb::new(0x0A, 0x84, 0xFF)));
+        assert_eq!(parse_hex("fff"), Some(Rgb::new(255, 255, 255)));
+        assert_eq!(parse_hex("#12345"), None);
+        assert_eq!(parse_hex("#GGGGGG"), None);
+        assert_eq!(to_hex(Rgb::new(1, 2, 255)), "#0102FF");
+    }
+
+    #[test]
+    fn schedule_handles_midnight() {
+        assert!(is_daytime("07:00", "19:00", 12 * 60));
+        assert!(!is_daytime("07:00", "19:00", 20 * 60));
+        assert!(is_daytime("20:00", "06:00", 23 * 60));
+        assert!(!is_daytime("20:00", "06:00", 12 * 60));
+        assert!(is_daytime("bad", "19:00", 8 * 60)); // 坏数据用默认 07:00
+        assert_eq!(parse_minutes("7:05"), Some(425));
+        assert_eq!(parse_minutes("24:00"), None);
+    }
+
+    #[test]
+    fn resolves_every_mode() {
+        let mut t = ThemeSettings::default();
+        assert_eq!(resolve(&t, 0, true), DARK);
+        t.mode = ThemeMode::Light;
+        assert_eq!(resolve(&t, 0, false), LIGHT);
+        t.mode = ThemeMode::System;
+        assert_eq!(resolve(&t, 0, true), LIGHT);
+        assert_eq!(resolve(&t, 0, false), DARK);
+        t.mode = ThemeMode::Schedule;
+        assert_eq!(resolve(&t, 12 * 60, false), LIGHT);
+        assert_eq!(resolve(&t, 23 * 60, true), DARK);
+        t.mode = ThemeMode::Custom;
+        t.custom_background = "#0B1F3A".into();
+        t.custom_foreground = "oops".into();
+        let p = resolve(&t, 0, false);
+        assert_eq!(p.background, Rgb::new(0x0B, 0x1F, 0x3A));
+        assert_eq!(p.foreground, Rgb::new(255, 255, 255));
+        assert_eq!(p.accent, Rgb::new(0xFF, 0x9F, 0x0A));
+    }
+}
