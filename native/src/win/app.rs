@@ -422,7 +422,7 @@ impl App {
             || (self.media.is_some() && tick() < self.linger_until)
     }
 
-    fn inputs(&self) -> Inputs {
+    pub(super) fn inputs(&self) -> Inputs {
         Inputs {
             hovering: self.hover.hovering(),
             pinned: self.pinned,

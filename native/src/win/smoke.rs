@@ -896,7 +896,10 @@ pub fn step(app: &mut App) {
             app.show_notification('\u{E8BD}', "冒烟测试", "这是一条测试通知");
         }
         69 => {
-            smoke.check(app.state == IslandState::Notification, "显示通知");
+            smoke.check(
+                app.state == IslandState::Notification,
+                &format!("显示通知（{:?}，{:?}）", app.state, app.inputs()),
+            );
             let lit = bright_pixels(app, island::metrics::NOTIFICATION);
             smoke.check(lit > 50, &format!("通知里画出了文字（亮像素 {lit}）"));
             snapshot(app, &mut smoke, "26-notification", None);
@@ -927,7 +930,10 @@ pub fn step(app: &mut App) {
             app.set_pinned(false);
         }
         36 => {
-            smoke.check(app.state == IslandState::Idle, "快速切换后回到待机");
+            smoke.check(
+                app.state == IslandState::Idle,
+                &format!("快速切换后回到待机（{:?}，{:?}）", app.state, app.inputs()),
+            );
             snapshot(app, &mut smoke, "16-after-stress", None);
 
             smoke.note(&format!("内存（用过全部功能后）：{}", memory()));
