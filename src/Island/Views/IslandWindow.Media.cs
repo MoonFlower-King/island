@@ -25,6 +25,11 @@ public partial class IslandWindow
     private readonly DispatcherTimer _mediaLingerTimer = new() { Interval = PausedLinger };
     private readonly DispatcherTimer _progressTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
 
+    /// <summary>播放器不报告进度时（网易云音乐），岛自己计时。</summary>
+    private readonly PlaybackClock _clock = new();
+    private string? _fallbackTrack;
+    private TimeSpan? _fallbackDuration;
+
     private MediaSessionService? _mediaService;
     private MediaSnapshot? _media;
     private bool _mediaLingering;
@@ -79,6 +84,8 @@ public partial class IslandWindow
 
         if (snapshot is null)
         {
+            _clock.Reset();
+            _fallbackTrack = null;
             _mediaLingering = false;
             _mediaLingerTimer.Stop();
         }
@@ -119,8 +126,42 @@ public partial class IslandWindow
         PreviousButton.IsEnabled = m.CanGoPrevious;
         NextButton.IsEnabled = m.CanGoNext;
 
-        MediaTimeline.Visibility = m.HasTimeline ? Visibility.Visible : Visibility.Hidden;
+        UpdateFallbackTimeline(m);
+        MediaTimeline.Visibility = Visibility.Visible;
         UpdateProgress();
+    }
+
+    /// <summary>
+    /// 播放器没报告进度时：自己从换歌那一刻开始计时；网易云音乐的时长从它的本地播放记录里查。
+    /// </summary>
+    private void UpdateFallbackTimeline(MediaSnapshot m)
+    {
+        if (m.HasTimeline)
+        {
+            _clock.Reset();
+            _fallbackTrack = null;
+            _fallbackDuration = null;
+            MediaTimeline.ToolTip = null;
+            return;
+        }
+
+        string track = $"{m.SourceApp}|{m.Title}|{m.Artist}";
+        _clock.Update(track, m.IsPlaying, DateTimeOffset.Now);
+        MediaTimeline.ToolTip = "这个播放器不向系统报告进度，这里是岛按播放时间估算的；在播放器里拖动进度后会有偏差";
+        if (track == _fallbackTrack) return;
+
+        _fallbackTrack = track;
+        _fallbackDuration = null;
+        if (m.SourceApp != "网易云音乐") return;
+
+        // 读文件放到后台，读完如果还是这首歌再用
+        string title = m.Title, artist = m.Artist;
+        _ = Task.Run(() => NeteaseHistory.TryGetDuration(title, artist)).ContinueWith(t =>
+        {
+            if (_fallbackTrack != track || t.Result is not { } duration) return;
+            _fallbackDuration = duration;
+            UpdateProgress();
+        }, TaskScheduler.FromCurrentSynchronizationContext());
     }
 
     private static void SetArt(System.Windows.Controls.Border host, UIElement placeholder, ImageSource? art)
@@ -153,14 +194,36 @@ public partial class IslandWindow
 
     private void UpdateProgress()
     {
-        if (_media is not { HasTimeline: true } m) return;
+        if (_media is not { } m) return;
 
-        TimeSpan position = m.EstimatePosition(DateTimeOffset.Now);
-        double ratio = m.Duration.Ticks > 0 ? (double)position.Ticks / m.Duration.Ticks : 0;
+        TimeSpan position;
+        TimeSpan? duration;
+        if (m.HasTimeline)
+        {
+            position = m.EstimatePosition(DateTimeOffset.Now);
+            duration = m.Duration;
+        }
+        else
+        {
+            position = _clock.Elapsed(DateTimeOffset.Now);
+            duration = _fallbackDuration;
+            if (duration is { } d && position > d) position = d;
+        }
 
-        ProgressFill.Width = Math.Max(0, ProgressTrack.ActualWidth * Math.Clamp(ratio, 0, 1));
+        if (duration is { Ticks: > 0 } total)
+        {
+            double ratio = (double)position.Ticks / total.Ticks;
+            ProgressFill.Width = Math.Max(0, ProgressTrack.ActualWidth * Math.Clamp(ratio, 0, 1));
+            ProgressTrack.Visibility = Visibility.Visible;
+            MediaDuration.Text = FormatTime(total);
+        }
+        else
+        {
+            // 不知道总时长：只显示已经播放了多久
+            ProgressTrack.Visibility = Visibility.Hidden;
+            MediaDuration.Text = "";
+        }
         MediaPosition.Text = FormatTime(position);
-        MediaDuration.Text = FormatTime(m.Duration);
     }
 
     private void OnProgressTrackSizeChanged(object sender, SizeChangedEventArgs e) => UpdateProgress();
@@ -176,7 +239,7 @@ public partial class IslandWindow
         bool playing = _media?.IsPlaying == true;
 
         bool musicVisible = ReferenceEquals(_currentView, ExpandedView) && _activeTab == IslandTab.Music;
-        bool runProgress = playing && _media!.HasTimeline && musicVisible;
+        bool runProgress = playing && musicVisible;
         if (runProgress)
         {
             UpdateProgress();
