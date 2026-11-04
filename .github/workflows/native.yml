@@ -7,7 +7,13 @@ on:
     paths: ["native/**", ".github/workflows/native.yml"]
   pull_request:
     paths: ["native/**", ".github/workflows/native.yml"]
+  # 发布预览版：在 Actions 页面手动运行，填入版本标签（必须和 Cargo.toml 的版本一致，如 v2.0.0-alpha.1）
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "要发布的原生版标签，例如 v2.0.0-alpha.1（留空则只构建不发布）"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -36,6 +42,19 @@ jobs:
       # 版本固定在 rust-toolchain.toml 里，rustup 会自动安装
       - name: Toolchain
         run: rustc --version
+
+      # 手动发布时检查标签格式，并且必须和 Cargo.toml 的版本一致（标签经环境变量传入，不拼进脚本）
+      - name: Check release tag
+        if: github.event.inputs.release_tag != ''
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
+        run: |
+          $tag = "$env:RELEASE_TAG"
+          if ($tag -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') { throw "标签格式不对：$tag" }
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($tag.Substring(1) -ne $version) { throw "标签 $tag 和 Cargo.toml 的版本 $version 不一致" }
+          Write-Host "发布 $tag"
 
       - uses: actions/cache@v4
         with:
@@ -96,7 +115,64 @@ jobs:
           Copy-Item target/release/Island.exe dist/Island-native-win-x64.exe
           Copy-Item target/aarch64-pc-windows-msvc/release/Island.exe dist/Island-native-win-arm64.exe
 
+          # 发布用的压缩包：里面就是 Island.exe
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          New-Item -ItemType Directory -Force packages, stage-x64, stage-arm64 | Out-Null
+          Copy-Item target/release/Island.exe stage-x64/Island.exe
+          Copy-Item target/aarch64-pc-windows-msvc/release/Island.exe stage-arm64/Island.exe
+          Compress-Archive -Path stage-x64/Island.exe -DestinationPath "packages/Island-native-$version-win-x64.zip"
+          Compress-Archive -Path stage-arm64/Island.exe -DestinationPath "packages/Island-native-$version-win-arm64.zip"
+          Get-ChildItem packages | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding utf8 packages/SHA256SUMS.txt
+          Get-Content packages/SHA256SUMS.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: Island-native
           path: native/dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Island-native-packages
+          path: native/packages/
+
+  # 手动运行并填写标签时发布成 GitHub 预发布版本（不会成为"最新版本"，WPF 版仍是默认下载）
+  release:
+    needs: [audit, build]
+    if: startsWith(github.event.inputs.release_tag, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ github.event.inputs.release_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: Island-native-packages
+          path: packages
+
+      - name: Release notes
+        working-directory: .
+        run: |
+          version="${TAG#v}"
+          # 取 native/CHANGELOG.md 里对应版本的那一节
+          awk -v v="$version" '
+            /^## / { if (found) exit; if (index($0, "[" v "]")) { found = 1; next } }
+            found { print }
+          ' native/CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "Island 原生版 $version（预览）" > notes.md; fi
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Island 原生版 ${{ env.TAG }}（预览）
+          body_path: notes.md
+          files: packages/*
+          prerelease: true
+          make_latest: false
