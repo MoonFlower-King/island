@@ -28,7 +28,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_ESCAPE, VK_LEFT, V
 
 use super::app::{App, TIMER_SMOKE, tick};
 use super::media::{Art, Snapshot};
+use super::translator::Status;
 use super::views::{Field, Hit, Tab};
+use island::translate::Format;
 
 pub struct Smoke {
     dir: PathBuf,
@@ -36,6 +38,7 @@ pub struct Smoke {
     lines: Vec<String>,
     failures: u32,
     started: u64,
+    waits: u32,
 }
 
 impl Smoke {
@@ -47,6 +50,7 @@ impl Smoke {
             lines: Vec::new(),
             failures: 0,
             started: tick(),
+            waits: 0,
         }
     }
 
@@ -247,6 +251,88 @@ fn fake_media(playing: bool) -> Snapshot {
         accent: island::color::dominant(&art.pixels),
         art: Some(art),
     }
+}
+
+static LAST_REQUEST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn last_request() -> String {
+    LAST_REQUEST.lock().map(|r| r.clone()).unwrap_or_default()
+}
+
+/// 本机的假翻译服务：按路径回 OpenAI 或 Anthropic 格式的流式响应；模型名是 bad 时回 401。
+fn fake_server() -> u16 {
+    use std::io::{Read, Write};
+    let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else {
+        return 0;
+    };
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(8) {
+            let Ok(mut stream) = stream else { continue };
+            let mut data = Vec::new();
+            let mut buf = [0u8; 4096];
+            // 读完请求头和 Content-Length 指定的请求体
+            while let Ok(n) = stream.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&data);
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    if data.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let request = String::from_utf8_lossy(&data).to_string();
+            let response = if request.contains("\"model\":\"bad\"") {
+                let body =
+                    r#"{"error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
+                format!(
+                    "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            } else if request.contains("/v1/messages") {
+                let events = [
+                    r#"{"type":"message_start","message":{}}"#,
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}"#,
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"，世界"}}"#,
+                    r#"{"type":"message_stop"}"#,
+                ];
+                let body: String = events
+                    .iter()
+                    .map(|e| format!("event: x\ndata: {e}\n\n"))
+                    .collect();
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
+                )
+            } else {
+                let body = [
+                    r#"data: {"choices":[{"delta":{"content":"Hello"}}]}"#,
+                    ": keep-alive",
+                    r#"data: {"choices":[{"delta":{"content":", world"}}]}"#,
+                    "data: [DONE]",
+                ]
+                .join("\n\n");
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}\n\n"
+                )
+            };
+            if let Ok(mut r) = LAST_REQUEST.lock() {
+                *r = request;
+            }
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    port
 }
 
 fn has_caret(app: &App) -> bool {
@@ -545,6 +631,110 @@ pub fn step(app: &mut App) {
         64 => {
             snapshot(app, &mut smoke, "20-schedule", None);
             app.activate(Hit::Theme(ThemeMode::Dark));
+            // 翻译：本机起一个假的服务，走一遍 OpenAI 和 Anthropic 两种流式格式
+            let port = fake_server();
+            app.set_tab(Tab::Translate);
+            app.activate(Hit::TranslateSettings);
+            smoke.check(app.translate.settings_open, "打开翻译服务设置");
+            app.activate(Hit::Provider(7)); // 自定义
+            app.activate(Hit::ApiFormat(Format::OpenAI));
+            app.focus_field(Field::BaseUrl);
+            for unit in format!("http://127.0.0.1:{port}/v1").encode_utf16() {
+                app.on_char(unit);
+            }
+            app.focus_field(Field::Model);
+            for unit in "smoke".encode_utf16() {
+                app.on_char(unit);
+            }
+            snapshot(app, &mut smoke, "21-translate-settings", None);
+            app.activate(Hit::SettingsSave);
+            smoke.check(
+                !app.translate.settings_open
+                    && app.settings.translate_provider == "custom"
+                    && app.settings.translate_profile("custom").model == "smoke",
+                "保存翻译服务设置",
+            );
+            app.focus_field(Field::TranslateInput);
+            for unit in "你好".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.on_key(VK_RETURN);
+            next = 2000;
+        }
+        // 翻译请求还没回来（第一次连接时 WinHTTP 可能要先探测代理）：再等等
+        65..=67 if app.translate.status == Status::Busy && smoke.waits < 60 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 500;
+        }
+        65 => {
+            smoke.check(
+                app.translate.output == "Hello, world" && app.translate.status == Status::Idle,
+                &format!(
+                    "OpenAI 格式流式翻译（译文 {:?}，状态 {:?}）",
+                    app.translate.output, app.translate.status
+                ),
+            );
+            let request = last_request();
+            smoke.check(
+                request.contains("POST /v1/chat/completions")
+                    && request.contains("\"model\":\"smoke\"")
+                    && request.contains("你好"),
+                "请求地址和请求体正确",
+            );
+            snapshot(app, &mut smoke, "22-translate-openai", None);
+            // 换成 Anthropic 格式，填 Key，点测试
+            app.activate(Hit::TranslateSettings);
+            app.activate(Hit::ApiFormat(Format::Anthropic));
+            app.focus_field(Field::ApiKey);
+            for unit in "sk-smoke".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.blur(true);
+            app.activate(Hit::SettingsTest);
+            next = 2000;
+        }
+        66 => {
+            let request = last_request();
+            smoke.check(
+                app.test_output == "你好，世界"
+                    && app
+                        .translate
+                        .hint
+                        .as_ref()
+                        .is_some_and(|(h, e)| !e && h.contains("成功")),
+                &format!(
+                    "Anthropic 格式测试（回复 {:?}，提示 {:?}）",
+                    app.test_output, app.translate.hint
+                ),
+            );
+            smoke.check(
+                request.contains("POST /v1/messages")
+                    && request.contains("x-api-key: sk-smoke")
+                    && request.contains("anthropic-version: 2023-06-01"),
+                "Anthropic 请求头正确",
+            );
+            let stored = app.settings.translate_profile("custom").protected_key;
+            smoke.check(
+                stored
+                    .as_deref()
+                    .and_then(super::net::unprotect)
+                    .is_some_and(|k| k == "sk-smoke"),
+                "Key 用 DPAPI 加密保存，能解出来",
+            );
+            snapshot(app, &mut smoke, "23-translate-test", None);
+            // 模型名不对：服务返回 401
+            app.translate.draft.model = "bad".into();
+            app.activate(Hit::SettingsSave);
+            app.start_translation("x", false);
+            next = 2000;
+        }
+        67 => {
+            smoke.check(
+                matches!(&app.translate.status, Status::Error(e) if e.contains("API Key")),
+                &format!("错误状态码变成可读的提示（{:?}）", app.translate.status),
+            );
+            snapshot(app, &mut smoke, "24-translate-error", None);
             app.set_tab(Tab::Music);
             app.set_pinned(false);
             smoke.step = 15;

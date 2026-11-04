@@ -70,7 +70,7 @@ jobs:
           $env:ISLAND_DATA_DIR = Join-Path $env:RUNNER_TEMP 'native-smoke-data'
           $p = Start-Process -FilePath target/release/Island.exe -ArgumentList '--smoke-test', $out -PassThru
           $null = $p.Handle
-          $finished = $p.WaitForExit(60000)
+          $finished = $p.WaitForExit(150000)
           if (-not $finished) { $p.Kill() }
 
           Write-Host '===== report.txt ====='

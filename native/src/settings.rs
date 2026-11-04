@@ -6,6 +6,7 @@
 use serde_json::{Map, Value, json};
 
 use crate::metrics::Edge;
+use crate::translate::{self, Profile};
 
 /// 主题模式。数值和 WPF 版的枚举一致（settings.json 里存的是数字）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -80,6 +81,8 @@ pub struct Settings {
     pub media_as_line: bool,
     pub dock: Edge,
     pub persist_clipboard: bool,
+    /// 当前使用的翻译服务（预设的 id）。
+    pub translate_provider: String,
     /// 原始 JSON：保存时在它上面改，保留不认识的字段。
     raw: Map<String, Value>,
 }
@@ -128,7 +131,62 @@ impl Settings {
             media_as_line: get_bool(&raw, "MediaAsLine", false),
             dock: Edge::parse(raw.get("Dock").and_then(Value::as_str).unwrap_or("Top")),
             persist_clipboard: get_bool(&raw, "PersistClipboardHistory", true),
+            translate_provider: get_str(&raw, "TranslateProvider", "anthropic"),
             raw,
+        }
+    }
+
+    /// 某个翻译服务的配置；还没配过就用预设的默认值（不认识的 id 用"自定义"的默认值）。
+    /// 旧版本（1.2 及以前）的 TranslateModel / ProtectedApiKey 当作 Claude 的配置。
+    pub fn translate_profile(&self, id: &str) -> Profile {
+        let preset = translate::preset(id);
+        let base = if preset.id.eq_ignore_ascii_case(id) {
+            preset
+        } else {
+            translate::preset(translate::CUSTOM_ID)
+        };
+        let mut fallback = Profile::from_preset(base);
+        if base.id == "anthropic" {
+            if let Some(m) = self.raw.get("TranslateModel").and_then(Value::as_str) {
+                fallback.model = m.into();
+            }
+            fallback.protected_key = self
+                .raw
+                .get("ProtectedApiKey")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+        }
+        match self.raw.get("TranslateProfiles").and_then(Value::as_object) {
+            Some(all) => all
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(id))
+                .map(|(_, v)| Profile::from_json(v, &fallback))
+                .unwrap_or(fallback),
+            None => fallback,
+        }
+    }
+
+    /// 保存某个服务的配置（只改这一项，其他服务的配置原样保留）。
+    pub fn set_translate_profile(&mut self, id: &str, profile: &Profile) {
+        let all = self
+            .raw
+            .entry("TranslateProfiles")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if !all.is_object() {
+            *all = Value::Object(Map::new());
+        }
+        let Value::Object(all) = all else { return };
+        let key = all
+            .keys()
+            .find(|k| k.eq_ignore_ascii_case(id))
+            .cloned()
+            .unwrap_or_else(|| id.to_string());
+        let entry = all.entry(key).or_insert_with(|| Value::Object(Map::new()));
+        if !entry.is_object() {
+            *entry = Value::Object(Map::new());
+        }
+        if let Value::Object(m) = entry {
+            profile.write_json(m);
         }
     }
 
@@ -144,6 +202,7 @@ impl Settings {
             "PersistClipboardHistory".into(),
             json!(self.persist_clipboard),
         );
+        m.insert("TranslateProvider".into(), json!(self.translate_provider));
 
         let mut theme = match m.remove("Theme") {
             Some(Value::Object(t)) => t,
@@ -208,6 +267,38 @@ mod tests {
             "AQAAANCM"
         );
         assert_eq!(Settings::from_json(&s.to_json()).to_json(), s.to_json());
+    }
+
+    #[test]
+    fn translate_profiles_are_shared_with_wpf() {
+        let mut s = Settings::from_json(
+            r#"{"TranslateProvider":"deepseek",
+                "TranslateProfiles":{"DeepSeek":{"Format":"OpenAI","BaseUrl":"https://api.deepseek.com","Model":"deepseek-reasoner","ProtectedKey":"AQAA"}},
+                "TranslateModel":"claude-old","ProtectedApiKey":"OLD"}"#,
+        );
+        assert_eq!(s.translate_provider, "deepseek");
+        let p = s.translate_profile("deepseek");
+        assert_eq!(p.model, "deepseek-reasoner");
+        assert_eq!(p.protected_key.as_deref(), Some("AQAA"));
+        // 旧版本的 Claude 配置
+        let c = s.translate_profile("anthropic");
+        assert_eq!(c.model, "claude-old");
+        assert_eq!(c.protected_key.as_deref(), Some("OLD"));
+        // 没配过的服务用预设
+        assert_eq!(s.translate_profile("kimi").model, "moonshot-v1-8k");
+
+        let mut changed = p.clone();
+        changed.model = "deepseek-chat".into();
+        s.set_translate_profile("deepseek", &changed);
+        s.set_translate_profile("kimi", &s.translate_profile("kimi"));
+        let out: Value = serde_json::from_str(&s.to_json()).unwrap();
+        assert_eq!(
+            out["TranslateProfiles"]["DeepSeek"]["Model"],
+            "deepseek-chat"
+        );
+        assert_eq!(out["TranslateProfiles"]["DeepSeek"]["ProtectedKey"], "AQAA");
+        assert_eq!(out["TranslateProfiles"]["kimi"]["Format"], "OpenAI");
+        assert!(out["TranslateProfiles"].get("deepseek").is_none());
     }
 
     #[test]

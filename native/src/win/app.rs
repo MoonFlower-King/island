@@ -42,8 +42,10 @@ use island::todo::Todos;
 
 use super::gfx::Gfx;
 use super::media::{self, Command, Snapshot, WM_MEDIA};
+use super::net::{self, WM_TRANSLATE};
 use super::scene::{self, Scene, View};
 use super::system::{self, Monitor, Volume};
+use super::translator::{Draft, Status, TranslateUi};
 use super::views::{self, CLIP_ROWS, Editing, Field, Hit, TODO_ROWS, Tab, Targets, ViewState};
 use super::{log, smoke};
 
@@ -98,6 +100,9 @@ pub struct App {
     high_surrogate: Option<u16>,
     /// 开始编辑前在前台的窗口：编辑结束（回车、Esc、收起）时把焦点还给它。
     previous_foreground: HWND,
+    pub translate: TranslateUi,
+    /// "测试"请求收到的回复（冒烟测试检查用）。
+    pub test_output: String,
     /// 刚刚自己写入剪贴板的文字，收到通知时不要再记一遍。
     own_clip: Option<String>,
     monitor: Monitor,
@@ -236,6 +241,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         let volume = Volume::new();
         let last_volume = volume.get();
 
+        let translate = TranslateUi::new(&settings);
         let mut app = App {
             hwnd,
             _controller: controller,
@@ -262,6 +268,8 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             composition: (String::new(), 0),
             high_surrogate: None,
             previous_foreground: HWND::default(),
+            translate,
+            test_output: String::new(),
             own_clip: None,
             monitor: Monitor::default(),
             volume,
@@ -525,6 +533,8 @@ impl App {
             clip_scroll: self.clip_scroll,
             todos: &self.todos.items,
             todo_scroll: self.todo_scroll,
+            translate: &self.translate,
+            translate_summary: (TranslateUi::summary(&self.settings), self.translate_ready()),
             editing: self.editing.as_ref().map(|(field, edit)| Editing {
                 field: *field,
                 edit,
@@ -743,6 +753,15 @@ impl App {
         }
         // 展开在别的标签：剪贴板列表滚动，其余不处理
         if self.state == IslandState::Expanded && self.tab != Tab::Music {
+            if self.tab == Tab::Translate {
+                if let Some((_, used, max)) = self.targets.output {
+                    let next = (used - delta as f32 / 120.0 * 36.0).clamp(0.0, max);
+                    // 滚到底就重新跟着新内容走
+                    self.translate.output_scroll = (next < max - 0.5).then_some(next);
+                    self.redraw_expanded();
+                }
+                return;
+            }
             let (scroll, len, rows) = match self.tab {
                 Tab::Clipboard => (&mut self.clip_scroll, self.clips.items.len(), CLIP_ROWS),
                 Tab::Todo => (&mut self.todo_scroll, self.todos.items.len(), TODO_ROWS),
@@ -997,6 +1016,65 @@ impl App {
                 self.save_clips();
             }
             Hit::Field(_) => {}
+            Hit::TranslateGo => {
+                if self.translate.status == Status::Busy {
+                    self.stop_translation();
+                } else {
+                    let text = self.translate.input.clone();
+                    self.start_translation(&text, false);
+                }
+            }
+            Hit::TranslatePaste => {
+                if let Some(text) = system::read_clipboard_text(self.hwnd, false) {
+                    self.translate.input = text.clone();
+                    self.start_translation(&text, false);
+                }
+            }
+            Hit::TranslateCopy => {
+                let text = self.translate.output.clone();
+                if !text.is_empty() {
+                    system::write_clipboard_text(self.hwnd, &text);
+                }
+            }
+            Hit::TranslateSettings => {
+                self.translate.draft =
+                    Draft::load(&self.settings, &self.settings.translate_provider);
+                self.translate.hint = None;
+                self.translate.settings_open = true;
+            }
+            Hit::Provider(i) => {
+                if let Some(preset) = island::translate::PRESETS.get(i as usize) {
+                    self.translate.draft = Draft::load(&self.settings, preset.id);
+                    self.translate.hint = None;
+                }
+            }
+            Hit::ApiFormat(format) => {
+                let d = &mut self.translate.draft;
+                // 地址还是另一种格式的默认地址时，跟着换
+                if d.base_url.is_empty()
+                    || d.base_url.eq_ignore_ascii_case(d.format.default_base_url())
+                {
+                    d.base_url = format.default_base_url().into();
+                }
+                d.format = format;
+                self.translate.hint = None;
+            }
+            Hit::SettingsBack => {
+                if self.translate.testing {
+                    self.stop_translation();
+                }
+                self.translate.settings_open = false;
+            }
+            Hit::SettingsSave => {
+                if self.save_translate_settings() {
+                    self.translate.settings_open = false;
+                }
+            }
+            Hit::SettingsTest => {
+                if self.save_translate_settings() {
+                    self.start_translation("Hello", true);
+                }
+            }
             Hit::TodoToggle(i) => {
                 self.todos.toggle(i);
                 self.save_todos();
@@ -1069,6 +1147,10 @@ impl App {
             Field::Hex(_) => t.custom_accent.clone(),
             Field::DayStarts => t.day_starts.clone(),
             Field::NightStarts => t.night_starts.clone(),
+            Field::TranslateInput => self.translate.input.clone(),
+            Field::BaseUrl => self.translate.draft.base_url.clone(),
+            Field::Model => self.translate.draft.model.clone(),
+            Field::ApiKey => self.translate.draft.key.clone().unwrap_or_default(),
         }
     }
 
@@ -1077,7 +1159,7 @@ impl App {
         self.blur(true);
         let mut edit = TextEdit::new(field.max_chars(), field.multiline());
         edit.set_text(&self.field_value(field));
-        if field != Field::Todo {
+        if !matches!(field, Field::Todo | Field::TranslateInput) {
             edit.select_all();
         }
         self.editing = Some((field, edit));
@@ -1132,9 +1214,34 @@ impl App {
     }
 
     fn commit_field(&mut self, field: Field, text: &str) {
+        let draft = &mut self.translate.draft;
+        match field {
+            Field::TranslateInput => {
+                self.translate.input = text.to_string();
+                return;
+            }
+            Field::BaseUrl => {
+                draft.base_url = text.trim().to_string();
+                self.translate.hint = None;
+                return;
+            }
+            Field::Model => {
+                draft.model = text.trim().to_string();
+                return;
+            }
+            Field::ApiKey => {
+                if !text.trim().is_empty() {
+                    draft.key = Some(text.trim().to_string());
+                }
+                return;
+            }
+            _ => {}
+        }
         let t = &mut self.settings.theme;
         let changed = match field {
-            Field::Todo => false,
+            Field::Todo | Field::TranslateInput | Field::BaseUrl | Field::Model | Field::ApiKey => {
+                false
+            }
             Field::Hex(kind) => {
                 let Some(c) = color::parse_hex(text) else {
                     return;
@@ -1175,6 +1282,12 @@ impl App {
         let Some((field, edit)) = self.editing.as_mut() else {
             return;
         };
+        if *field == Field::TranslateInput {
+            self.translate.input = edit.text().to_string();
+            let text = self.translate.input.clone();
+            self.start_translation(&text, false);
+            return;
+        }
         if *field == Field::Todo {
             let text = edit.text().to_string();
             if self.add_todo(&text)
@@ -1195,9 +1308,10 @@ impl App {
         let Some((f, edit)) = self.editing.as_mut().filter(|(f, _)| *f == field) else {
             return;
         };
-        if let Ok(i) =
-            self.gfx
-                .field_hit(edit.text(), f.font_size(), f.multiline(), &geometry, lx, ly)
+        let shown = views::display_text(*f, edit.text());
+        if let Ok(i) = self
+            .gfx
+            .field_hit(&shown, f.font_size(), f.multiline(), &geometry, lx, ly)
         {
             let byte = edit.byte_index(i);
             edit.place(byte, extend);
@@ -1270,6 +1384,9 @@ impl App {
             VK_DELETE => {
                 edit.delete();
             }
+            VK_RETURN if shift && edit.multiline => {
+                edit.insert("\n");
+            }
             VK_RETURN => {
                 self.submit_field();
                 return true;
@@ -1340,6 +1457,124 @@ impl App {
             self.composition = c;
         }
         self.redraw_expanded();
+    }
+
+    // ───────────────────────────── 翻译 ─────────────────────────────
+
+    /// 当前服务已经可以用了：填了模型，并且有 Key 或者是不需要 Key 的本地服务。
+    fn translate_ready(&self) -> bool {
+        let p = self
+            .settings
+            .translate_profile(&self.settings.translate_provider);
+        !p.model.trim().is_empty()
+            && (island::translate::is_loopback(&p.base_url)
+                || p.protected_key.is_some()
+                || TranslateUi::key_for(&p).is_some())
+    }
+
+    fn save_translate_settings(&mut self) -> bool {
+        // 正在编辑的框先提交
+        if let Some((f, _)) = self.editing.as_ref()
+            && matches!(f, Field::BaseUrl | Field::Model | Field::ApiKey)
+        {
+            self.blur(true);
+        }
+        match self.translate.draft.apply(&mut self.settings) {
+            Ok(()) => {
+                self.save_settings();
+                let provider = self.translate.draft.provider.clone();
+                self.translate.draft = Draft::load(&self.settings, &provider);
+                self.translate.hint = Some(("已保存".into(), false));
+                true
+            }
+            Err(e) => {
+                self.translate.hint = Some((e, true));
+                false
+            }
+        }
+    }
+
+    pub fn start_translation(&mut self, text: &str, testing: bool) {
+        net::cancel();
+        self.translate.testing = testing;
+        if testing {
+            self.test_output.clear();
+        }
+        match self.translate.begin(&self.settings, text) {
+            Ok(job) => {
+                self.translate.status = Status::Busy;
+                if testing {
+                    self.translate.hint = Some(("正在测试…".into(), false));
+                } else {
+                    self.translate.output.clear();
+                    self.translate.output_scroll = None;
+                }
+                net::start(self.hwnd, job);
+            }
+            Err((message, _)) => {
+                if testing {
+                    self.translate.hint = Some((message, true));
+                } else {
+                    self.translate.status = Status::Error(message);
+                }
+            }
+        }
+        self.redraw_expanded();
+    }
+
+    fn stop_translation(&mut self) {
+        net::cancel();
+        self.translate.job = 0;
+        self.translate.status = Status::Idle;
+        self.translate.testing = false;
+        self.redraw_expanded();
+    }
+
+    fn on_translate_events(&mut self) {
+        let mut changed = false;
+        let mut test_output = String::new();
+        for event in net::take_events() {
+            let current = self.translate.job;
+            match event {
+                net::Event::Delta(id, text) if id == current => {
+                    if self.translate.testing {
+                        test_output.push_str(&text);
+                    } else {
+                        self.translate.output.push_str(&text);
+                    }
+                    changed = true;
+                }
+                net::Event::Done(id) if id == current => {
+                    self.translate.status = Status::Idle;
+                    self.translate.job = 0;
+                    if self.translate.testing {
+                        self.translate.testing = false;
+                        self.translate.hint = Some(("连接成功，可以翻译了".into(), false));
+                    } else if self.translate.output.is_empty() {
+                        self.translate.status = Status::Error("服务没有返回译文".into());
+                    }
+                    changed = true;
+                }
+                net::Event::Error(id, message) if id == current => {
+                    self.translate.job = 0;
+                    if self.translate.testing {
+                        self.translate.testing = false;
+                        self.translate.status = Status::Idle;
+                        self.translate.hint = Some((message, true));
+                    } else {
+                        self.translate.status = Status::Error(message);
+                    }
+                    changed = true;
+                }
+                _ => {}
+            }
+        }
+        if !test_output.is_empty() {
+            self.test_output.push_str(&test_output);
+        }
+        if changed && self.state == IslandState::Expanded && self.tab == Tab::Translate {
+            self.redraw_expanded();
+        }
     }
 
     // ───────────────────────────── 定时器 ─────────────────────────────
@@ -1596,6 +1831,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if let Some(snapshot) = media::take_latest() {
                 with_app(|a| a.set_media(snapshot));
             }
+            LRESULT(0)
+        }
+        WM_TRANSLATE => {
+            with_app(|a| a.on_translate_events());
             LRESULT(0)
         }
         WM_CLIPBOARDUPDATE => {

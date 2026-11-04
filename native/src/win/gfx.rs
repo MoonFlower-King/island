@@ -566,6 +566,50 @@ impl Painter<'_> {
         })
     }
 
+    /// 多行文字（自动换行），可以上下滚动。`scroll` 为 None 时滚到最底下（流式输出时跟着新内容走）。
+    /// 返回 (实际滚动位置, 最大滚动位置)。
+    pub fn paragraph(
+        &self,
+        s: &str,
+        r: Rect,
+        size: f32,
+        c: D2D1_COLOR_F,
+        scroll: Option<f32>,
+    ) -> Result<(f32, f32)> {
+        if s.is_empty() {
+            return Ok((0.0, 0.0));
+        }
+        let style = TextStyle {
+            family: &self.gfx.text_font,
+            size,
+            weight: DWRITE_FONT_WEIGHT_NORMAL,
+            align: Align::Leading,
+        };
+        let format = self.gfx.format(&style, Some(true))?;
+        let wide: Vec<u16> = s.encode_utf16().collect();
+        unsafe {
+            let layout = self
+                .gfx
+                .dwrite
+                .CreateTextLayout(&wide, &format, r.w, 100_000.0)?;
+            let mut m = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut m)?;
+            let max = (m.height - r.h).max(0.0);
+            let y = scroll.unwrap_or(max).clamp(0.0, max);
+            let brush = self.brush(c)?;
+            self.dc
+                .PushAxisAlignedClip(&rect_f(r), D2D1_ANTIALIAS_MODE_ALIASED);
+            self.dc.DrawTextLayout(
+                windows_numerics::Vector2 { X: r.x, Y: r.y - y },
+                &layout,
+                &brush,
+                D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT,
+            );
+            self.dc.PopAxisAlignedClip();
+            Ok((y, max))
+        }
+    }
+
     /// 图标字体里的一个字形，居中画在 `r` 里。
     pub fn icon(&self, glyph: char, r: Rect, size: f32, c: D2D1_COLOR_F) -> Result<()> {
         let style = TextStyle {
