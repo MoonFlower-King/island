@@ -1,68 +1,119 @@
 using System.Windows;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using Island.Core;
 using Microsoft.Win32;
 
 namespace Island.Views;
 
 /// <summary>
-/// 把配色写进窗口资源。界面通过 DynamicResource 引用这些画刷；
-/// 换主题时直接给同一批画刷做颜色动画，所有界面一起平滑变色，不需要重建任何控件。
+/// 把配色写进窗口资源，界面通过 DynamicResource 引用。
 ///
-/// 注意画刷必须放在窗口（而不是 Application）的资源里：WPF 会自动冻结应用级资源里
-/// 被访问过的 Freezable，冻结后的画刷不能再做动画或修改颜色。
+/// WPF 会冻结样式和模板里用到的画刷，所以不能直接对画刷做动画。这里的做法是：
+/// 每一帧算出过渡中的颜色，生成一套新的（冻结的）画刷，整体替换掉窗口里的主题字典。
+/// 每帧只触发一次资源刷新，过渡只有 0.3 秒，平时完全不占资源。
 /// </summary>
 public sealed class ThemeManager
 {
     private static readonly TimeSpan TransitionDuration = TimeSpan.FromMilliseconds(320);
 
-    private readonly Dictionary<string, SolidColorBrush> _brushes = new();
+    private Dictionary<string, Color> _shown;
+    private Dictionary<string, Color> _from = new();
+    private Dictionary<string, Color> _to = new();
+    private ResourceDictionary? _host;
+    private ResourceDictionary? _themeDictionary;
+    private TimeSpan _transitionStart;
+    private bool _transitioning;
 
     public ThemeManager()
     {
-        foreach (var (key, color) in ColorsFor(ThemePalette.Dark))
-            _brushes[key] = new SolidColorBrush(color); // 不冻结：之后要对它做动画
         Current = ThemePalette.Dark;
+        _shown = ColorsFor(Current).ToDictionary(c => c.Key, c => c.Color);
     }
-
-    /// <summary>把主题画刷放进窗口资源。要在窗口 InitializeComponent 之前调用。</summary>
-    public void AttachTo(ResourceDictionary windowResources)
-    {
-        foreach (var (key, brush) in _brushes) windowResources[key] = brush;
-    }
-
-    public Color ColorOf(string key) => _brushes.TryGetValue(key, out var brush) ? brush.Color : default;
 
     public ThemePalette Current { get; private set; }
 
     /// <summary>配色变化（用于更新阴影、重新计算音乐主题色等）。</summary>
     public event Action<ThemePalette>? Changed;
 
+    /// <summary>把主题字典挂到窗口资源上。要在窗口 InitializeComponent 之前调用。</summary>
+    public void AttachTo(ResourceDictionary windowResources)
+    {
+        _host = windowResources;
+        Write(_shown);
+    }
+
+    /// <summary>当前显示中的颜色（过渡期间是中间色）。</summary>
+    public Color ColorOf(string key) => _shown.TryGetValue(key, out var color) ? color : default;
+
+    public bool IsTransitioning => _transitioning;
+
     public void Apply(ThemePalette palette, bool animate)
     {
         if (palette == Current) return;
         Current = palette;
+        _to = ColorsFor(palette).ToDictionary(c => c.Key, c => c.Color);
 
-        foreach (var (key, color) in ColorsFor(palette))
+        if (animate && _host is not null)
         {
-            SolidColorBrush brush = _brushes[key];
-            if (animate)
+            _from = new Dictionary<string, Color>(_shown);
+            _transitionStart = TimeSpan.Zero;
+            if (!_transitioning)
             {
-                var transition = new ColorAnimation(color, TransitionDuration)
-                {
-                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseInOut },
-                };
-                brush.BeginAnimation(SolidColorBrush.ColorProperty, transition, HandoffBehavior.SnapshotAndReplace);
+                _transitioning = true;
+                CompositionTarget.Rendering += OnRendering;
             }
-            else
-            {
-                brush.BeginAnimation(SolidColorBrush.ColorProperty, null);
-                brush.Color = color;
-            }
+        }
+        else
+        {
+            StopTransition();
+            Write(_to);
         }
 
         Changed?.Invoke(palette);
+    }
+
+    private void OnRendering(object? sender, EventArgs e)
+    {
+        if (e is not RenderingEventArgs args) return;
+        if (_transitionStart == TimeSpan.Zero) _transitionStart = args.RenderingTime;
+
+        double t = (args.RenderingTime - _transitionStart).TotalMilliseconds / TransitionDuration.TotalMilliseconds;
+        if (t >= 1)
+        {
+            StopTransition();
+            Write(_to);
+            return;
+        }
+
+        double eased = t < 0.5 ? 4 * t * t * t : 1 - Math.Pow(-2 * t + 2, 3) / 2; // ease-in-out cubic
+        Write(_to.ToDictionary(kv => kv.Key,
+            kv => ColorMath.Mix(_from.TryGetValue(kv.Key, out var from) ? from : kv.Value, kv.Value, eased)));
+    }
+
+    private void StopTransition()
+    {
+        if (!_transitioning) return;
+        _transitioning = false;
+        CompositionTarget.Rendering -= OnRendering;
+    }
+
+    private void Write(Dictionary<string, Color> colors)
+    {
+        _shown = colors;
+        if (_host is null) return;
+
+        var dictionary = new ResourceDictionary();
+        foreach (var (key, color) in colors)
+        {
+            var brush = new SolidColorBrush(color);
+            brush.Freeze();
+            dictionary[key] = brush;
+        }
+
+        // 整体替换：一次资源刷新，而不是每个颜色各刷新一次
+        if (_themeDictionary is not null) _host.MergedDictionaries.Remove(_themeDictionary);
+        _host.MergedDictionaries.Add(dictionary);
+        _themeDictionary = dictionary;
     }
 
     /// <summary>从三种基础颜色推导出界面用到的全部颜色。</summary>

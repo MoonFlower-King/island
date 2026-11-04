@@ -8,7 +8,7 @@
 
         <!--
           主题颜色（这里是黑夜主题的默认值，作为兜底）。实际使用的是 ThemeManager 放进窗口资源里的
-          同名画刷，可以做颜色过渡。界面里一律用 DynamicResource 引用，切换主题时整体平滑变色。
+          同名画刷，换主题时整体替换并做颜色过渡。界面里一律用 DynamicResource 引用。
         -->
         <SolidColorBrush x:Key="IslandBackground" Color="#FF000000" />
         <SolidColorBrush x:Key="IslandForeground" Color="#FFFFFFFF" />
