@@ -55,7 +55,6 @@ pub struct Scene {
     props: CompositionPropertySet,
     bg_brush: CompositionColorBrush,
     shadow: DropShadow,
-    layer: LayerVisual,
     pub compact: Layer,
     pub expanded: Layer,
     bars: Vec<SpriteVisual>,
@@ -136,7 +135,10 @@ impl Scene {
             B: 0,
         })?;
         shadow.SetOpacity(0.45)?;
-        layer.SetShadow(&shadow)?;
+        // 没有显卡、合成器跑在软件渲染上时（虚拟机、远程桌面），LayerVisual 的阴影会画成一整块黑色，干脆不要阴影
+        if !gfx.software {
+            layer.SetShadow(&shadow)?;
+        }
         layer.Children()?.InsertAtTop(&background)?;
         capsule.Children()?.InsertAtTop(&layer)?;
 
@@ -182,7 +184,6 @@ impl Scene {
             root,
             props,
             bg_brush,
-            layer: layer.clone(),
             shadow,
             compact,
             expanded,
@@ -253,29 +254,6 @@ impl Scene {
         let light = island::color::luminance(palette.background) > 0.45;
         self.shadow.SetOpacity(if light { 0.18 } else { 0.45 })?;
         Ok(())
-    }
-
-    /// 去掉阴影（没有显卡、合成器跑在软件渲染上时，阴影效果可能画不出来）。
-    pub fn disable_shadow(&self) -> Result<()> {
-        self.layer.SetShadow(None::<&CompositionShadow>)
-    }
-
-    /// 诊断：在窗口左下角放一块白色方块（不经过阴影层），确认纯色画刷能正常显示。
-    pub fn add_probe(&self) -> Result<()> {
-        let probe = self.compositor.CreateSpriteVisual()?;
-        probe.SetBrush(&self.compositor.CreateColorBrushWithColor(Color {
-            A: 255,
-            R: 255,
-            G: 255,
-            B: 255,
-        })?)?;
-        probe.SetSize(Vector2 { X: 30.0, Y: 30.0 })?;
-        probe.SetOffset(Vector3 {
-            X: 0.0,
-            Y: 240.0,
-            Z: 0.0,
-        })?;
-        self.root.Children()?.InsertAtTop(&probe)
     }
 
     pub fn set_accent(&self, accent: Rgb) -> Result<()> {

@@ -146,6 +146,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         let interop: ICompositorDesktopInterop = compositor.cast()?;
         let target = interop.CreateDesktopWindowTarget(hwnd, true)?;
         let gfx = Gfx::new(&compositor)?;
+        let software = gfx.software;
         let palette = DARK;
         let scene = Scene::new(&compositor, &gfx, scale, &palette)?;
         target.SetRoot(&scene.root)?;
@@ -186,7 +187,9 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         } else {
             media::start(hwnd, tick);
         }
-        log::info(&format!("启动，缩放 {scale}，分层窗口 {layered}"));
+        log::info(&format!(
+            "启动，缩放 {scale}，分层窗口 {layered}，软件渲染 {software}"
+        ));
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {

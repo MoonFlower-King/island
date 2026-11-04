@@ -309,59 +309,7 @@ pub fn step(app: &mut App) {
                 c.is_some_and(|c| near(c, LIGHT.background, 16)),
                 "可点击模式下照样显示",
             );
-            // 诊断：把内容层藏起来，只剩背景形状，看它是什么颜色
-            let _ = app
-                .scene
-                .expanded
-                .visual
-                .StopAnimation(&HSTRING::from("Opacity"));
-            let _ = app.scene.expanded.visual.SetOpacity(0.0);
             app.set_interactive(false);
-            next = 300;
-            smoke.step = 40;
-        }
-        40 => {
-            let c = snapshot(
-                app,
-                &mut smoke,
-                "05b-shape-only",
-                Some((IslandState::Expanded.metrics(), 220.0, 244.0)),
-            );
-            if let Some(c) = c {
-                smoke.note(&format!(
-                    "只有背景形状时取样 #{:02X}{:02X}{:02X}",
-                    c.r, c.g, c.b
-                ));
-            }
-            let _ = app.scene.disable_shadow();
-            let _ = app.scene.add_probe();
-            smoke.step = 41;
-            next = 300;
-        }
-        41 => {
-            let c = snapshot(
-                app,
-                &mut smoke,
-                "05c-no-shadow",
-                Some((IslandState::Expanded.metrics(), 220.0, 244.0)),
-            );
-            if let Some(c) = c {
-                smoke.note(&format!(
-                    "去掉阴影后取样 #{:02X}{:02X}{:02X}",
-                    c.r, c.g, c.b
-                ));
-            }
-            let full = Metrics {
-                width: island::metrics::WINDOW_WIDTH,
-                height: 300.0,
-                radius: 0.0,
-                top: 0.0,
-            };
-            if let Some(c) = snapshot(app, &mut smoke, "05d-probe", Some((full, 15.0, 255.0))) {
-                smoke.note(&format!("白色方块取样 #{:02X}{:02X}{:02X}", c.r, c.g, c.b));
-            }
-            let _ = app.scene.expanded.visual.SetOpacity(1.0);
-            smoke.step = 5;
             app.set_palette(DARK);
             app.set_media(Some(fake_media(false)));
             next = 400;
@@ -377,6 +325,13 @@ pub fn step(app: &mut App) {
                 "取消置顶、没有音乐后回到待机",
             );
             snapshot(app, &mut smoke, "07-idle-again", None);
+            next = 1500;
+            smoke.step = 50;
+        }
+        // 再等一会儿看是不是已经完全缩回细线
+        50 => {
+            snapshot(app, &mut smoke, "07b-idle-later", None);
+            smoke.step = 7;
             next = 35;
         }
         // 快速反复展开收起：动画应能被打断，最后收敛到待机

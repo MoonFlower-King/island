@@ -29,12 +29,18 @@ pub struct Gfx {
     pub icon_font: HSTRING,
     /// 文字字体：Windows 11 上是 Segoe UI Variable，Windows 10 上是 Segoe UI。中文由 DirectWrite 自动回退到微软雅黑。
     pub text_font: HSTRING,
+    /// 显卡是微软的软件渲染器（没有显卡的虚拟机、远程桌面）。这时一些合成效果（阴影）不可靠。
+    pub software: bool,
 }
 
 impl Gfx {
     pub fn new(compositor: &Compositor) -> Result<Self> {
         let d3d = create_d3d_device()?;
         let dxgi: IDXGIDevice = d3d.cast()?;
+        // Microsoft Basic Render Driver / WARP 的厂商号是 0x1414
+        let software = unsafe { dxgi.GetAdapter().and_then(|a| a.GetDesc()) }
+            .map(|d| d.VendorId == 0x1414)
+            .unwrap_or(false);
         let factory: ID2D1Factory1 =
             unsafe { D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)? };
         let d2d = unsafe { factory.CreateDevice(&dxgi)? };
@@ -56,6 +62,7 @@ impl Gfx {
             device,
             icon_font,
             text_font,
+            software,
         })
     }
 
