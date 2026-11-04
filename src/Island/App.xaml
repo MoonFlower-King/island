@@ -6,20 +6,28 @@
         <FontFamily x:Key="IslandFont">Segoe UI Variable Display, Segoe UI, Microsoft YaHei UI</FontFamily>
         <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
 
+        <!--
+          主题颜色（这里是黑夜主题的默认值，作为兜底）。实际使用的是 ThemeManager 放进窗口资源里的
+          同名画刷，换主题时整体替换并做颜色过渡。界面里一律用 DynamicResource 引用。
+        -->
         <SolidColorBrush x:Key="IslandBackground" Color="#FF000000" />
         <SolidColorBrush x:Key="IslandForeground" Color="#FFFFFFFF" />
         <SolidColorBrush x:Key="IslandSecondary" Color="#99FFFFFF" />
         <SolidColorBrush x:Key="IslandTertiary" Color="#66FFFFFF" />
         <SolidColorBrush x:Key="IslandSurface" Color="#1AFFFFFF" />
+        <SolidColorBrush x:Key="IslandHover" Color="#1FFFFFFF" />
         <SolidColorBrush x:Key="IslandSurfaceHover" Color="#26FFFFFF" />
+        <SolidColorBrush x:Key="IslandSurfaceStrong" Color="#33FFFFFF" />
+        <SolidColorBrush x:Key="IslandOutline" Color="#00FFFFFF" />
         <SolidColorBrush x:Key="IslandAccent" Color="#FF0A84FF" />
+        <SolidColorBrush x:Key="IslandOnAccent" Color="#FFFFFFFF" />
         <SolidColorBrush x:Key="IslandGreen" Color="#FF30D158" />
 
         <!-- 圆形图标按钮：上一首 / 播放暂停 / 下一首 -->
         <Style x:Key="IslandIconButton" TargetType="Button">
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Foreground" Value="{StaticResource IslandForeground}" />
+            <Setter Property="Foreground" Value="{DynamicResource IslandForeground}" />
             <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
             <Setter Property="FontSize" Value="16" />
             <Setter Property="Width" Value="44" />
@@ -33,10 +41,10 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="#1FFFFFFF" />
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource IslandHover}" />
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="#33FFFFFF" />
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource IslandSurfaceStrong}" />
                                 <Setter TargetName="Bg" Property="RenderTransform">
                                     <Setter.Value>
                                         <ScaleTransform ScaleX="0.9" ScaleY="0.9" />
@@ -57,15 +65,15 @@
             <Setter Property="FontSize" Value="12" />
             <Setter Property="Width" Value="26" />
             <Setter Property="Height" Value="26" />
-            <Setter Property="Foreground" Value="{StaticResource IslandSecondary}" />
+            <Setter Property="Foreground" Value="{DynamicResource IslandSecondary}" />
         </Style>
 
         <!-- 文字按钮：翻译、保存等 -->
         <Style x:Key="IslandPillButton" TargetType="Button">
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Cursor" Value="Hand" />
-            <Setter Property="Foreground" Value="{StaticResource IslandForeground}" />
-            <Setter Property="Background" Value="{StaticResource IslandAccent}" />
+            <Setter Property="Foreground" Value="{DynamicResource IslandOnAccent}" />
+            <Setter Property="Background" Value="{DynamicResource IslandAccent}" />
             <Setter Property="FontSize" Value="12" />
             <Setter Property="FontWeight" Value="SemiBold" />
             <Setter Property="Padding" Value="12,0" />
@@ -98,7 +106,7 @@
             <Setter Property="Focusable" Value="False" />
             <Setter Property="Cursor" Value="Hand" />
             <Setter Property="GroupName" Value="IslandTabs" />
-            <Setter Property="Foreground" Value="{StaticResource IslandSecondary}" />
+            <Setter Property="Foreground" Value="{DynamicResource IslandSecondary}" />
             <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
             <Setter Property="FontSize" Value="14" />
             <Setter Property="Width" Value="36" />
@@ -112,12 +120,67 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource IslandSurface}" />
-                                <Setter Property="Foreground" Value="{StaticResource IslandForeground}" />
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource IslandSurface}" />
+                                <Setter Property="Foreground" Value="{DynamicResource IslandForeground}" />
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="#33FFFFFF" />
-                                <Setter Property="Foreground" Value="{StaticResource IslandForeground}" />
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource IslandSurfaceStrong}" />
+                                <Setter Property="Foreground" Value="{DynamicResource IslandForeground}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 分段选择（主题模式等）：选中时用强调色填充 -->
+        <Style x:Key="IslandSegment" TargetType="RadioButton">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="{DynamicResource IslandForeground}" />
+            <Setter Property="Background" Value="{DynamicResource IslandSurface}" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Height" Value="26" />
+            <Setter Property="Padding" Value="11,0" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="13"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource IslandSurfaceHover}" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource IslandAccent}" />
+                                <Setter Property="Foreground" Value="{DynamicResource IslandOnAccent}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 颜色色块：自定义主题 -->
+        <Style x:Key="IslandSwatch" TargetType="Button">
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Width" Value="22" />
+            <Setter Property="Height" Value="22" />
+            <Setter Property="Margin" Value="0,0,6,0" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid Background="Transparent">
+                            <Ellipse x:Name="Ring" Stroke="{DynamicResource IslandSurfaceStrong}" StrokeThickness="1.5"
+                                     Fill="{TemplateBinding Background}" />
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource IslandForeground}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -127,10 +190,10 @@
 
         <!-- 深色圆角输入框 -->
         <Style x:Key="IslandTextBox" TargetType="TextBox">
-            <Setter Property="Foreground" Value="{StaticResource IslandForeground}" />
-            <Setter Property="CaretBrush" Value="{StaticResource IslandForeground}" />
-            <Setter Property="SelectionBrush" Value="{StaticResource IslandAccent}" />
-            <Setter Property="Background" Value="{StaticResource IslandSurface}" />
+            <Setter Property="Foreground" Value="{DynamicResource IslandForeground}" />
+            <Setter Property="CaretBrush" Value="{DynamicResource IslandForeground}" />
+            <Setter Property="SelectionBrush" Value="{DynamicResource IslandAccent}" />
+            <Setter Property="Background" Value="{DynamicResource IslandSurface}" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="FontSize" Value="13" />
             <Setter Property="Padding" Value="10,6" />
@@ -145,7 +208,7 @@
                                               HorizontalScrollBarVisibility="Hidden" />
                                 <TextBlock x:Name="Placeholder" Text="{TemplateBinding Tag}"
                                            Margin="{TemplateBinding Padding}" Padding="2,0,0,0"
-                                           Foreground="{StaticResource IslandTertiary}"
+                                           Foreground="{DynamicResource IslandTertiary}"
                                            VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                            IsHitTestVisible="False" Visibility="Collapsed" />
                             </Grid>
@@ -155,7 +218,7 @@
                                 <Setter TargetName="Placeholder" Property="Visibility" Value="Visible" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Bg" Property="Background" Value="{StaticResource IslandSurfaceHover}" />
+                                <Setter TargetName="Bg" Property="Background" Value="{DynamicResource IslandSurfaceHover}" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -171,10 +234,10 @@
                 <Setter.Value>
                     <ControlTemplate TargetType="CheckBox">
                         <Grid Width="18" Height="18" Background="Transparent">
-                            <Ellipse x:Name="Ring" Stroke="{StaticResource IslandSecondary}" StrokeThickness="1.5" />
-                            <Ellipse x:Name="Fill" Fill="{StaticResource IslandGreen}" Visibility="Collapsed" />
+                            <Ellipse x:Name="Ring" Stroke="{DynamicResource IslandSecondary}" StrokeThickness="1.5" />
+                            <Ellipse x:Name="Fill" Fill="{DynamicResource IslandGreen}" Visibility="Collapsed" />
                             <TextBlock x:Name="Tick" Text="&#xE73E;" FontFamily="{StaticResource IconFont}"
-                                       FontSize="10" Foreground="Black" Visibility="Collapsed"
+                                       FontSize="10" Foreground="{DynamicResource IslandBackground}" Visibility="Collapsed"
                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Grid>
                         <ControlTemplate.Triggers>
@@ -197,7 +260,7 @@
             <Setter Property="Margin" Value="0,0,0,2" />
             <Style.Triggers>
                 <Trigger Property="IsMouseOver" Value="True">
-                    <Setter Property="Background" Value="{StaticResource IslandSurface}" />
+                    <Setter Property="Background" Value="{DynamicResource IslandSurface}" />
                 </Trigger>
             </Style.Triggers>
         </Style>
@@ -217,7 +280,7 @@
         <!-- 空状态提示文字 -->
         <Style x:Key="IslandEmptyText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Foreground" Value="{StaticResource IslandTertiary}" />
+            <Setter Property="Foreground" Value="{DynamicResource IslandTertiary}" />
             <Setter Property="HorizontalAlignment" Value="Center" />
             <Setter Property="VerticalAlignment" Value="Center" />
             <Setter Property="TextAlignment" Value="Center" />
@@ -229,12 +292,12 @@
             <Setter Property="Height" Value="6" />
             <Setter Property="Minimum" Value="0" />
             <Setter Property="Maximum" Value="100" />
-            <Setter Property="Foreground" Value="{StaticResource IslandGreen}" />
+            <Setter Property="Foreground" Value="{DynamicResource IslandGreen}" />
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ProgressBar">
                         <Grid>
-                            <Border x:Name="PART_Track" CornerRadius="3" Background="#33FFFFFF" />
+                            <Border x:Name="PART_Track" CornerRadius="3" Background="{DynamicResource IslandSurfaceStrong}" />
                             <Border x:Name="PART_Indicator" CornerRadius="3" HorizontalAlignment="Left"
                                     Background="{TemplateBinding Foreground}" />
                         </Grid>

@@ -16,7 +16,7 @@
                      PreviewKeyDown="OnInputKeyDown" />
 
             <Grid Grid.Row="1" Margin="0,6">
-                <TextBlock x:Name="Status" FontSize="11" Foreground="{StaticResource IslandTertiary}"
+                <TextBlock x:Name="Status" FontSize="11" Foreground="{DynamicResource IslandTertiary}"
                            VerticalAlignment="Center" Text="中文 ⇄ English，其他语言 → 中文" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button Style="{StaticResource IslandSmallButton}" Content="&#xE77F;"
@@ -28,10 +28,10 @@
                 </StackPanel>
             </Grid>
 
-            <Border Grid.Row="2" CornerRadius="10" Background="{StaticResource IslandSurface}" Padding="8,6">
+            <Border Grid.Row="2" CornerRadius="10" Background="{DynamicResource IslandSurface}" Padding="8,6">
                 <TextBox x:Name="Output" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0"
-                         Background="Transparent" Foreground="{StaticResource IslandForeground}"
-                         SelectionBrush="{StaticResource IslandAccent}" FontSize="13"
+                         Background="Transparent" Foreground="{DynamicResource IslandForeground}"
+                         SelectionBrush="{DynamicResource IslandAccent}" FontSize="13"
                          ScrollViewer.VerticalScrollBarVisibility="Hidden" />
             </Border>
         </Grid>
@@ -41,7 +41,7 @@
             <TextBlock Text="AI 翻译使用 Claude，需要一个 Anthropic API Key" FontSize="13"
                        HorizontalAlignment="Center" />
             <TextBlock FontSize="11" Margin="0,4,0,10" HorizontalAlignment="Center"
-                       Foreground="{StaticResource IslandTertiary}"
+                       Foreground="{DynamicResource IslandTertiary}"
                        Text="Key 用 Windows 加密保存在本机，也可以设置环境变量 ANTHROPIC_API_KEY" />
             <Grid>
                 <Grid.ColumnDefinitions>

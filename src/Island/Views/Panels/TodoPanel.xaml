@@ -43,7 +43,7 @@
                         <DataTemplate.Triggers>
                             <DataTrigger Binding="{Binding Done}" Value="True">
                                 <Setter TargetName="Text" Property="TextDecorations" Value="Strikethrough" />
-                                <Setter TargetName="Text" Property="Foreground" Value="{StaticResource IslandTertiary}" />
+                                <Setter TargetName="Text" Property="Foreground" Value="{DynamicResource IslandTertiary}" />
                             </DataTrigger>
                         </DataTemplate.Triggers>
                     </DataTemplate>

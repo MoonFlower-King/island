@@ -48,34 +48,34 @@ public partial class IslandWindow
             if (_hiddenForFullscreen) SetHiddenForFullscreen(false);
             Note($"数据目录：{JsonStore.DataDirectory}");
 
-            await Settle(1000);
+            await Settle(1300);
             Check(_currentState == IslandState.Idle, "启动后处于待机状态");
             CheckSize(IslandState.Idle, Check);
             Snapshot(outputDirectory, "01-idle");
 
             // 通知
             ShowNotification("冒烟测试", "这是一条测试通知", "💬");
-            await Settle(800);
+            await Settle(1300);
             Check(_currentState == IslandState.Notification, "显示通知");
             CheckSize(IslandState.Notification, Check);
             Snapshot(outputDirectory, "02-notification");
             DismissNotification();
-            await Settle(700);
+            await Settle(1300);
             Check(_currentState == IslandState.Idle, "关闭通知后回到待机");
 
             // 紧凑
             SetBaseState(IslandState.Compact, "冒烟测试进行中");
-            await Settle(800);
+            await Settle(1300);
             Check(_currentState == IslandState.Compact && ReferenceEquals(_currentView, CompactView), "紧凑状态");
             CheckSize(IslandState.Compact, Check);
             Snapshot(outputDirectory, "03-compact");
             SetBaseState(IslandState.Idle);
-            await Settle(700);
+            await Settle(1300);
 
             // 展开并逐个打开功能标签
             _holdExpanded = true;
             Expand();
-            await Settle(900);
+            await Settle(1300);
             Check(_currentState == IslandState.Expanded && ReferenceEquals(_currentView, ExpandedView), "展开");
             CheckSize(IslandState.Expanded, Check);
 
@@ -111,7 +111,7 @@ public partial class IslandWindow
             try
             {
                 Clipboard.SetText(marker);
-                await Settle(800);
+                await Settle(1300);
                 bool recorded = _clipboard!.Items.FirstOrDefault()?.Text == marker;
                 Note(recorded ? "剪贴板历史记录到了新复制的文字" : "剪贴板历史没有记录到（CI 环境可能不支持）");
                 ShowTab(IslandTab.Clipboard, remember: false);
@@ -133,11 +133,51 @@ public partial class IslandWindow
             Snapshot(outputDirectory, $"{index++:00}-shelf-items");
             _shelf.Clear();
 
+            // 主题：白天、自定义，再回到黑夜；颜色资源应随之改变
+            ShowTab(IslandTab.Music, remember: false);
+            ThemeMode originalMode = _settings.Theme.Mode;
+            _settings.Theme.Mode = ThemeMode.Light;
+            ApplyTheme(animate: false);
+            await Settle(300);
+            Check(App.Theme.Current == ThemePalette.Light && BrushColor("IslandBackground") == ThemePalette.Light.Background,
+                "切换到白天主题");
+            Snapshot(outputDirectory, $"{index++:00}-theme-light");
+
+            _settings.Theme.Mode = ThemeMode.Custom;
+            _settings.Theme.CustomBackground = "#0B1F3A";
+            _settings.Theme.CustomForeground = "#FFD60A";
+            _settings.Theme.CustomAccent = "#FF375F";
+            ApplyTheme(animate: true);
+            await Settle(600);
+            Check(BrushColor("IslandBackground") == Color.FromRgb(0x0B, 0x1F, 0x3A) &&
+                  BrushColor("IslandForeground") == Color.FromRgb(0xFF, 0xD6, 0x0A), "自定义主题（含颜色过渡动画）");
+            ShowTab(IslandTab.Appearance, remember: false);
+            AppearancePanel.Refresh();
+            await Settle(300);
+            Snapshot(outputDirectory, $"{index++:00}-theme-custom");
+
+            _settings.Theme.Mode = originalMode;
+            ApplyTheme(animate: false);
+            Check(BrushColor("IslandBackground") == ThemePalette.Dark.Background, "回到黑夜主题");
+
             // 收起
             _holdExpanded = false;
             TryCollapse();
-            await Settle(800);
+            await Settle(1300);
             Check(_currentState == IslandState.Idle, "收起后回到待机");
+            CheckSize(IslandState.Idle, Check);
+            Check(ReferenceEquals(_currentView, LineView) == IdleAsLine, "待机样式与设置一致");
+
+            // 待机样式：切到“显示时间”再切回细线
+            bool originalIdle = _settings.IdleAsLine;
+            _settings.IdleAsLine = !originalIdle;
+            ApplyIdleStyle();
+            await Settle(1300);
+            CheckSize(IslandState.Idle, Check);
+            Snapshot(outputDirectory, $"{index++:00}-idle-{(IdleAsLine ? "line" : "clock")}");
+            _settings.IdleAsLine = originalIdle;
+            ApplyIdleStyle();
+            await Settle(1300);
             CheckSize(IslandState.Idle, Check);
 
             // 快速反复展开收起：动画应能被打断并最终收敛，不会卡在中间尺寸
@@ -150,7 +190,7 @@ public partial class IslandWindow
             }
             _holdExpanded = false;
             TryCollapse();
-            await Settle(900);
+            await Settle(1300);
             Check(_currentState == IslandState.Idle, "快速切换后回到待机");
             CheckSize(IslandState.Idle, Check);
             Snapshot(outputDirectory, $"{index:00}-idle-after-stress");
@@ -170,13 +210,16 @@ public partial class IslandWindow
 
     private static Task Settle(int milliseconds) => Task.Delay(milliseconds);
 
+    private static Color BrushColor(string key) => App.Theme.ColorOf(key);
+
     /// <summary>动画结束后胶囊尺寸应与该状态的设计尺寸一致。</summary>
     private void CheckSize(IslandState state, Action<bool, string> check)
     {
-        IslandMetrics m = IslandMetrics.For(state);
-        double w = CapsuleHost.ActualWidth, h = CapsuleHost.ActualHeight;
-        check(Math.Abs(w - m.Width) < 1.5 && Math.Abs(h - m.Height) < 1.5,
-            $"{state} 尺寸 {w:0.#}×{h:0.#}（期望 {m.Width}×{m.Height}）");
+        IslandMetrics m = MetricsFor(state);
+        Rect r = _shape.CurrentRect;
+        check(!_shape.IsAnimating && Math.Abs(r.Width - m.Width) < 0.5 && Math.Abs(r.Height - m.Height) < 0.5 &&
+              Math.Abs(r.Top - m.Top) < 0.5,
+            $"{state} 形状 {r.Width:0.#}×{r.Height:0.#} @ {r.Top:0.#}（期望 {m.Width}×{m.Height} @ {m.Top}）");
     }
 
     /// <summary>把整个窗口画在灰色背景上存成 PNG（窗口本身是透明的）。</summary>

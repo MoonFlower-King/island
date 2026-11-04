@@ -5,7 +5,7 @@ using System.Windows.Media.Imaging;
 namespace Island.Media;
 
 /// <summary>
-/// 从专辑封面里取一个主题色，用来给进度条和律动条上色。
+/// 从专辑封面里取一个主题色，用来给进度条和律动条上色（按饱和度加权，颜色更鲜明）。
 /// </summary>
 internal static class ColorExtractor
 {
@@ -45,32 +45,13 @@ internal static class ColorExtractor
             }
 
             if (weightSum <= 0) return fallback;
-            return EnsureReadableOnBlack(r / weightSum, g / weightSum, b / weightSum);
+            // 这里返回原始颜色；显示前再按当前主题的背景调整可读性（见 ColorMath.EnsureReadable）
+            return Color.FromRgb(ToByte(r / weightSum), ToByte(g / weightSum), ToByte(b / weightSum));
         }
         catch
         {
             return fallback;
         }
-    }
-
-    /// <summary>岛的背景是纯黑，颜色太暗就往亮处拉，保证看得清。</summary>
-    private static Color EnsureReadableOnBlack(double r, double g, double b)
-    {
-        double max = Math.Max(r, Math.Max(g, b));
-        if (max > 0 && max < 0.85)
-        {
-            double boost = 0.85 / max;
-            r *= boost; g *= boost; b *= boost;
-        }
-
-        double luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-        if (luminance < 0.45)
-        {
-            double t = (0.45 - luminance) / 0.45 * 0.6; // 和白色混合一部分
-            r += (1 - r) * t; g += (1 - g) * t; b += (1 - b) * t;
-        }
-
-        return Color.FromRgb(ToByte(r), ToByte(g), ToByte(b));
     }
 
     private static byte ToByte(double v) => (byte)Math.Round(Math.Clamp(v, 0, 1) * 255);

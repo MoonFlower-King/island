@@ -27,17 +27,9 @@ public partial class IslandWindow : Window
 {
     private static readonly CultureInfo DateCulture = new("zh-CN");
 
-    public static readonly DependencyProperty CapsuleRadiusProperty =
-        DependencyProperty.Register(nameof(CapsuleRadius), typeof(double), typeof(IslandWindow),
-            new PropertyMetadata(IslandMetrics.For(IslandState.Idle).CornerRadius,
-                (d, _) => ((IslandWindow)d).ApplyCornerRadius()));
-
-    /// <summary>胶囊圆角。WPF 没有 CornerRadius 动画，所以用一个 double 属性做动画再同步过去。</summary>
-    public double CapsuleRadius
-    {
-        get => (double)GetValue(CapsuleRadiusProperty);
-        set => SetValue(CapsuleRadiusProperty, value);
-    }
+    /// <summary>胶囊形状：背景、阴影、内容裁剪共用，由 <see cref="_shape"/> 逐帧驱动。</summary>
+    private readonly RectangleGeometry _capsuleGeometry = new();
+    private readonly CapsuleAnimator _shape;
 
     // 进入稍等一下再展开，避免鼠标只是路过顶部（比如去点浏览器标签）就弹开；离开则很快收起
     private readonly DispatcherTimer _hoverInTimer = new() { Interval = TimeSpan.FromMilliseconds(100) };
@@ -61,16 +53,22 @@ public partial class IslandWindow : Window
 
     public IslandWindow()
     {
+        App.Theme.AttachTo(Resources); // 必须在 InitializeComponent 之前，界面加载时就能找到主题画刷
         InitializeComponent();
+        _settings = AppSettings.Load();
 
         Width = IslandMetrics.WindowWidth;
         Height = IslandMetrics.WindowHeight;
-        CapsuleHost.Margin = new Thickness(0, IslandMetrics.TopMargin, 0, 0);
+        CapsuleHost.Width = IslandMetrics.HostWidth;
+        CapsuleHost.Height = IslandMetrics.HostHeight;
 
-        var idle = IslandMetrics.For(IslandState.Idle);
-        CapsuleHost.Width = idle.Width;
-        CapsuleHost.Height = idle.Height;
+        CapsuleShape.Data = _capsuleGeometry;
+        ShadowLayer.Data = _capsuleGeometry;
+        ContentHost.Clip = _capsuleGeometry;
+        _shape = new CapsuleAnimator(_capsuleGeometry, IslandMetrics.HostWidth, MetricsFor(IslandState.Idle));
+        _shape.Updated += OnShapeUpdated;
 
+        LayoutViews();
         foreach (var view in AllViews)
         {
             view.RenderTransformOrigin = new Point(0.5, 0.5);
@@ -97,16 +95,58 @@ public partial class IslandWindow : Window
         SystemParameters.StaticPropertyChanged += OnSystemParametersChanged;
         Closed += OnClosed;
 
-        _currentView = IdleView;
+        _currentView = ViewFor(IslandState.Idle);
+        foreach (var view in AllViews) view.Opacity = ReferenceEquals(view, _currentView) ? 1 : 0;
         InitializeMedia();
         InitializeFeatures();
+        InitializeTheme();
 
         PositionWindow();
         UpdateClock();
     }
 
     private FrameworkElement[] AllViews =>
-        [IdleView, CompactView, MediaCompactView, NotificationView, ExpandedView];
+        [LineView, IdleView, CompactView, MediaCompactView, NotificationView, ExpandedView];
+
+    /// <summary>待机时是细线（默认）还是显示时间的小胶囊。</summary>
+    private bool IdleAsLine => _settings.IdleAsLine;
+
+    private IslandMetrics MetricsFor(IslandState state) => IslandMetrics.For(state, IdleAsLine);
+
+    /// <summary>
+    /// 每个内容视图按它所属状态的最终尺寸摆放一次，之后不再改变布局。
+    /// 动画时只有外面的胶囊形状在变，它像一扇窗一样裁出内容的可见部分。
+    /// XAML 里写在视图上的 Margin 当作内边距保留。
+    /// </summary>
+    private void LayoutViews()
+    {
+        (FrameworkElement View, IslandMetrics Box)[] layout =
+        [
+            (IdleView, IslandMetrics.For(IslandState.Idle, idleAsLine: false)),
+            (CompactView, IslandMetrics.For(IslandState.Compact)),
+            (MediaCompactView, IslandMetrics.For(IslandState.Compact)),
+            (NotificationView, IslandMetrics.For(IslandState.Notification)),
+            (ExpandedView, IslandMetrics.For(IslandState.Expanded)),
+        ];
+
+        foreach (var (view, box) in layout)
+        {
+            Thickness padding = view.Margin;
+            view.HorizontalAlignment = HorizontalAlignment.Left;
+            view.VerticalAlignment = VerticalAlignment.Top;
+            view.Width = Math.Max(0, box.Width - padding.Left - padding.Right);
+            view.Height = Math.Max(0, box.Height - padding.Top - padding.Bottom);
+            view.Margin = new Thickness(
+                (IslandMetrics.HostWidth - box.Width) / 2 + padding.Left, box.Top + padding.Top, 0, 0);
+        }
+    }
+
+    /// <summary>形状每帧变化后，顶部热区跟着胶囊的宽度走（细线时比线略宽，便于“撞”到）。</summary>
+    private void OnShapeUpdated()
+    {
+        double width = Math.Clamp(_shape.CurrentRect.Width + 60, 180, 260);
+        if (Math.Abs(HotZone.Width - width) > 0.5) HotZone.Width = width;
+    }
 
     // ───────────────────────────── 窗口与 Win32 ─────────────────────────────
 
@@ -200,6 +240,7 @@ public partial class IslandWindow : Window
 
         ShutdownMedia();
         ShutdownFeatures();
+        ShutdownTheme();
     }
 
     // ───────────────────────────── 状态机 ─────────────────────────────
@@ -231,26 +272,18 @@ public partial class IslandWindow : Window
 
     private void TransitionTo(IslandState from, IslandState to, FrameworkElement view)
     {
-        IslandMetrics a = IslandMetrics.For(from);
-        IslandMetrics b = IslandMetrics.For(to);
+        IslandMetrics a = MetricsFor(from);
+        IslandMetrics b = MetricsFor(to);
         bool growing = b.Width * b.Height > a.Width * a.Height;
 
-        // 变大时有弹性，缩小时又快又稳——离开后要立刻让出屏幕
-        var ease = growing
-            ? new SpringEase { DampingRatio = 0.7, Stiffness = 11 }
-            : new SpringEase { DampingRatio = 0.92, Stiffness = 12 };
-        var duration = TimeSpan.FromMilliseconds(growing ? 480 : 300);
-
-        Animate(CapsuleHost, WidthProperty, b.Width, duration, ease);
-        Animate(CapsuleHost, HeightProperty, b.Height, duration, ease);
-        Animate(this, CapsuleRadiusProperty, b.CornerRadius, duration, ease);
-
+        // 变大时有一点回弹，缩小时又快又稳——离开后要立刻让出屏幕
+        _shape.AnimateTo(b, growing ? SpringParameters.Expand : SpringParameters.Collapse);
         CrossFadeTo(view, growing);
     }
 
     private FrameworkElement ViewFor(IslandState state) => state switch
     {
-        IslandState.Idle => IdleView,
+        IslandState.Idle => IdleAsLine ? LineView : IdleView,
         IslandState.Compact => MediaWantsCompact ? MediaCompactView : CompactView,
         IslandState.Notification => NotificationView,
         IslandState.Expanded => ExpandedView,
@@ -267,9 +300,10 @@ public partial class IslandWindow : Window
     /// <summary>旧内容快速淡出，新内容等胶囊长出一点后再淡入并轻微放大。</summary>
     private void CrossFadeTo(FrameworkElement target, bool growing)
     {
-        var fadeOut = TimeSpan.FromMilliseconds(80);
-        var fadeIn = TimeSpan.FromMilliseconds(180);
-        var delay = TimeSpan.FromMilliseconds(growing ? 120 : 60);
+        // 收起时旧内容要先于形状消失，否则会看到文字被边缘“切”掉
+        var fadeOut = TimeSpan.FromMilliseconds(growing ? 90 : 70);
+        var fadeIn = TimeSpan.FromMilliseconds(200);
+        var delay = TimeSpan.FromMilliseconds(growing ? 90 : 60);
         var easeOut = new CubicEase { EasingMode = EasingMode.EaseOut };
 
         foreach (var view in AllViews)
@@ -282,6 +316,7 @@ public partial class IslandWindow : Window
                 BeginTime = isTarget ? delay : TimeSpan.Zero,
                 EasingFunction = easeOut,
             };
+            Timeline.SetDesiredFrameRate(opacity, 120);
             view.BeginAnimation(OpacityProperty, opacity, HandoffBehavior.SnapshotAndReplace);
 
             if (isTarget && view.RenderTransform is ScaleTransform scale)
@@ -291,38 +326,13 @@ public partial class IslandWindow : Window
                 {
                     EasingFunction = new SpringEase { DampingRatio = 0.8, Stiffness = 10 },
                 };
+                Timeline.SetDesiredFrameRate(zoom, 120);
                 scale.BeginAnimation(ScaleTransform.ScaleXProperty, zoom);
                 scale.BeginAnimation(ScaleTransform.ScaleYProperty, zoom);
             }
         }
     }
 
-    private static void Animate(IAnimatable target, DependencyProperty property, double to,
-        TimeSpan duration, IEasingFunction ease)
-    {
-        // 不写 From：从当前值（可能正处在上一段动画中途）继续，状态快速切换时也不会跳
-        var animation = new DoubleAnimation(to, duration) { EasingFunction = ease };
-        target.BeginAnimation(property, animation, HandoffBehavior.SnapshotAndReplace);
-    }
-
-    private void ApplyCornerRadius()
-    {
-        double r = Math.Max(0, CapsuleRadius);
-        var corner = new CornerRadius(r);
-        Capsule.CornerRadius = corner;
-        ShadowLayer.CornerRadius = corner;
-        UpdateClip(Capsule.RenderSize);
-    }
-
-    private void OnCapsuleSizeChanged(object sender, SizeChangedEventArgs e) => UpdateClip(e.NewSize);
-
-    /// <summary>Border 的圆角不会裁剪子元素，用同样圆角的 Clip 把内容裁进胶囊里。</summary>
-    private void UpdateClip(Size size)
-    {
-        if (size.Width <= 0 || size.Height <= 0) return;
-        double r = Math.Min(Math.Max(0, CapsuleRadius), Math.Min(size.Width, size.Height) / 2);
-        Capsule.Clip = new RectangleGeometry(new Rect(size), r, r);
-    }
 
     /// <summary>紧凑状态下指示点呼吸闪烁。只在可见时运行，避免空闲时持续占用 CPU。</summary>
     private void UpdateCompactPulse(bool enabled)
@@ -389,6 +399,7 @@ public partial class IslandWindow : Window
         CompactClock.Text = time;
         ExpandedClock.Text = time;
         ExpandedDate.Text = now.ToString("M月d日 ddd", DateCulture);
+        CheckScheduledTheme();
 
         // 对齐到下一分钟再刷新，而不是每秒都跑
         _clockTimer.Stop();
@@ -457,14 +468,24 @@ public partial class IslandWindow : Window
         if (PresentationSource.FromVisual(this) is null || !NativeMethods.GetCursorPos(out var pt)) return false;
 
         Point cursor = PointFromScreen(new Point(pt.X, pt.Y));
-        return BoundsOf(CapsuleHost).Contains(cursor) || BoundsOf(HotZone).Contains(cursor);
+        return BoundsOf(CapsuleHost, _shape.CurrentRect).Contains(cursor) ||
+               BoundsOf(HotZone, new Rect(HotZone.RenderSize)).Contains(cursor);
     }
 
-    private Rect BoundsOf(FrameworkElement element)
+    private Rect BoundsOf(FrameworkElement element, Rect local)
     {
-        Rect bounds = element.TransformToAncestor(this).TransformBounds(new Rect(element.RenderSize));
+        Rect bounds = element.TransformToAncestor(this).TransformBounds(local);
         bounds.Inflate(2, 2);
         return bounds;
+    }
+
+    /// <summary>待机样式改变（细线 / 时间胶囊）后立刻生效。</summary>
+    private void ApplyIdleStyle()
+    {
+        if (_currentState != IslandState.Idle) return;
+        _currentView = ViewFor(IslandState.Idle);
+        _shape.AnimateTo(MetricsFor(IslandState.Idle), SpringParameters.Expand);
+        CrossFadeTo(_currentView, growing: !IdleAsLine);
     }
 
     private void OnContextMenuClosed(object sender, RoutedEventArgs e)

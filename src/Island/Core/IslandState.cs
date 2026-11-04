@@ -3,7 +3,7 @@ namespace Island.Core;
 /// <summary>岛的外观状态。</summary>
 public enum IslandState
 {
-    /// <summary>待机：最小的胶囊，只显示时间。</summary>
+    /// <summary>待机：默认是贴在屏幕顶端的一条细线，也可以设置成显示时间的小胶囊。</summary>
     Idle,
 
     /// <summary>紧凑：稍宽，左图标右信息（音乐、计时器等常驻活动）。</summary>
@@ -16,22 +16,38 @@ public enum IslandState
     Expanded,
 }
 
-/// <summary>每个状态对应的胶囊尺寸（单位：DIP）。</summary>
-public readonly record struct IslandMetrics(double Width, double Height, double CornerRadius)
+/// <summary>
+/// 胶囊在某个状态下的形状（单位：DIP）。<see cref="Top"/> 是距离窗口顶端的位置，
+/// 可以是负数：细线状态把上半截藏到屏幕外，只露出带圆角的下沿。
+/// </summary>
+public readonly record struct IslandMetrics(double Width, double Height, double CornerRadius, double Top)
 {
-    public static IslandMetrics For(IslandState state) => state switch
+    /// <summary>胶囊离屏幕（工作区）顶部的距离。</summary>
+    public const double TopMargin = 6;
+
+    /// <summary>待机细线露出来的高度。</summary>
+    public const double LineVisibleHeight = 5;
+
+    public static IslandMetrics For(IslandState state, bool idleAsLine = true) => state switch
     {
-        IslandState.Idle => new(140, 34, 17),
-        IslandState.Compact => new(260, 38, 19),
-        IslandState.Notification => new(340, 64, 32),
-        IslandState.Expanded => new(440, 260, 32),
+        IslandState.Idle when idleAsLine => Line,
+        IslandState.Idle => new(140, 34, 17, TopMargin),
+        IslandState.Compact => new(260, 38, 19, TopMargin),
+        IslandState.Notification => new(340, 64, 32, TopMargin),
+        IslandState.Expanded => new(440, 260, 32, TopMargin),
         _ => throw new ArgumentOutOfRangeException(nameof(state), state, null),
     };
+
+    /// <summary>待机细线：高 10、上移 5，只露出下半截 5 像素和圆角。</summary>
+    public static IslandMetrics Line { get; } = new(120, LineVisibleHeight * 2, LineVisibleHeight, -LineVisibleHeight);
+
+    public double Bottom => Top + Height;
 
     /// <summary>窗口要能容纳最大的状态，再留出阴影的空间。</summary>
     public const double WindowWidth = 500;
     public const double WindowHeight = 300;
 
-    /// <summary>胶囊距离屏幕（工作区）顶部的距离。</summary>
-    public const double TopMargin = 6;
+    /// <summary>胶囊所在区域（CapsuleHost）的尺寸：最大状态的大小。</summary>
+    public const double HostWidth = 440;
+    public const double HostHeight = TopMargin + 260;
 }

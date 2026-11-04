@@ -1,0 +1,75 @@
+<UserControl x:Class="Island.Views.Panels.AppearancePanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <StackPanel>
+        <!-- 主题模式 -->
+        <StackPanel Orientation="Horizontal">
+            <RadioButton x:Name="ModeDark" Style="{StaticResource IslandSegment}" GroupName="ThemeMode"
+                         Content="黑夜" Tag="Dark" Checked="OnModeChecked" />
+            <RadioButton x:Name="ModeLight" Style="{StaticResource IslandSegment}" GroupName="ThemeMode"
+                         Content="白天" Tag="Light" Checked="OnModeChecked" />
+            <RadioButton x:Name="ModeSystem" Style="{StaticResource IslandSegment}" GroupName="ThemeMode"
+                         Content="跟随系统" Tag="System" Checked="OnModeChecked" />
+            <RadioButton x:Name="ModeSchedule" Style="{StaticResource IslandSegment}" GroupName="ThemeMode"
+                         Content="按时间" Tag="Schedule" Checked="OnModeChecked" />
+            <RadioButton x:Name="ModeCustom" Style="{StaticResource IslandSegment}" GroupName="ThemeMode"
+                         Content="自定义" Tag="Custom" Checked="OnModeChecked" />
+        </StackPanel>
+
+        <!-- 按时间：白天的时段 -->
+        <StackPanel x:Name="ScheduleRow" Orientation="Horizontal" Margin="0,10,0,0" Visibility="Collapsed">
+            <TextBlock Text="白天" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
+            <TextBox x:Name="DayStartsInput" Style="{StaticResource IslandTextBox}" Width="64" Height="28"
+                     Margin="8,0" Padding="8,4" Tag="07:00"
+                     KeyDown="OnInputKeyDown" LostKeyboardFocus="OnScheduleCommitted" />
+            <TextBlock Text="到" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
+            <TextBox x:Name="NightStartsInput" Style="{StaticResource IslandTextBox}" Width="64" Height="28"
+                     Margin="8,0" Padding="8,4" Tag="19:00"
+                     KeyDown="OnInputKeyDown" LostKeyboardFocus="OnScheduleCommitted" />
+            <TextBlock Text="，其余时间为黑夜" FontSize="12" VerticalAlignment="Center"
+                       Foreground="{DynamicResource IslandSecondary}" />
+        </StackPanel>
+
+        <!-- 自定义：背景、文字、强调色 -->
+        <Grid x:Name="CustomRows" Margin="0,10,0,0" Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="44" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="30" />
+                <RowDefinition Height="30" />
+                <RowDefinition Height="30" />
+            </Grid.RowDefinitions>
+
+            <TextBlock Text="背景" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
+            <StackPanel x:Name="BackgroundSwatches" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" />
+            <TextBox x:Name="BackgroundInput" Grid.Column="2" Style="{StaticResource IslandTextBox}" Width="84" Height="26"
+                     Padding="8,3" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
+
+            <TextBlock Grid.Row="1" Text="文字" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
+            <StackPanel x:Name="ForegroundSwatches" Grid.Row="1" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" />
+            <TextBox x:Name="ForegroundInput" Grid.Row="1" Grid.Column="2" Style="{StaticResource IslandTextBox}" Width="84" Height="26"
+                     Padding="8,3" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
+
+            <TextBlock Grid.Row="2" Text="强调色" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
+            <StackPanel x:Name="AccentSwatches" Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" />
+            <TextBox x:Name="AccentInput" Grid.Row="2" Grid.Column="2" Style="{StaticResource IslandTextBox}" Width="84" Height="26"
+                     Padding="8,3" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
+        </Grid>
+
+        <TextBlock x:Name="Hint" FontSize="11" Margin="0,6,0,0" Foreground="{DynamicResource IslandTertiary}"
+                   TextWrapping="Wrap" Text="黑色的经典灵动岛" />
+
+        <!-- 待机样式 -->
+        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+            <TextBlock Text="待机时" FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0"
+                       Foreground="{DynamicResource IslandSecondary}" />
+            <RadioButton x:Name="IdleLine" Style="{StaticResource IslandSegment}" GroupName="IdleStyle"
+                         Content="收成细线" Checked="OnIdleStyleChecked" />
+            <RadioButton x:Name="IdleClock" Style="{StaticResource IslandSegment}" GroupName="IdleStyle"
+                         Content="显示时间" Checked="OnIdleStyleChecked" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

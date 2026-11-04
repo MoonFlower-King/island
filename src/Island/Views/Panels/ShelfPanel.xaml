@@ -9,7 +9,7 @@
 
         <Grid Margin="2,0,0,4">
             <TextBlock Text="拖进来暂存，拖出去使用，双击打开" FontSize="12"
-                       Foreground="{StaticResource IslandTertiary}" VerticalAlignment="Center" />
+                       Foreground="{DynamicResource IslandTertiary}" VerticalAlignment="Center" />
             <Button HorizontalAlignment="Right" Style="{StaticResource IslandSmallButton}"
                     Content="&#xE74D;" ToolTip="清空中转站（不会删除文件）" Click="OnClear" />
         </Grid>
@@ -28,14 +28,14 @@
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <Border Width="28" Height="28" CornerRadius="7" Background="{StaticResource IslandSurface}">
+                                <Border Width="28" Height="28" CornerRadius="7" Background="{DynamicResource IslandSurface}">
                                     <TextBlock Text="{Binding Glyph}" FontFamily="{StaticResource IconFont}" FontSize="14"
                                                HorizontalAlignment="Center" VerticalAlignment="Center" />
                                 </Border>
                                 <TextBlock Grid.Column="1" Margin="10,0" Text="{Binding Name}" FontSize="13"
                                            TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                                 <TextBlock Grid.Column="2" Text="{Binding Detail}" FontSize="11" Margin="0,0,4,0"
-                                           Foreground="{StaticResource IslandTertiary}" VerticalAlignment="Center" />
+                                           Foreground="{DynamicResource IslandTertiary}" VerticalAlignment="Center" />
                                 <StackPanel Grid.Column="3" Style="{StaticResource RowActions}">
                                     <Button Style="{StaticResource IslandSmallButton}" Content="&#xE8DA;"
                                             ToolTip="在资源管理器中显示" Click="OnReveal" />
@@ -50,10 +50,10 @@
         </ScrollViewer>
 
         <Border x:Name="Empty" Grid.Row="1" CornerRadius="14" BorderThickness="1.5"
-                BorderBrush="#33FFFFFF" Margin="0,2,0,0">
+                BorderBrush="{DynamicResource IslandSurfaceStrong}" Margin="0,2,0,0">
             <StackPanel VerticalAlignment="Center">
                 <TextBlock Text="&#xE898;" FontFamily="{StaticResource IconFont}" FontSize="22"
-                           Foreground="{StaticResource IslandTertiary}" HorizontalAlignment="Center" />
+                           Foreground="{DynamicResource IslandTertiary}" HorizontalAlignment="Center" />
                 <TextBlock Style="{StaticResource IslandEmptyText}" Margin="0,8,0,0"
                            Text="把文件拖到灵动岛上" />
             </StackPanel>

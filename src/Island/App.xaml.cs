@@ -11,6 +11,9 @@ public partial class App : Application
     private const string MutexName = "Island.SingleInstance.{6C1D9A0E-4B9B-4C1E-9F3A-2E7C5B8D1A42}";
     private Mutex? _singleInstance;
 
+    /// <summary>全局主题（界面颜色资源）。窗口创建前初始化。</summary>
+    public static ThemeManager Theme { get; private set; } = null!;
+
     protected override void OnStartup(StartupEventArgs e)
     {
         // 冒烟测试：Island.exe --smoke-test <输出目录>，跑完所有界面后退出（CI 用）
@@ -34,6 +37,8 @@ public partial class App : Application
         base.OnStartup(e);
 
         Log.Info($"启动 Island {typeof(App).Assembly.GetName().Version}，系统 {Environment.OSVersion}");
+
+        Theme = new ThemeManager();
 
         var island = new IslandWindow();
         island.Show();
