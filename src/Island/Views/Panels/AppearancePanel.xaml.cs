@@ -6,7 +6,7 @@ using Island.Core;
 
 namespace Island.Views.Panels;
 
-/// <summary>外观设置：主题模式（黑夜 / 白天 / 跟随系统 / 按时间 / 自定义）和待机样式。</summary>
+/// <summary>外观设置：主题模式（黑夜 / 白天 / 跟随系统 / 按时间 / 自定义）、待机样式和停靠位置。</summary>
 public partial class AppearancePanel : UserControl
 {
     private static readonly string[] BackgroundPresets =
@@ -55,6 +55,8 @@ public partial class AppearancePanel : UserControl
         };
         mode.IsChecked = true;
         (_settings.IdleAsLine ? IdleLine : IdleClock).IsChecked = true;
+        (_settings.MediaAsLine ? MediaLine : MediaCapsule).IsChecked = true;
+        (_settings.Dock switch { DockEdge.Left => DockLeft, DockEdge.Right => DockRight, _ => DockTop }).IsChecked = true;
 
         DayStartsInput.Text = Settings.DayStarts;
         NightStartsInput.Text = Settings.NightStarts;
@@ -129,6 +131,23 @@ public partial class AppearancePanel : UserControl
         bool line = ReferenceEquals(sender, IdleLine);
         if (line == _settings.IdleAsLine) return;
         _settings.IdleAsLine = line;
+        Changed();
+    }
+
+    private void OnMediaStyleChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _settings is null) return;
+        bool line = ReferenceEquals(sender, MediaLine);
+        if (line == _settings.MediaAsLine) return;
+        _settings.MediaAsLine = line;
+        Changed();
+    }
+
+    private void OnDockChecked(object sender, RoutedEventArgs e)
+    {
+        if (_loading || _settings is null || sender is not RadioButton { Tag: string tag }) return;
+        if (!Enum.TryParse(tag, out DockEdge dock) || dock == _settings.Dock) return;
+        _settings.Dock = dock;
         Changed();
     }
 

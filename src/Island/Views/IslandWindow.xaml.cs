@@ -60,13 +60,16 @@ public partial class IslandWindow : Window
 
         Width = IslandMetrics.WindowWidth;
         Height = IslandMetrics.WindowHeight;
-        CapsuleHost.Width = IslandMetrics.HostWidth;
-        CapsuleHost.Height = IslandMetrics.HostHeight;
+        CapsuleHost.Width = IslandMetrics.WindowWidth;
+        CapsuleHost.Height = IslandMetrics.WindowHeight;
 
         CapsuleShape.Data = _capsuleGeometry;
         ShadowLayer.Data = _capsuleGeometry;
         ContentHost.Clip = _capsuleGeometry;
-        _shape = new CapsuleAnimator(_capsuleGeometry, IslandMetrics.HostWidth, MetricsFor(IslandState.Idle));
+        _shape = new CapsuleAnimator(_capsuleGeometry, IslandMetrics.WindowWidth, IslandMetrics.WindowHeight,
+            MetricsFor(IslandState.Idle)) { Edge = Edge };
+        _shape.JumpTo(MetricsFor(IslandState.Idle));
+        ApplyEdgeChrome();
         UpdateHotZone(MetricsFor(IslandState.Idle));
 
         LayoutViews();
@@ -114,7 +117,13 @@ public partial class IslandWindow : Window
     /// <summary>待机时是细线（默认）还是显示时间的小胶囊。</summary>
     private bool IdleAsLine => _settings.IdleAsLine;
 
-    private IslandMetrics MetricsFor(IslandState state) => IslandMetrics.For(state, IdleAsLine);
+    /// <summary>贴在屏幕哪条边上。</summary>
+    private DockEdge Edge => _settings.Dock;
+
+    private IslandMetrics MetricsFor(IslandState state) => IslandMetrics.For(state, IdleAsLine, Edge);
+
+    /// <summary>XAML 里写在各视图上的 Margin（当作内边距），第一次布局时记下来。</summary>
+    private readonly Dictionary<FrameworkElement, Thickness> _viewPadding = new();
 
     /// <summary>
     /// 每个内容视图按它所属状态的最终尺寸摆放一次，之后不再改变布局。
@@ -135,22 +144,68 @@ public partial class IslandWindow : Window
 
         foreach (var (view, box) in layout)
         {
-            Thickness padding = view.Margin;
+            if (!_viewPadding.TryGetValue(view, out Thickness padding))
+                _viewPadding[view] = padding = view.Margin;
+            IslandRect rect = box.RectIn(Edge);
             view.HorizontalAlignment = HorizontalAlignment.Left;
             view.VerticalAlignment = VerticalAlignment.Top;
             view.Width = Math.Max(0, box.Width - padding.Left - padding.Right);
             view.Height = Math.Max(0, box.Height - padding.Top - padding.Bottom);
-            view.Margin = new Thickness(
-                (IslandMetrics.HostWidth - box.Width) / 2 + padding.Left, box.Top + padding.Top, 0, 0);
+            view.Margin = new Thickness(rect.X + padding.Left, rect.Y + padding.Top, 0, 0);
         }
     }
 
     /// <summary>
-    /// 顶部热区跟着胶囊的目标宽度走（细线时比线略宽，便于“撞”到）。
-    /// 只在状态切换时设置一次：每帧改宽度会触发布局，动画就不顺了。
+    /// 边缘热区跟着胶囊的目标尺寸走（细线时比线略长，便于“撞”到）。
+    /// 只在状态切换时设置一次：每帧改尺寸会触发布局，动画就不顺了。
     /// </summary>
-    private void UpdateHotZone(IslandMetrics target) =>
-        HotZone.Width = Math.Clamp(target.Width + 60, 180, 260);
+    private void UpdateHotZone(IslandMetrics target)
+    {
+        if (Edge == DockEdge.Top)
+            HotZone.Width = Math.Clamp(target.Width + 60, 180, 260);
+        else
+            HotZone.Height = Math.Clamp(target.Height + 60, 180, 280);
+    }
+
+    /// <summary>按所贴的边摆放热区、设置阴影方向。</summary>
+    private void ApplyEdgeChrome()
+    {
+        const double thickness = 6;
+        switch (Edge)
+        {
+            case DockEdge.Left:
+                HotZone.HorizontalAlignment = HorizontalAlignment.Left;
+                HotZone.VerticalAlignment = VerticalAlignment.Center;
+                HotZone.Width = thickness;
+                CapsuleShadow.Direction = 0;   // 阴影往屏幕里面（右边）落
+                break;
+            case DockEdge.Right:
+                HotZone.HorizontalAlignment = HorizontalAlignment.Right;
+                HotZone.VerticalAlignment = VerticalAlignment.Center;
+                HotZone.Width = thickness;
+                CapsuleShadow.Direction = 180;
+                break;
+            default:
+                HotZone.HorizontalAlignment = HorizontalAlignment.Center;
+                HotZone.VerticalAlignment = VerticalAlignment.Top;
+                HotZone.Height = thickness;
+                CapsuleShadow.Direction = 270;
+                break;
+        }
+    }
+
+    /// <summary>换了停靠位置：重新摆放所有内容和窗口，形状直接跳到新位置。</summary>
+    private void ApplyDock()
+    {
+        _shape.Edge = Edge;
+        LayoutViews();
+        ApplyEdgeChrome();
+        IslandMetrics current = MetricsFor(_currentState);
+        UpdateHotZone(current);
+        _shape.JumpTo(current);
+        PositionWindow();
+        Log.Info($"停靠位置：{Edge}");
+    }
 
     /// <summary>
     /// 启动后空闲时把每个功能面板悄悄布局一遍。面板默认是折叠的，
@@ -237,12 +292,25 @@ public partial class IslandWindow : Window
         Log.Info(hidden ? "检测到全屏程序，隐藏" : "全屏结束，恢复显示");
     }
 
-    /// <summary>放在主显示器工作区的顶部正中。</summary>
+    /// <summary>放在主显示器工作区的顶部正中，或左 / 右边的正中。</summary>
     private void PositionWindow()
     {
         Rect workArea = SystemParameters.WorkArea;
-        Left = workArea.Left + (workArea.Width - Width) / 2;
-        Top = workArea.Top;
+        switch (Edge)
+        {
+            case DockEdge.Left:
+                Left = workArea.Left;
+                Top = workArea.Top + (workArea.Height - Height) / 2;
+                break;
+            case DockEdge.Right:
+                Left = workArea.Right - Width;
+                Top = workArea.Top + (workArea.Height - Height) / 2;
+                break;
+            default:
+                Left = workArea.Left + (workArea.Width - Width) / 2;
+                Top = workArea.Top;
+                break;
+        }
     }
 
     private void OnDisplaySettingsChanged(object? sender, EventArgs e) =>
@@ -280,7 +348,9 @@ public partial class IslandWindow : Window
         if (_isHovering) return IslandState.Expanded;
         if (_showingLevel) return IslandState.Level;
         if (_hasNotification) return IslandState.Notification;
-        return _baseState == IslandState.Compact || MediaWantsCompact ? IslandState.Compact : IslandState.Idle;
+        // “播放音乐时也缩成细线”：音乐不再把岛撑成胶囊
+        bool mediaCompact = MediaWantsCompact && !_settings.MediaAsLine;
+        return _baseState == IslandState.Compact || mediaCompact ? IslandState.Compact : IslandState.Idle;
     }
 
     private void UpdateState()
@@ -316,7 +386,7 @@ public partial class IslandWindow : Window
     private FrameworkElement ViewFor(IslandState state) => state switch
     {
         IslandState.Idle => IdleAsLine ? LineView : IdleView,
-        IslandState.Compact => MediaWantsCompact ? MediaCompactView : CompactView,
+        IslandState.Compact => MediaWantsCompact && !_settings.MediaAsLine ? MediaCompactView : CompactView,
         IslandState.Notification => NotificationView,
         IslandState.Level => LevelView,
         IslandState.Expanded => ExpandedView,

@@ -220,6 +220,36 @@ public partial class IslandWindow
             await Settle(1300);
             CheckSize(IslandState.Idle, Check);
 
+            // 停靠在左右两侧：细线变竖线贴着边，展开的面板从边上滑出
+            DockEdge originalDock = _settings.Dock;
+            foreach (DockEdge dock in new[] { DockEdge.Left, DockEdge.Right })
+            {
+                _settings.Dock = dock;
+                ApplyDock();
+                await Settle(400);
+                Rect work = SystemParameters.WorkArea;
+                bool placed = dock == DockEdge.Left
+                    ? Math.Abs(Left - work.Left) < 1
+                    : Math.Abs(Left + Width - work.Right) < 1;
+                Check(placed && Math.Abs(Top - (work.Top + (work.Height - Height) / 2)) < 1, $"停靠{dock}：窗口贴边居中");
+                CheckSize(IslandState.Idle, Check);
+                Snapshot(outputDirectory, $"{index++:00}-dock-{dock.ToString().ToLowerInvariant()}-idle");
+
+                _holdExpanded = true;
+                Expand();
+                await Settle(1300);
+                CheckSize(IslandState.Expanded, Check);
+                Snapshot(outputDirectory, $"{index++:00}-dock-{dock.ToString().ToLowerInvariant()}-expanded");
+                _holdExpanded = false;
+                TryCollapse();
+                await Settle(1300);
+                CheckSize(IslandState.Idle, Check);
+            }
+            _settings.Dock = originalDock;
+            ApplyDock();
+            await Settle(400);
+            CheckSize(IslandState.Idle, Check);
+
             // 快速反复展开收起：动画应能被打断并最终收敛，不会卡在中间尺寸
             for (int i = 0; i < 20; i++)
             {
@@ -256,10 +286,12 @@ public partial class IslandWindow
     private void CheckSize(IslandState state, Action<bool, string> check)
     {
         IslandMetrics m = MetricsFor(state);
+        IslandRect e = m.RectIn(Edge);
         Rect r = _shape.CurrentRect;
-        check(!_shape.IsAnimating && Math.Abs(r.Width - m.Width) < 0.5 && Math.Abs(r.Height - m.Height) < 0.5 &&
-              Math.Abs(r.Top - m.Top) < 0.5,
-            $"{state} 形状 {r.Width:0.#}×{r.Height:0.#} @ {r.Top:0.#}（期望 {m.Width}×{m.Height} @ {m.Top}）");
+        check(!_shape.IsAnimating && Math.Abs(r.Width - e.Width) < 0.5 && Math.Abs(r.Height - e.Height) < 0.5 &&
+              Math.Abs(r.X - e.X) < 0.5 && Math.Abs(r.Y - e.Y) < 0.5,
+            $"{state}（{Edge}）形状 {r.Width:0.#}×{r.Height:0.#} @ ({r.X:0.#}, {r.Y:0.#})" +
+            $"（期望 {e.Width}×{e.Height} @ ({e.X}, {e.Y})）");
     }
 
     /// <summary>把整个窗口画在灰色背景上存成 PNG（窗口本身是透明的）。</summary>

@@ -1,6 +1,8 @@
 <UserControl x:Class="Island.Views.Panels.AppearancePanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 内容比面板高时可以用滚轮滚动 -->
+    <ScrollViewer VerticalScrollBarVisibility="Hidden" Focusable="False">
     <StackPanel>
         <!-- 主题模式 -->
         <StackPanel Orientation="Horizontal">
@@ -64,12 +66,35 @@
 
         <!-- 待机样式 -->
         <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-            <TextBlock Text="待机时" FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0"
+            <TextBlock Text="待机时" FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0" Width="48"
                        Foreground="{DynamicResource IslandSecondary}" />
             <RadioButton x:Name="IdleLine" Style="{StaticResource IslandSegment}" GroupName="IdleStyle"
                          Content="收成细线" Checked="OnIdleStyleChecked" />
             <RadioButton x:Name="IdleClock" Style="{StaticResource IslandSegment}" GroupName="IdleStyle"
                          Content="显示时间" Checked="OnIdleStyleChecked" />
         </StackPanel>
+
+        <!-- 播放音乐时：撑成音乐胶囊，还是保持细线（细线变成封面的颜色） -->
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+            <TextBlock Text="放音乐时" FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0" Width="48"
+                       Foreground="{DynamicResource IslandSecondary}" />
+            <RadioButton x:Name="MediaCapsule" Style="{StaticResource IslandSegment}" GroupName="MediaStyle"
+                         Content="显示音乐胶囊" Checked="OnMediaStyleChecked" />
+            <RadioButton x:Name="MediaLine" Style="{StaticResource IslandSegment}" GroupName="MediaStyle"
+                         Content="也收成细线" Checked="OnMediaStyleChecked" />
+        </StackPanel>
+
+        <!-- 停靠位置 -->
+        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+            <TextBlock Text="位置" FontSize="12" VerticalAlignment="Center" Margin="0,0,10,0" Width="48"
+                       Foreground="{DynamicResource IslandSecondary}" />
+            <RadioButton x:Name="DockTop" Style="{StaticResource IslandSegment}" GroupName="Dock"
+                         Content="顶部" Tag="Top" Checked="OnDockChecked" />
+            <RadioButton x:Name="DockLeft" Style="{StaticResource IslandSegment}" GroupName="Dock"
+                         Content="左侧" Tag="Left" Checked="OnDockChecked" />
+            <RadioButton x:Name="DockRight" Style="{StaticResource IslandSegment}" GroupName="Dock"
+                         Content="右侧" Tag="Right" Checked="OnDockChecked" />
+        </StackPanel>
     </StackPanel>
+    </ScrollViewer>
 </UserControl>

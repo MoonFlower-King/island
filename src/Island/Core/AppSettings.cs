@@ -35,6 +35,13 @@ public sealed class AppSettings
     /// <summary>待机时缩成顶端的一条细线（否则显示带时间的小胶囊）。</summary>
     public bool IdleAsLine { get; set; } = true;
 
+    /// <summary>播放音乐时也只显示细线（细线变成封面的主题色），不撑成音乐胶囊。</summary>
+    public bool MediaAsLine { get; set; }
+
+    /// <summary>岛贴在屏幕的哪条边上。</summary>
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public DockEdge Dock { get; set; } = DockEdge.Top;
+
     /// <summary>剪贴板历史是否保存到磁盘（关闭后只保留在内存里，退出即清空）。</summary>
     public bool PersistClipboardHistory { get; set; } = true;
 

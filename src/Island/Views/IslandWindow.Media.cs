@@ -103,6 +103,7 @@ public partial class IslandWindow
         }
 
         if (snapshot is not null) ApplyMediaToUi(snapshot);
+        UpdateLineTint();
         MediaPlayer.Visibility = snapshot is null ? Visibility.Collapsed : Visibility.Visible;
         MusicEmpty.Visibility = snapshot is null ? Visibility.Visible : Visibility.Collapsed;
 
@@ -188,7 +189,15 @@ public partial class IslandWindow
         brush.Freeze();
         ProgressFill.Background = brush;
         foreach (var bar in EqualizerBars) bar.Fill = brush;
+        _accentBrush = brush;
+        UpdateLineTint();
     }
+
+    private Brush? _accentBrush;
+
+    /// <summary>“播放音乐时也缩成细线”时，播放中的细线变成封面的主题色，一眼就知道在放歌。</summary>
+    private void UpdateLineTint() =>
+        LineView.Background = _settings.MediaAsLine && _media?.IsPlaying == true ? _accentBrush : null;
 
     // ───────────────────────────── 进度 ─────────────────────────────
 

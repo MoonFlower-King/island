@@ -14,6 +14,7 @@ public partial class IslandWindow
         App.Theme.Changed += OnThemeChanged;
         SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
+        _appliedDock = _settings.Dock;
         AppearancePanel.Attach(_settings, OnAppearanceChanged);
         ApplyTheme(animate: false);
         OnThemeChanged(App.Theme.Current);
@@ -41,11 +42,20 @@ public partial class IslandWindow
         ApplyAccent(_rawAccent);
     }
 
+    private DockEdge _appliedDock;
+
     private void OnAppearanceChanged()
     {
         _settings.Save();
         ApplyTheme(animate: true);
+        if (_settings.Dock != _appliedDock)
+        {
+            _appliedDock = _settings.Dock;
+            ApplyDock();
+        }
         ApplyIdleStyle();
+        UpdateLineTint();
+        UpdateState(); // “播放音乐时也缩成细线”可能改了
     }
 
     /// <summary>Windows 切换了浅色/深色应用模式。</summary>
