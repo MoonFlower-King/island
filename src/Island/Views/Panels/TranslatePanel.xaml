@@ -1,0 +1,60 @@
+<UserControl x:Class="Island.Views.Panels.TranslatePanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <!-- 翻译界面 -->
+        <Grid x:Name="Main">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <TextBox x:Name="Input" Style="{StaticResource IslandTextBox}"
+                     Tag="输入要翻译的文字，Enter 翻译，Shift+Enter 换行"
+                     AcceptsReturn="True" TextWrapping="Wrap" VerticalContentAlignment="Top"
+                     PreviewKeyDown="OnInputKeyDown" />
+
+            <Grid Grid.Row="1" Margin="0,6">
+                <TextBlock x:Name="Status" FontSize="11" Foreground="{StaticResource IslandTertiary}"
+                           VerticalAlignment="Center" Text="中文 ⇄ English，其他语言 → 中文" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Style="{StaticResource IslandSmallButton}" Content="&#xE77F;"
+                            ToolTip="粘贴剪贴板并翻译" Click="OnPasteAndTranslate" />
+                    <Button Style="{StaticResource IslandSmallButton}" Content="&#xE8C8;" Margin="2,0,8,0"
+                            ToolTip="复制译文" Click="OnCopyResult" />
+                    <Button x:Name="TranslateButton" Style="{StaticResource IslandPillButton}"
+                            Content="翻译" Click="OnTranslate" />
+                </StackPanel>
+            </Grid>
+
+            <Border Grid.Row="2" CornerRadius="10" Background="{StaticResource IslandSurface}" Padding="8,6">
+                <TextBox x:Name="Output" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0"
+                         Background="Transparent" Foreground="{StaticResource IslandForeground}"
+                         SelectionBrush="{StaticResource IslandAccent}" FontSize="13"
+                         ScrollViewer.VerticalScrollBarVisibility="Hidden" />
+            </Border>
+        </Grid>
+
+        <!-- 首次使用：填写 API Key -->
+        <StackPanel x:Name="KeySetup" VerticalAlignment="Center" Visibility="Collapsed">
+            <TextBlock Text="AI 翻译使用 Claude，需要一个 Anthropic API Key" FontSize="13"
+                       HorizontalAlignment="Center" />
+            <TextBlock FontSize="11" Margin="0,4,0,10" HorizontalAlignment="Center"
+                       Foreground="{StaticResource IslandTertiary}"
+                       Text="Key 用 Windows 加密保存在本机，也可以设置环境变量 ANTHROPIC_API_KEY" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox x:Name="KeyInput" Style="{StaticResource IslandTextBox}" Height="32"
+                         Tag="sk-ant-..." KeyDown="OnKeyInputKeyDown" />
+                <Button Grid.Column="1" Margin="8,0,0,0" Style="{StaticResource IslandPillButton}"
+                        Content="保存" Click="OnSaveKey" />
+            </Grid>
+            <TextBlock x:Name="KeyError" FontSize="11" Margin="0,6,0,0" HorizontalAlignment="Center"
+                       Foreground="#FFFF6961" Visibility="Collapsed" />
+        </StackPanel>
+    </Grid>
+</UserControl>

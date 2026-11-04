@@ -1,0 +1,139 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: "1"
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # 打了 v1.2.3 标签就用 1.2.3 作为版本号，否则用项目文件里的版本
+      - name: Version
+        id: version
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $version = $env:GITHUB_REF_NAME.Substring(1)
+          } else {
+            $version = ([xml](Get-Content src/Island/Island.csproj)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $version"
+
+      - name: Build
+        run: dotnet build Island.sln -c Release -warnaserror -p:Version=${{ steps.version.outputs.version }}
+
+      - name: Unit tests
+        run: dotnet test Island.sln -c Release --no-build --logger "console;verbosity=normal"
+        env:
+          ISLAND_DATA_DIR: ${{ runner.temp }}\island-test-data
+
+      - name: Publish
+        shell: pwsh
+        run: |
+          $common = @('-c', 'Release', "-p:Version=${{ steps.version.outputs.version }}",
+                      '-p:PublishSingleFile=true', '-p:IncludeNativeLibrariesForSelfExtract=true',
+                      '-p:DebugType=None', '-p:DebugSymbols=false')
+          # 自带运行时：下载即用，不需要安装 .NET
+          dotnet publish src/Island/Island.csproj -r win-x64 --self-contained true -p:EnableCompressionInSingleFile=true @common -o dist/win-x64
+          dotnet publish src/Island/Island.csproj -r win-arm64 --self-contained true -p:EnableCompressionInSingleFile=true @common -o dist/win-arm64
+          # 依赖系统已安装的 .NET 8 桌面运行时：体积小
+          dotnet publish src/Island/Island.csproj -r win-x64 --self-contained false @common -o dist/win-x64-framework
+          Get-ChildItem dist -Recurse -File | Format-Table FullName, @{ n = 'MB'; e = { [math]::Round($_.Length / 1MB, 1) } }
+
+      # 在真实 Windows 桌面上启动发布出来的 exe，走一遍所有界面
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'smoke'
+          $env:ISLAND_DATA_DIR = Join-Path $env:RUNNER_TEMP 'smoke-data'
+          $p = Start-Process -FilePath dist/win-x64/Island.exe -ArgumentList '--smoke-test', $out -PassThru
+          $null = $p.Handle  # 让 PowerShell 保留进程句柄，之后才能读到退出码
+          $finished = $p.WaitForExit(150000)
+          if (-not $finished) { $p.Kill() }
+
+          Write-Host '===== report.txt ====='
+          Get-Content (Join-Path $out 'report.txt') -ErrorAction SilentlyContinue
+          Write-Host '===== island.log ====='
+          Get-Content (Join-Path $env:ISLAND_DATA_DIR 'island.log') -ErrorAction SilentlyContinue
+
+          if (-not $finished) { throw 'Smoke test timed out' }
+          if ($p.ExitCode -ne 0) { throw "Smoke test failed with exit code $($p.ExitCode)" }
+
+      - name: Upload smoke test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test
+          path: ${{ runner.temp }}/smoke/
+          if-no-files-found: ignore
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          New-Item -ItemType Directory -Force packages | Out-Null
+          Compress-Archive -Path dist/win-x64/Island.exe -DestinationPath "packages/Island-$v-win-x64.zip"
+          Compress-Archive -Path dist/win-arm64/Island.exe -DestinationPath "packages/Island-$v-win-arm64.zip"
+          Compress-Archive -Path dist/win-x64-framework/Island.exe -DestinationPath "packages/Island-$v-win-x64-framework-dependent.zip"
+          Get-ChildItem packages | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding utf8 packages/SHA256SUMS.txt
+          Get-Content packages/SHA256SUMS.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Island-${{ steps.version.outputs.version }}
+          path: packages/
+
+  # 推送 v* 标签时，把构建产物发布成 GitHub Release
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: Island-*
+          path: packages
+          merge-multiple: true
+
+      - name: Release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          # 取 CHANGELOG.md 里对应版本的那一节
+          awk -v v="$version" '
+            /^## / { if (found) exit; if (index($0, "[" v "]")) { found = 1; next } }
+            found { print }
+          ' CHANGELOG.md > notes.md
+          if [ ! -s notes.md ]; then echo "Island $version" > notes.md; fi
+          cat notes.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Island ${{ github.ref_name }}
+          body_path: notes.md
+          files: packages/*
+          prerelease: ${{ contains(github.ref_name, '-') }}

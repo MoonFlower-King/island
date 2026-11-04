@@ -1,0 +1,279 @@
+<Window x:Class="Island.Views.IslandWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:panels="clr-namespace:Island.Views.Panels"
+        Title="Island"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="{x:Null}"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        ShowActivated="False"
+        Topmost="True"
+        SnapsToDevicePixels="True"
+        UseLayoutRounding="True"
+        TextOptions.TextFormattingMode="Display"
+        FontFamily="{StaticResource IslandFont}"
+        Foreground="{StaticResource IslandForeground}"
+        PreviewKeyDown="OnWindowPreviewKeyDown"
+        Deactivated="OnWindowDeactivated">
+
+    <!--
+      整个窗口是透明的，只有中间的胶囊是实心的。
+      分层窗口（AllowsTransparency）里完全透明的像素不接收鼠标，点击会直接落到下面的窗口上。
+    -->
+    <Grid x:Name="Root">
+
+        <!--
+          顶部热区：鼠标“撞”到屏幕顶端时也能展开（胶囊离顶端有几像素空隙）。
+          几乎透明（Alpha=1）但能接收鼠标；只有很窄的一条，不影响下面的窗口。
+        -->
+        <Border x:Name="HotZone"
+                HorizontalAlignment="Center" VerticalAlignment="Top"
+                Width="200" Height="6"
+                Background="#01000000"
+                AllowDrop="True"
+                MouseEnter="OnIslandMouseEnter"
+                MouseLeave="OnIslandMouseLeave"
+                DragEnter="OnIslandDragOver"
+                DragOver="OnIslandDragOver"
+                DragLeave="OnIslandDragLeave"
+                Drop="OnIslandDrop" />
+
+        <Grid x:Name="CapsuleHost"
+              HorizontalAlignment="Center"
+              VerticalAlignment="Top"
+              Width="140" Height="34"
+              AllowDrop="True"
+              MouseEnter="OnIslandMouseEnter"
+              MouseLeave="OnIslandMouseLeave"
+              MouseLeftButtonUp="OnCapsuleClick"
+              PreviewMouseLeftButtonDown="OnCapsulePreviewMouseDown"
+              DragEnter="OnIslandDragOver"
+              DragOver="OnIslandDragOver"
+              DragLeave="OnIslandDragLeave"
+              Drop="OnIslandDrop">
+
+            <Grid.ContextMenu>
+                <ContextMenu x:Name="CapsuleMenu" Closed="OnContextMenuClosed">
+                    <MenuItem Header="演示：弹出一条通知" Click="OnDemoNotification" />
+                    <MenuItem x:Name="PersistClipboardMenu" Header="保存剪贴板历史到磁盘"
+                              IsCheckable="True" Click="OnTogglePersistClipboard" />
+                    <MenuItem x:Name="StartupMenu" Header="开机自动启动"
+                              IsCheckable="True" Click="OnToggleStartup" />
+                    <MenuItem Header="打开数据文件夹" Click="OnOpenDataFolder" />
+                    <Separator />
+                    <MenuItem Header="退出" Click="OnExit" />
+                </ContextMenu>
+            </Grid.ContextMenu>
+
+            <!-- 阴影单独放一层，避免 Effect 影响文字渲染 -->
+            <Border x:Name="ShadowLayer"
+                    Background="{StaticResource IslandBackground}"
+                    CornerRadius="17">
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="3" Direction="270"
+                                      Opacity="0.35" Color="Black" RenderingBias="Performance" />
+                </Border.Effect>
+            </Border>
+
+            <Border x:Name="Capsule"
+                    Background="{StaticResource IslandBackground}"
+                    CornerRadius="17"
+                    SizeChanged="OnCapsuleSizeChanged">
+
+                <Grid>
+                    <!-- 待机：只显示时间 -->
+                    <Grid x:Name="IdleView">
+                        <TextBlock x:Name="IdleClock"
+                                   Text="00:00"
+                                   FontSize="14" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Grid>
+
+                    <!-- 紧凑（通用）：左边指示点，右边信息。供以后的计时器等模块使用 -->
+                    <Grid x:Name="CompactView" Opacity="0" IsHitTestVisible="False" Margin="14,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Ellipse x:Name="CompactDot" Width="10" Height="10" Fill="{StaticResource IslandGreen}"
+                                 VerticalAlignment="Center" RenderTransformOrigin="0.5,0.5">
+                            <Ellipse.RenderTransform>
+                                <ScaleTransform x:Name="CompactDotScale" />
+                            </Ellipse.RenderTransform>
+                        </Ellipse>
+                        <TextBlock x:Name="CompactTitle" Grid.Column="1" Margin="10,0"
+                                   Text="正在进行的活动"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                        <TextBlock x:Name="CompactClock" Grid.Column="2"
+                                   Text="00:00"
+                                   FontSize="13"
+                                   Foreground="{StaticResource IslandSecondary}"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+
+                    <!-- 紧凑（音乐）：封面 + 歌名 + 律动条 -->
+                    <Grid x:Name="MediaCompactView" Opacity="0" IsHitTestVisible="False" Margin="8,0,14,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Border x:Name="MediaCompactArt" Width="24" Height="24" CornerRadius="7"
+                                Background="#FF2C2C2E" VerticalAlignment="Center">
+                            <TextBlock x:Name="MediaCompactArtPlaceholder" Text="&#xE8D6;"
+                                       FontFamily="{StaticResource IconFont}" FontSize="12"
+                                       Foreground="{StaticResource IslandSecondary}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <TextBlock x:Name="MediaCompactTitle" Grid.Column="1" Margin="10,0"
+                                   FontSize="13" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis"
+                                   VerticalAlignment="Center" />
+                        <StackPanel x:Name="Equalizer" Grid.Column="2" Orientation="Horizontal"
+                                    Height="16" VerticalAlignment="Center">
+                            <Rectangle x:Name="EqBar1" Style="{StaticResource EqualizerBar}" Height="16" />
+                            <Rectangle x:Name="EqBar2" Style="{StaticResource EqualizerBar}" Height="16" />
+                            <Rectangle x:Name="EqBar3" Style="{StaticResource EqualizerBar}" Height="16" />
+                            <Rectangle x:Name="EqBar4" Style="{StaticResource EqualizerBar}" Height="16" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 通知：图标 + 标题 + 正文 -->
+                    <Grid x:Name="NotificationView" Opacity="0" IsHitTestVisible="False" Margin="14,0,20,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Width="40" Height="40" CornerRadius="20" Background="{StaticResource IslandAccent}"
+                                VerticalAlignment="Center">
+                            <TextBlock x:Name="NotificationIcon" Text="🔔" FontSize="18"
+                                       FontFamily="Segoe UI Emoji"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                            <TextBlock x:Name="NotificationTitle" Text="通知"
+                                       FontSize="14" FontWeight="SemiBold"
+                                       TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="NotificationBody" Text=""
+                                       FontSize="12" Margin="0,2,0,0"
+                                       Foreground="{StaticResource IslandSecondary}"
+                                       TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- 展开：顶部功能标签 + 内容区 -->
+                    <Grid x:Name="ExpandedView" Opacity="0" IsHitTestVisible="False" Margin="16,12,16,14">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <Grid>
+                            <StackPanel Orientation="Horizontal">
+                                <RadioButton x:Name="TabMusic" Style="{StaticResource IslandTab}" Content="&#xE8D6;"
+                                             Tag="Music" ToolTip="音乐" Checked="OnTabChecked" />
+                                <RadioButton x:Name="TabTodo" Style="{StaticResource IslandTab}" Content="&#xE762;"
+                                             Tag="Todo" ToolTip="待办" Checked="OnTabChecked" />
+                                <RadioButton x:Name="TabClipboard" Style="{StaticResource IslandTab}" Content="&#xE77F;"
+                                             Tag="Clipboard" ToolTip="剪贴板历史" Checked="OnTabChecked" />
+                                <RadioButton x:Name="TabShelf" Style="{StaticResource IslandTab}" Content="&#xE8B7;"
+                                             Tag="Shelf" ToolTip="文件中转站" Checked="OnTabChecked" />
+                                <RadioButton x:Name="TabTranslate" Style="{StaticResource IslandTab}" Content="&#xE8C1;"
+                                             Tag="Translate" ToolTip="AI 翻译" Checked="OnTabChecked" />
+                                <RadioButton x:Name="TabMonitor" Style="{StaticResource IslandTab}" Content="&#xE9D9;"
+                                             Tag="Monitor" ToolTip="系统监控" Checked="OnTabChecked" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                <TextBlock x:Name="ExpandedDate" FontSize="11" Margin="0,0,8,0"
+                                           Foreground="{StaticResource IslandTertiary}" VerticalAlignment="Center" />
+                                <TextBlock x:Name="ExpandedClock" Text="00:00" FontSize="14" FontWeight="SemiBold"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Grid x:Name="PanelHost" Grid.Row="1" Margin="0,10,0,0">
+
+                            <!-- 音乐 -->
+                            <Grid x:Name="MusicPanel">
+                                <Grid x:Name="MediaPlayer" Visibility="Collapsed">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+
+                                    <Grid Margin="4,6,4,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="MediaExpandedArt" Width="72" Height="72" CornerRadius="14"
+                                                Background="#FF2C2C2E">
+                                            <TextBlock x:Name="MediaExpandedArtPlaceholder" Text="&#xE8D6;"
+                                                       FontFamily="{StaticResource IconFont}" FontSize="26"
+                                                       Foreground="{StaticResource IslandSecondary}"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock x:Name="MediaTitle" FontSize="16" FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock x:Name="MediaArtist" FontSize="13" Margin="0,2,0,0"
+                                                       Foreground="{StaticResource IslandSecondary}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock x:Name="MediaSource" FontSize="11" Margin="0,3,0,0"
+                                                       Foreground="{StaticResource IslandTertiary}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                    </Grid>
+
+                                    <Grid x:Name="MediaTimeline" Grid.Row="1" Margin="4,16,4,0">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Border x:Name="ProgressTrack" Height="4" CornerRadius="2" Background="#33FFFFFF"
+                                                SizeChanged="OnProgressTrackSizeChanged">
+                                            <Border x:Name="ProgressFill" HorizontalAlignment="Left" Width="0"
+                                                    CornerRadius="2" Background="{StaticResource IslandGreen}" />
+                                        </Border>
+                                        <TextBlock x:Name="MediaPosition" Grid.Row="1" Margin="0,4,0,0"
+                                                   FontSize="11" Foreground="{StaticResource IslandSecondary}"
+                                                   HorizontalAlignment="Left" Text="0:00" />
+                                        <TextBlock x:Name="MediaDuration" Grid.Row="1" Margin="0,4,0,0"
+                                                   FontSize="11" Foreground="{StaticResource IslandSecondary}"
+                                                   HorizontalAlignment="Right" Text="0:00" />
+                                    </Grid>
+
+                                    <StackPanel Grid.Row="2" Orientation="Horizontal"
+                                                HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Button x:Name="PreviousButton" Style="{StaticResource IslandIconButton}"
+                                                Content="&#xE892;" ToolTip="上一首" Click="OnPreviousClick" />
+                                        <Button x:Name="PlayPauseButton" Style="{StaticResource IslandIconButton}"
+                                                Content="&#xE768;" FontSize="20" Width="52" Margin="12,0"
+                                                ToolTip="播放/暂停" Click="OnPlayPauseClick" />
+                                        <Button x:Name="NextButton" Style="{StaticResource IslandIconButton}"
+                                                Content="&#xE893;" ToolTip="下一首" Click="OnNextClick" />
+                                    </StackPanel>
+                                </Grid>
+
+                                <TextBlock x:Name="MusicEmpty" Style="{StaticResource IslandEmptyText}"
+                                           Text="没有正在播放的音乐&#x0a;在任意播放器里放首歌试试" />
+                            </Grid>
+
+                            <panels:TodoPanel x:Name="TodoPanel" Visibility="Collapsed" />
+                            <panels:ClipboardPanel x:Name="ClipboardPanel" Visibility="Collapsed" />
+                            <panels:ShelfPanel x:Name="ShelfPanel" Visibility="Collapsed" />
+                            <panels:TranslatePanel x:Name="TranslatePanel" Visibility="Collapsed" />
+                            <panels:MonitorPanel x:Name="MonitorPanel" Visibility="Collapsed" />
+                        </Grid>
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</Window>
