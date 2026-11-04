@@ -9,6 +9,9 @@ use std::sync::Arc;
 
 use windows::Win32::Foundation::{GENERIC_WRITE, RECT};
 use windows::Win32::Graphics::Gdi::*;
+use windows::Win32::Graphics::Gdi::{
+    GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
+};
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
@@ -19,10 +22,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{HSTRING, Result};
 
 use island::color::{DARK, LIGHT, Rgb};
-use island::metrics::{IslandState, Metrics};
+use island::metrics::{Edge, IslandState, Metrics};
 
 use super::app::{App, TIMER_SMOKE, tick};
 use super::media::{Art, Snapshot};
+use super::views::{Hit, Tab};
 
 pub struct Smoke {
     dir: PathBuf,
@@ -173,7 +177,9 @@ fn snapshot(
         at(w / 2, (10.0 * s) as u32)
     ));
     // 粗略的亮度图，直接看日志就知道屏幕上画了什么：# 纯黑  + 很暗  : 暗  . 中等  空格 亮
-    for row in 0..20u32 {
+    // ISLAND_SMOKE_MAPS=1 时打印亮度图（排查绘制问题用）
+    let maps = std::env::var_os("ISLAND_SMOKE_MAPS").is_some();
+    for row in (0..20u32).filter(|_| maps) {
         let y = row * h / 20 + h / 40;
         let line: String = (0..62u32)
             .map(|col| {
@@ -196,7 +202,7 @@ fn snapshot(
         smoke.note(&format!("{name}：保存截图失败 {e}"));
     }
     let (m, lx, ly) = sample?;
-    let r = m.rect();
+    let r = m.frame(app.settings.dock);
     let (x, y) = (((r.x + lx) * s) as u32, ((r.y + ly) * s) as u32);
     if x >= w || y >= h {
         return None;
@@ -220,11 +226,7 @@ fn fake_art() -> Arc<Art> {
             pixels.extend_from_slice(&[(x * 3) as u8, (y * 2) as u8, 200, 255]);
         }
     }
-    Arc::new(Art {
-        width: size,
-        height: size,
-        pixels,
-    })
+    Arc::new(Art::new(size, size, pixels))
 }
 
 fn fake_media(playing: bool) -> Snapshot {
@@ -238,6 +240,8 @@ fn fake_media(playing: bool) -> Snapshot {
         taken_at: tick(),
         can_previous: true,
         can_next: true,
+        app: "冒烟测试".into(),
+        known_duration: None,
         accent: island::color::dominant(&art.pixels),
         art: Some(art),
     }
@@ -246,6 +250,31 @@ fn fake_media(playing: bool) -> Snapshot {
 fn reschedule(app: &App, ms: u32) {
     unsafe {
         SetTimer(Some(app.hwnd), TIMER_SMOKE, ms, None);
+    }
+}
+
+/// 窗口是否贴在主屏幕工作区的对应位置。
+fn placed_at(app: &App, edge: Edge) -> bool {
+    use windows::Win32::Foundation::POINT;
+    unsafe {
+        let mut r = RECT::default();
+        if GetWindowRect(app.hwnd, &mut r).is_err() {
+            return false;
+        }
+        let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let _ = GetMonitorInfoW(monitor, &mut info);
+        let work = info.rcWork;
+        let center_x = (work.left + work.right) / 2 - (r.left + r.right) / 2;
+        let center_y = (work.top + work.bottom) / 2 - (r.top + r.bottom) / 2;
+        match edge {
+            Edge::Top => r.top == work.top && center_x.abs() <= 1,
+            Edge::Left => r.left == work.left && center_y.abs() <= 1,
+            Edge::Right => r.right == work.right && center_y.abs() <= 1,
+        }
     }
 }
 
@@ -258,52 +287,58 @@ pub fn step(app: &mut App) {
     let n = smoke.step;
     smoke.step += 1;
     let mut next = settle;
+    let expanded = IslandState::Expanded.metrics(app.settings.dock);
 
     match n {
         0 => {
             smoke.check(unsafe { IsWindowVisible(app.hwnd) }.as_bool(), "窗口已显示");
             smoke.check(app.state == IslandState::Idle, "启动后是待机细线");
+            smoke.check(placed_at(app, Edge::Top), "窗口在屏幕顶部正中");
             snapshot(app, &mut smoke, "01-idle", None);
             app.set_media(Some(fake_media(true)));
         }
         1 => {
             smoke.check(app.state == IslandState::Compact, "播放音乐时显示音乐胶囊");
             snapshot(app, &mut smoke, "02-compact", None);
-            app.set_pinned(true);
+            app.show_level(island::level::volume_glyph(0.42, false), 0.42, "42%".into());
+            next = 600;
         }
         2 => {
+            smoke.check(app.state == IslandState::Level, "调音量时显示音量提示");
+            snapshot(app, &mut smoke, "03-level", None);
+            app.hide_level();
+            app.set_pinned(true);
+        }
+        3 => {
             smoke.check(app.state == IslandState::Expanded, "置顶后展开");
-            snapshot(app, &mut smoke, "03-expanded", None);
+            snapshot(app, &mut smoke, "04-expanded-music", None);
             app.set_palette(LIGHT);
             next = 500;
         }
-        3 => {
+        4 => {
             // 浅色主题下在面板底部空白处取样：应该是浅色背景，说明合成内容真的显示在屏幕上
             let c = snapshot(
                 app,
                 &mut smoke,
-                "04-expanded-light",
-                Some((IslandState::Expanded.metrics(), 220.0, 244.0)),
+                "05-expanded-light",
+                Some((expanded, 220.0, 250.0)),
             );
-            match c {
-                Some(c) => smoke.check(
-                    near(c, LIGHT.background, 16),
-                    &format!(
-                        "屏幕上画出了浅色胶囊（取样 #{:02X}{:02X}{:02X}）",
-                        c.r, c.g, c.b
-                    ),
+            smoke.check(
+                c.is_some_and(|c| near(c, LIGHT.background, 16)),
+                &format!(
+                    "屏幕上画出了浅色胶囊（取样 {}）",
+                    c.map(island::color::to_hex).unwrap_or_default()
                 ),
-                None => smoke.check(false, "屏幕上画出了浅色胶囊（没有取到样）"),
-            }
+            );
             app.set_interactive(true);
             next = 400;
         }
-        4 => {
+        5 => {
             let c = snapshot(
                 app,
                 &mut smoke,
-                "05-expanded-interactive",
-                Some((IslandState::Expanded.metrics(), 220.0, 244.0)),
+                "06-expanded-interactive",
+                Some((expanded, 220.0, 250.0)),
             );
             smoke.check(
                 c.is_some_and(|c| near(c, LIGHT.background, 16)),
@@ -311,40 +346,124 @@ pub fn step(app: &mut App) {
             );
             app.set_interactive(false);
             app.set_palette(DARK);
-            app.set_media(Some(fake_media(false)));
+            app.clips
+                .add("冒烟测试：第一条复制的文字", "2026-01-01T09:00:00");
+            app.clips.add(
+                "冒烟测试：第二条，比较长的一段文字用来测试省略号是否正常显示，后面还有很多很多字",
+                "2026-01-01T09:05:00",
+            );
+            app.set_tab(Tab::Clipboard);
             next = 400;
         }
-        5 => {
-            snapshot(app, &mut smoke, "06-paused", None);
-            app.set_pinned(false);
-            app.set_media(None);
-        }
         6 => {
+            snapshot(app, &mut smoke, "07-tab-clipboard", None);
+            smoke.check(
+                app.has_target(|h| matches!(h, Hit::ClipItem(_))),
+                "剪贴板标签列出了记录",
+            );
+            app.set_tab(Tab::Monitor);
+            next = 2200;
+        }
+        7 => {
+            snapshot(app, &mut smoke, "08-tab-monitor", None);
+            smoke.check(
+                app.monitor_sample().is_some_and(|s| s.memory > 0.0),
+                "系统监控有采样数据",
+            );
+            app.set_tab(Tab::Appearance);
+            next = 400;
+        }
+        8 => {
+            snapshot(app, &mut smoke, "09-tab-appearance", None);
+            smoke.check(
+                app.has_target(|h| matches!(h, Hit::Dock(_))),
+                "外观标签有停靠位置选项",
+            );
+            // 放音乐时也收成细线
+            app.activate(Hit::MediaStyle(true));
+            app.set_tab(Tab::Music);
+            app.set_pinned(false);
+        }
+        9 => {
             smoke.check(
                 app.state == IslandState::Idle,
-                "取消置顶、没有音乐后回到待机",
+                "放音乐时也收成细线：播放中仍是细线",
             );
-            snapshot(app, &mut smoke, "07-idle-again", None);
-            next = 1500;
-            smoke.step = 50;
+            // 细线露出来的那一截应该是封面主题色
+            let line = IslandState::Idle.metrics(Edge::Top);
+            let c = snapshot(
+                app,
+                &mut smoke,
+                "10-line-tinted",
+                Some((line, line.width / 2.0, line.height - 2.0)),
+            );
+            smoke.check(
+                c.is_some_and(|c| near(c, app.accent_color(), 40)),
+                &format!(
+                    "细线染成主题色（取样 {}，期望 {}）",
+                    c.map(island::color::to_hex).unwrap_or_default(),
+                    island::color::to_hex(app.accent_color())
+                ),
+            );
+            app.activate(Hit::MediaStyle(false));
+            app.set_dock(Edge::Left);
         }
-        // 再等一会儿看是不是已经完全缩回细线
-        50 => {
-            snapshot(app, &mut smoke, "07b-idle-later", None);
-            smoke.step = 7;
+        10 => {
+            smoke.check(placed_at(app, Edge::Left), "停靠左侧：窗口贴着屏幕左边居中");
+            snapshot(app, &mut smoke, "11-dock-left", None);
+            app.set_pinned(true);
+        }
+        11 => {
+            smoke.check(app.state == IslandState::Expanded, "左侧展开");
+            snapshot(app, &mut smoke, "12-dock-left-expanded", None);
+            app.set_pinned(false);
+            app.set_dock(Edge::Right);
+        }
+        12 => {
+            smoke.check(
+                placed_at(app, Edge::Right),
+                "停靠右侧：窗口贴着屏幕右边居中",
+            );
+            snapshot(app, &mut smoke, "13-dock-right", None);
+            app.set_pinned(true);
+        }
+        13 => {
+            snapshot(app, &mut smoke, "14-dock-right-expanded", None);
+            app.set_pinned(false);
+            app.set_dock(Edge::Top);
+            app.set_media(None);
+        }
+        14 => {
+            smoke.check(
+                app.state == IslandState::Idle && placed_at(app, Edge::Top),
+                "回到顶部、没有音乐后是待机细线",
+            );
+            snapshot(app, &mut smoke, "15-idle-again", None);
+            // 待机样式换成“显示时间”
+            app.activate(Hit::IdleStyle(false));
+            smoke.step = 60;
+        }
+        60 => {
+            smoke.check(
+                app.state == IslandState::Idle && !app.settings.idle_as_line,
+                "待机样式：显示时间",
+            );
+            snapshot(app, &mut smoke, "15b-idle-clock", None);
+            app.activate(Hit::IdleStyle(true));
+            smoke.step = 15;
             next = 35;
         }
         // 快速反复展开收起：动画应能被打断，最后收敛到待机
-        7..=26 => {
+        15..=34 => {
             app.set_pinned(n % 2 == 1);
             next = 35;
         }
-        27 => {
+        35 => {
             app.set_pinned(false);
         }
-        28 => {
+        36 => {
             smoke.check(app.state == IslandState::Idle, "快速切换后回到待机");
-            snapshot(app, &mut smoke, "08-after-stress", None);
+            snapshot(app, &mut smoke, "16-after-stress", None);
 
             let mut mem = PROCESS_MEMORY_COUNTERS_EX::default();
             let ok = unsafe {

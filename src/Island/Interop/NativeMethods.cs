@@ -15,9 +15,6 @@ internal static class NativeMethods
     /// <summary>点击时不抢占焦点，避免打断用户正在输入的窗口。</summary>
     public const long WS_EX_NOACTIVATE = 0x08000000L;
 
-    /// <summary>鼠标完全穿透（暂未使用，留给“全屏时让开”之类的功能）。</summary>
-    public const long WS_EX_TRANSPARENT = 0x00000020L;
-
     public const long WS_EX_APPWINDOW = 0x00040000L;
 
     public const int WM_MOUSEACTIVATE = 0x0021;

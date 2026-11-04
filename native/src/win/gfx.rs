@@ -3,6 +3,7 @@
 //! 岛的形状、阴影和所有动画都交给系统合成器，在独立的合成线程上逐帧运行，不占界面线程；
 //! Direct2D 只在内容变化时（换歌、整分钟、鼠标移到按钮上）把文字和图标画进一张合成表面。
 
+use std::cell::RefCell;
 use windows::Foundation::Size;
 use windows::Graphics::DirectX::{DirectXAlphaMode, DirectXPixelFormat};
 use windows::UI::Composition::{CompositionDrawingSurface, CompositionGraphicsDevice, Compositor};
@@ -16,6 +17,7 @@ use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::System::WinRT::Composition::{
     ICompositionDrawingSurfaceInterop, ICompositorInterop,
 };
+
 use windows::core::{HSTRING, Interface, Result, w};
 use windows_numerics::Matrix3x2;
 
@@ -31,6 +33,20 @@ pub struct Gfx {
     pub text_font: HSTRING,
     /// 显卡是微软的软件渲染器（没有显卡的虚拟机、远程桌面）。这时一些合成效果（阴影）不可靠。
     pub software: bool,
+    /// 文字格式缓存：界面上只有十几种字号 / 字重组合，不必每画一段文字就新建一次。
+    formats: RefCell<Vec<(FormatKey, IDWriteTextFormat)>>,
+    /// 共用的纯色画刷，每次填充前改颜色。D2D 资源属于设备，可以跨多次绘制复用。
+    brush: RefCell<Option<ID2D1SolidColorBrush>>,
+    /// 最近一张封面的位图（按封面编号），播放中每秒重画进度时不用重新上传像素。
+    image: RefCell<Option<(u64, ID2D1Bitmap1)>>,
+}
+
+#[derive(Clone, PartialEq)]
+struct FormatKey {
+    family: HSTRING,
+    size_bits: u32,
+    weight: i32,
+    align: Align,
 }
 
 impl Gfx {
@@ -63,6 +79,9 @@ impl Gfx {
             icon_font,
             text_font,
             software,
+            formats: RefCell::new(Vec::new()),
+            brush: RefCell::new(None),
+            image: RefCell::new(None),
         })
     }
 
@@ -192,7 +211,54 @@ fn rect_f(r: Rect) -> D2D_RECT_F {
 
 impl Painter<'_> {
     pub fn brush(&self, c: D2D1_COLOR_F) -> Result<ID2D1SolidColorBrush> {
-        unsafe { self.dc.CreateSolidColorBrush(&c, None) }
+        let mut cached = self.gfx.brush.borrow_mut();
+        if let Some(b) = cached.as_ref() {
+            unsafe { b.SetColor(&c) };
+            return Ok(b.clone());
+        }
+        let b = unsafe { self.dc.CreateSolidColorBrush(&c, None)? };
+        *cached = Some(b.clone());
+        Ok(b)
+    }
+
+    fn text_format(&self, style: &TextStyle) -> Result<IDWriteTextFormat> {
+        let key = FormatKey {
+            family: style.family.clone(),
+            size_bits: style.size.to_bits(),
+            weight: style.weight.0,
+            align: style.align,
+        };
+        if let Some((_, f)) = self.gfx.formats.borrow().iter().find(|(k, _)| *k == key) {
+            return Ok(f.clone());
+        }
+        let format = unsafe {
+            let format = self.gfx.dwrite.CreateTextFormat(
+                style.family,
+                None,
+                style.weight,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                style.size,
+                w!("zh-CN"),
+            )?;
+            format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
+            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
+            format.SetTextAlignment(match style.align {
+                Align::Leading => DWRITE_TEXT_ALIGNMENT_LEADING,
+                Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
+                Align::Trailing => DWRITE_TEXT_ALIGNMENT_TRAILING,
+            })?;
+            let trimming = DWRITE_TRIMMING {
+                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
+                delimiter: 0,
+                delimiterCount: 0,
+            };
+            let sign = self.gfx.dwrite.CreateEllipsisTrimmingSign(&format)?;
+            format.SetTrimming(&trimming, &sign)?;
+            format
+        };
+        self.gfx.formats.borrow_mut().push((key, format.clone()));
+        Ok(format)
     }
 
     pub fn fill_round(&self, r: Rect, radius: f32, c: D2D1_COLOR_F) -> Result<()> {
@@ -230,31 +296,8 @@ impl Painter<'_> {
         if s.is_empty() {
             return Ok(());
         }
+        let format = self.text_format(style)?;
         unsafe {
-            let format = self.gfx.dwrite.CreateTextFormat(
-                style.family,
-                None,
-                style.weight,
-                DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                style.size,
-                w!("zh-CN"),
-            )?;
-            format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP)?;
-            format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
-            format.SetTextAlignment(match style.align {
-                Align::Leading => DWRITE_TEXT_ALIGNMENT_LEADING,
-                Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
-                Align::Trailing => DWRITE_TEXT_ALIGNMENT_TRAILING,
-            })?;
-            let trimming = DWRITE_TRIMMING {
-                granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER,
-                delimiter: 0,
-                delimiterCount: 0,
-            };
-            let sign = self.gfx.dwrite.CreateEllipsisTrimmingSign(&format)?;
-            format.SetTrimming(&trimming, &sign)?;
-
             let wide: Vec<u16> = s.encode_utf16().collect();
             let brush = self.brush(c)?;
             self.dc.DrawText(
@@ -271,9 +314,8 @@ impl Painter<'_> {
 
     /// 图标字体里的一个字形，居中画在 `r` 里。
     pub fn icon(&self, glyph: char, r: Rect, size: f32, c: D2D1_COLOR_F) -> Result<()> {
-        let family = self.gfx.icon_font.clone();
         let style = TextStyle {
-            family: &family,
+            family: &self.gfx.icon_font,
             size,
             weight: DWRITE_FONT_WEIGHT_NORMAL,
             align: Align::Center,
@@ -281,9 +323,10 @@ impl Painter<'_> {
         self.text(&glyph.to_string(), r, &style, c)
     }
 
-    /// 把 BGRA（预乘）像素画成圆角图片。
+    /// 把 BGRA（预乘）像素画成圆角图片。`id` 相同的图片只上传一次。
     pub fn image(
         &self,
+        id: u64,
         pixels: &[u8],
         width: u32,
         height: u32,
@@ -301,12 +344,26 @@ impl Painter<'_> {
                 bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
                 colorContext: std::mem::ManuallyDrop::new(None),
             };
-            let bitmap = self.dc.CreateBitmap(
-                D2D_SIZE_U { width, height },
-                Some(pixels.as_ptr().cast()),
-                width * 4,
-                &props,
-            )?;
+            let cached = self
+                .gfx
+                .image
+                .borrow()
+                .as_ref()
+                .filter(|(k, _)| *k == id)
+                .map(|(_, b)| b.clone());
+            let bitmap = match cached {
+                Some(b) => b,
+                None => {
+                    let b = self.dc.CreateBitmap(
+                        D2D_SIZE_U { width, height },
+                        Some(pixels.as_ptr().cast()),
+                        width * 4,
+                        &props,
+                    )?;
+                    *self.gfx.image.borrow_mut() = Some((id, b.clone()));
+                    b
+                }
+            };
             let brush_props = D2D1_BITMAP_BRUSH_PROPERTIES1 {
                 extendModeX: D2D1_EXTEND_MODE_CLAMP,
                 extendModeY: D2D1_EXTEND_MODE_CLAMP,

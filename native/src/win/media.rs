@@ -4,7 +4,7 @@
 //! 整理好的快照放进一个共享槽，再 PostMessage 通知界面线程去取。
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
 
 use windows::Foundation::TypedEventHandler;
 use windows::Media::Control::*;
@@ -27,16 +27,34 @@ const ART_SIZE: u32 = 240;
 
 #[derive(Clone, Debug, Default)]
 pub struct Art {
+    /// 每张解码出来的封面一个编号，绘制时据此复用已上传的位图。
+    pub id: u64,
     pub width: u32,
     pub height: u32,
     /// BGRA，预乘 alpha。
     pub pixels: Vec<u8>,
 }
 
+impl Art {
+    pub fn new(width: u32, height: u32, pixels: Vec<u8>) -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        Self {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            width,
+            height,
+            pixels,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
     pub title: String,
     pub artist: String,
+    /// 播放器名字（网易云音乐、Spotify……）。
+    pub app: String,
+    /// 播放器不报告时长时，从别处查到的时长（网易云音乐的本地播放记录），秒。
+    pub known_duration: Option<f64>,
     pub playing: bool,
     /// 拿到快照时的播放位置和总时长（秒）。
     pub position: f64,
@@ -50,6 +68,22 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// 界面上看起来一样（只是进度按时间正常往前走）：不用重画。
+    pub fn looks_same(&self, other: &Snapshot, now: u64) -> bool {
+        self.title == other.title
+            && self.artist == other.artist
+            && self.app == other.app
+            && self.playing == other.playing
+            && self.duration == other.duration
+            && self.known_duration == other.known_duration
+            && self.can_previous == other.can_previous
+            && self.can_next == other.can_next
+            && self.accent == other.accent
+            && self.art.as_ref().map(|a| a.id) == other.art.as_ref().map(|a| a.id)
+            // 拖动了进度条：位置对不上，要重画
+            && (self.position_at(now) - other.position_at(now)).abs() < 1.0
+    }
+
     pub fn position_at(&self, now: u64) -> f64 {
         let p = if self.playing {
             self.position + (now.saturating_sub(self.taken_at)) as f64 / 1000.0
@@ -171,6 +205,12 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
     let timeline = session.GetTimelineProperties()?;
     let controls = playback.Controls()?;
 
+    let app = island::text::friendly_app(
+        &session
+            .SourceAppUserModelId()
+            .map(|s| s.to_string_lossy())
+            .unwrap_or_default(),
+    );
     let title = clean(&props.Title()?.to_string_lossy()).unwrap_or_default();
     let artist = clean(&props.Artist()?.to_string_lossy()).unwrap_or_default();
     let playing = playback.PlaybackStatus()?
@@ -203,14 +243,32 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
                 .and_then(|t| decode_art(&t).ok())
                 .map(std::sync::Arc::new);
             let accent = art.as_ref().and_then(|a| color::dominant(&a.pixels));
-            *ART_CACHE.lock().unwrap() = Some((key, art.clone(), accent));
+            *ART_CACHE.lock().unwrap() = Some((key.clone(), art.clone(), accent));
             (art, accent)
+        }
+    };
+
+    // 网易云音乐不报告时长：去它的本地播放记录里查（只在换歌时查一次）
+    let known_duration = if duration > 0.0 || app != "网易云音乐" {
+        None
+    } else {
+        let mut cache = DURATION_CACHE.lock().unwrap();
+        match cache.as_ref() {
+            Some((k, d)) if *k == key => *d,
+            _ => {
+                let d = netease_history()
+                    .and_then(|json| island::playback::netease_duration(&json, &title, &artist));
+                *cache = Some((key.clone(), d));
+                d
+            }
         }
     };
 
     Ok(Snapshot {
         title,
         artist,
+        app,
+        known_duration,
         playing,
         position,
         duration,
@@ -220,6 +278,20 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
         art,
         accent,
     })
+}
+
+static DURATION_CACHE: Mutex<Option<(String, Option<f64>)>> = Mutex::new(None);
+
+/// 网易云音乐的播放记录：%LOCALAPPDATA%\NetEase\CloudMusic\webdata\file\history。
+fn netease_history() -> Option<String> {
+    let base = std::env::var_os("LOCALAPPDATA")?;
+    let path = std::path::Path::new(&base)
+        .join("NetEase")
+        .join("CloudMusic")
+        .join("webdata")
+        .join("file")
+        .join("history");
+    std::fs::read_to_string(path).ok()
 }
 
 fn filetime_now() -> i64 {
@@ -263,11 +335,7 @@ fn decode_art(reference: &windows::Storage::Streams::IRandomAccessStreamReferenc
         )?;
         let mut pixels = vec![0u8; (size * size * 4) as usize];
         converter.CopyPixels(std::ptr::null(), size * 4, &mut pixels)?;
-        Ok(Art {
-            width: size,
-            height: size,
-            pixels,
-        })
+        Ok(Art::new(size, size, pixels))
     }
 }
 

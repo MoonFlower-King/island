@@ -36,8 +36,6 @@ public partial class IslandWindow
     private bool _equalizerRunning;
     private Color _rawAccent = Color.FromRgb(0x30, 0xD1, 0x58);
 
-    private bool HasMedia => _media is not null;
-
     /// <summary>音乐是否要占用紧凑胶囊：正在播放，或刚暂停不久。</summary>
     private bool MediaWantsCompact => _media is { } m && (m.IsPlaying || _mediaLingering);
 

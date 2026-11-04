@@ -17,6 +17,17 @@ defaults:
     working-directory: native
 
 jobs:
+  # 依赖漏洞扫描：对照 RustSec 漏洞库检查 Cargo.lock
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        run: cargo audit --deny warnings
+
   build:
     runs-on: windows-latest
     steps:

@@ -13,6 +13,10 @@ pub struct Inputs {
     pub hidden: bool,
     /// 有音乐在播放（或者刚暂停，还在停留期内）。
     pub media_active: bool,
+    /// 用户选了“放音乐时也收成细线”。
+    pub media_as_line: bool,
+    /// 正在显示音量 / 亮度提示。
+    pub level: bool,
 }
 
 pub fn resolve(i: Inputs) -> IslandState {
@@ -22,7 +26,10 @@ pub fn resolve(i: Inputs) -> IslandState {
     if i.hovering || i.pinned {
         return IslandState::Expanded;
     }
-    if i.media_active {
+    if i.level {
+        return IslandState::Level;
+    }
+    if i.media_active && !i.media_as_line {
         return IslandState::Compact;
     }
     IslandState::Idle

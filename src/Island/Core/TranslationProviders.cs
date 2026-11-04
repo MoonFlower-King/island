@@ -108,14 +108,37 @@ public static class ApiEndpoint
     public static string Describe(ApiFormat format, string? baseUrl) =>
         format == ApiFormat.Anthropic ? AnthropicSdkBase(baseUrl) + "/v1/messages" : OpenAIChatUrl(baseUrl);
 
-    /// <summary>地址是否像样：必须是 http(s) 的绝对地址。</summary>
+    /// <summary>地址不对时给用户看的提示。</summary>
+    public const string InvalidUrlHint = "地址应该以 https:// 开头（http:// 只能用于本机和局域网）";
+
+    /// <summary>
+    /// 地址是否可用：必须是 https 的绝对地址。http 是明文，API Key 和翻译内容会被路上的人看到，
+    /// 所以只允许本机和局域网地址（Ollama、LM Studio 这类本地服务）用 http。
+    /// </summary>
     public static bool IsValid(string? baseUrl)
     {
         string url = (baseUrl ?? "").Trim();
         if (url.Length == 0) return true; // 留空 = 默认地址
-        return Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) &&
-               (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp) &&
-               !string.IsNullOrEmpty(uri.Host);
+        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) || string.IsNullOrEmpty(uri.Host)) return false;
+        if (uri.Scheme == Uri.UriSchemeHttps) return true;
+        return uri.Scheme == Uri.UriSchemeHttp && IsPrivateHost(uri);
+    }
+
+    /// <summary>本机或局域网里的地址。</summary>
+    private static bool IsPrivateHost(Uri uri)
+    {
+        if (uri.IsLoopback || uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+            uri.Host.EndsWith(".local", StringComparison.OrdinalIgnoreCase))
+            return true;
+        if (!System.Net.IPAddress.TryParse(uri.IdnHost.Trim('[', ']'), out var ip)) return false;
+        if (ip.IsIPv4MappedToIPv6) ip = ip.MapToIPv4();
+        if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6)
+            return ip.IsIPv6LinkLocal || ip.IsIPv6UniqueLocal;
+        byte[] b = ip.GetAddressBytes();
+        return b[0] == 10 ||
+               (b[0] == 172 && b[1] >= 16 && b[1] <= 31) ||
+               (b[0] == 192 && b[1] == 168) ||
+               (b[0] == 169 && b[1] == 254);
     }
 
     /// <summary>本机地址（Ollama、LM Studio 等本地服务）。</summary>

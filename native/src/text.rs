@@ -58,3 +58,67 @@ mod tests {
         assert_eq!(clean(" \t"), None);
     }
 }
+
+/// 网速：`512 B/s`、`2.0 KB/s`、`5.0 MB/s`。
+pub fn speed(bytes_per_second: f64) -> String {
+    let b = bytes_per_second.max(0.0);
+    if b < 1024.0 {
+        format!("{b:.0} B/s")
+    } else if b < 1024.0 * 1024.0 {
+        format!("{:.1} KB/s", b / 1024.0)
+    } else {
+        format!("{:.1} MB/s", b / 1024.0 / 1024.0)
+    }
+}
+
+#[cfg(test)]
+mod speed_tests {
+    #[test]
+    fn speeds() {
+        assert_eq!(super::speed(512.0), "512 B/s");
+        assert_eq!(super::speed(2048.0), "2.0 KB/s");
+        assert_eq!(super::speed(5.0 * 1024.0 * 1024.0), "5.0 MB/s");
+        assert_eq!(super::speed(-1.0), "0 B/s");
+    }
+}
+
+/// SMTC 的 SourceAppUserModelId 形如 "Spotify.exe" 或 "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"，
+/// 转成好读一点的名字（和 WPF 版一致）。
+pub fn friendly_app(aumid: &str) -> String {
+    let mut name = aumid.trim();
+    if let Some(i) = name.rfind('!') {
+        name = &name[i + 1..];
+    }
+    if name.len() > 4 && name[name.len() - 4..].eq_ignore_ascii_case(".exe") {
+        name = &name[..name.len() - 4];
+    }
+    if let Some(i) = name.rfind('.')
+        && i + 1 < name.len()
+    {
+        name = &name[i + 1..];
+    }
+    match name {
+        "cloudmusic" => "网易云音乐".into(),
+        "QQMusic" => "QQ 音乐".into(),
+        "ZuneMusic" => "媒体播放器".into(),
+        "chrome" => "Chrome".into(),
+        "msedge" => "Edge".into(),
+        "firefox" => "Firefox".into(),
+        other => other.into(),
+    }
+}
+
+#[cfg(test)]
+mod app_tests {
+    #[test]
+    fn friendly_names() {
+        use super::friendly_app;
+        assert_eq!(friendly_app("cloudmusic.exe"), "网易云音乐");
+        assert_eq!(friendly_app("Spotify.exe"), "Spotify");
+        assert_eq!(
+            friendly_app("Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"),
+            "媒体播放器"
+        );
+        assert_eq!(friendly_app(""), "");
+    }
+}

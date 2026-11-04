@@ -6,4 +6,5 @@ pub mod log;
 pub mod media;
 pub mod scene;
 pub mod smoke;
+pub mod system;
 pub mod views;

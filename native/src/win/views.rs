@@ -1,68 +1,122 @@
-//! 内容绘制：音乐胶囊和展开面板。只在内容变化时重画（换歌、整分钟、播放中每秒一次、鼠标移到按钮上）。
+//! 内容绘制：音乐胶囊、音量提示和展开面板的各个标签。
+//!
+//! 只在内容变化时重画（换歌、整分钟、播放中每秒一次、鼠标移到按钮上）。
+//! 画的同时登记可点击的区域，布局和点击判断用的是同一份坐标，不会对不上。
 
 use windows::Win32::Graphics::DirectWrite::{
-    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
+    DWRITE_FONT_WEIGHT, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_WEIGHT_SEMI_BOLD,
 };
 use windows::core::{HSTRING, Result};
 
-use island::color::{Palette, Rgb};
-use island::metrics::{COMPACT, EXPANDED, Rect};
-use island::text::{clock, format_duration, weekday_zh};
+use island::clip::Entry;
+use island::color::{self, ACCENT_PRESETS, BACKGROUND_PRESETS, FOREGROUND_PRESETS, Palette, Rgb};
+use island::level;
+use island::metrics::{COMPACT, EXPANDED, Edge, IDLE_CLOCK, LEVEL, Rect};
+use island::settings::{Settings, ThemeMode};
+use island::text::{clock, format_duration, speed, weekday_zh};
 
 use super::gfx::{Align, Painter, TextStyle, color};
 use super::media::Snapshot;
+use super::system::Sample;
 
-/// 展开面板里可以点的东西。
+/// 展开面板的功能标签。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tab {
+    Music,
+    Clipboard,
+    Monitor,
+    Appearance,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 4] = [Tab::Music, Tab::Clipboard, Tab::Monitor, Tab::Appearance];
+
+    /// 和 WPF 版 settings.json 里 LastTab 的取值一致。
+    pub fn name(self) -> &'static str {
+        match self {
+            Tab::Music => "Music",
+            Tab::Clipboard => "Clipboard",
+            Tab::Monitor => "Monitor",
+            Tab::Appearance => "Appearance",
+        }
+    }
+
+    pub fn parse(s: &str) -> Tab {
+        Tab::ALL
+            .into_iter()
+            .find(|t| t.name() == s)
+            .unwrap_or(Tab::Music)
+    }
+
+    fn glyph(self) -> char {
+        match self {
+            Tab::Music => '\u{E8D6}',
+            Tab::Clipboard => '\u{E77F}',
+            Tab::Monitor => '\u{E9D9}',
+            Tab::Appearance => '\u{E790}',
+        }
+    }
+}
+
+/// 可以点的东西。
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Hit {
-    TabMusic,
+    Tab(Tab),
     Pin,
     Previous,
     PlayPause,
     Next,
+    /// 音量条：按下 / 拖动时按横坐标设置音量。
+    Volume,
+    ClipItem(usize),
+    ClipDelete(usize),
+    ClipClear,
+    Theme(ThemeMode),
+    /// 自定义颜色：(0 背景 / 1 文字 / 2 强调色, 第几个色块)
+    Swatch(u8, u8),
+    IdleStyle(bool),
+    MediaStyle(bool),
+    Dock(Edge),
 }
 
-/// 展开面板的布局（相对胶囊左上角，DIP）。
-pub mod layout {
-    use island::metrics::Rect;
-
-    pub const TAB_MUSIC: Rect = Rect::new(16.0, 12.0, 36.0, 28.0);
-    pub const CLOCK: Rect = Rect::new(372.0, 12.0, 52.0, 28.0);
-    pub const WEEKDAY: Rect = Rect::new(334.0, 12.0, 36.0, 28.0);
-    pub const PIN: Rect = Rect::new(304.0, 13.0, 26.0, 26.0);
-
-    pub const ART: Rect = Rect::new(16.0, 56.0, 120.0, 120.0);
-    pub const TITLE: Rect = Rect::new(152.0, 60.0, 272.0, 26.0);
-    pub const ARTIST: Rect = Rect::new(152.0, 88.0, 272.0, 20.0);
-    pub const PREVIOUS: Rect = Rect::new(152.0, 128.0, 40.0, 40.0);
-    pub const PLAY: Rect = Rect::new(200.0, 124.0, 48.0, 48.0);
-    pub const NEXT: Rect = Rect::new(256.0, 128.0, 40.0, 40.0);
-    pub const PROGRESS: Rect = Rect::new(16.0, 196.0, 408.0, 4.0);
-    pub const TIME_LEFT: Rect = Rect::new(16.0, 204.0, 80.0, 18.0);
-    pub const TIME_RIGHT: Rect = Rect::new(344.0, 204.0, 80.0, 18.0);
+/// 一次绘制登记下来的可点区域（相对胶囊左上角）。
+#[derive(Default, Clone)]
+pub struct Targets {
+    items: Vec<(Rect, Hit)>,
 }
 
-/// 鼠标位置（相对胶囊）落在哪个按钮上。没有音乐时播放按钮不可点。
-pub fn hit_test(x: f32, y: f32, has_media: bool) -> Option<Hit> {
-    use layout::*;
-    let targets: [(Rect, Hit, bool); 5] = [
-        (TAB_MUSIC, Hit::TabMusic, true),
-        (PIN, Hit::Pin, true),
-        (PREVIOUS, Hit::Previous, has_media),
-        (PLAY, Hit::PlayPause, has_media),
-        (NEXT, Hit::Next, has_media),
-    ];
-    targets
-        .iter()
-        .find(|(r, _, enabled)| *enabled && r.inflate(2.0).contains(x, y))
-        .map(|(_, h, _)| *h)
+impl Targets {
+    fn add(&mut self, r: Rect, hit: Hit) {
+        self.items.push((r, hit));
+    }
+
+    pub fn hit(&self, x: f32, y: f32) -> Option<Hit> {
+        self.items
+            .iter()
+            .rev()
+            .find(|(r, _)| r.inflate(1.0).contains(x, y))
+            .map(|(_, h)| *h)
+    }
+
+    pub fn any(&self, f: impl Fn(Hit) -> bool) -> bool {
+        self.items.iter().any(|(_, h)| f(*h))
+    }
 }
 
+/// 绘制需要的全部状态。
 pub struct ViewState<'a> {
     pub palette: &'a Palette,
     pub accent: Rgb,
+    pub settings: &'a Settings,
+    pub tab: Tab,
     pub media: Option<&'a Snapshot>,
-    pub now_ms: u64,
+    /// 播放进度（秒）和总时长（不知道时为 None）。
+    pub progress: Option<(f64, Option<f64>)>,
+    pub volume: Option<(f64, bool)>,
+    pub clips: &'a [Entry],
+    pub clip_scroll: usize,
+    pub today: &'a str,
+    pub sample: Option<Sample>,
     pub hour: u16,
     pub minute: u16,
     pub weekday: u16,
@@ -72,27 +126,44 @@ pub struct ViewState<'a> {
 }
 
 mod glyph {
-    pub const MUSIC: char = '\u{E8D6}';
     pub const PIN: char = '\u{E718}';
     pub const UNPIN: char = '\u{E77A}';
     pub const PLAY: char = '\u{E768}';
     pub const PAUSE: char = '\u{E769}';
     pub const PREVIOUS: char = '\u{E892}';
     pub const NEXT: char = '\u{E893}';
+    pub const MUSIC: char = '\u{E8D6}';
+    pub const DELETE: char = '\u{E74D}';
+    pub const CLOSE: char = '\u{E711}';
+    pub const CLIPBOARD: char = '\u{E77F}';
 }
+
+/// 每页最多显示几条剪贴板记录。
+pub const CLIP_ROWS: usize = 5;
+const CLIP_TOP: f32 = 80.0;
+const CLIP_ROW_HEIGHT: f32 = 32.0;
+
+fn style(family: &HSTRING, size: f32, weight: DWRITE_FONT_WEIGHT, align: Align) -> TextStyle<'_> {
+    TextStyle {
+        family,
+        size,
+        weight,
+        align,
+    }
+}
+
+/// 强调色上的文字用黑还是白。
+fn on(c: Rgb) -> Rgb {
+    color::best_text_on(c)
+}
+
+// ───────────────────────────── 音乐胶囊 ─────────────────────────────
 
 pub fn draw_compact(p: &Painter, v: &ViewState) -> Result<()> {
     let fg = v.palette.foreground;
     let Some(m) = v.media else { return Ok(()) };
-    let art = Rect::new(7.0, 6.0, 26.0, 26.0);
-    draw_art(p, m, art, 7.0, v)?;
+    draw_art(p, m, Rect::new(7.0, 6.0, 26.0, 26.0), 7.0, v)?;
     let family = p.gfx.text_font.clone();
-    let style = TextStyle {
-        family: &family,
-        size: 12.5,
-        weight: DWRITE_FONT_WEIGHT_SEMI_BOLD,
-        align: Align::Leading,
-    };
     let title = if m.title.is_empty() {
         "正在播放"
     } else {
@@ -101,24 +172,97 @@ pub fn draw_compact(p: &Painter, v: &ViewState) -> Result<()> {
     p.text(
         title,
         Rect::new(42.0, 0.0, 170.0, COMPACT.height),
-        &style,
+        &style(&family, 12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
         color(fg, 0.95),
-    )?;
+    )
+}
+
+// ───────────────────────────── 待机时钟 ─────────────────────────────
+
+pub fn draw_clock(p: &Painter, palette: &Palette, hour: u16, minute: u16) -> Result<()> {
+    let family = p.gfx.text_font.clone();
+    p.text(
+        &clock(hour, minute),
+        Rect::new(0.0, 0.0, IDLE_CLOCK.width, IDLE_CLOCK.height),
+        &style(&family, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center),
+        color(palette.foreground, 1.0),
+    )
+}
+
+// ───────────────────────────── 音量 / 亮度提示 ─────────────────────────────
+
+pub fn draw_level(
+    p: &Painter,
+    palette: &Palette,
+    accent: Rgb,
+    glyph: char,
+    value: f64,
+    text: &str,
+) -> Result<()> {
+    let fg = palette.foreground;
+    let h = LEVEL.height;
+    p.icon(glyph, Rect::new(10.0, 0.0, 34.0, h), 15.0, color(fg, 1.0))?;
+    let track = Rect::new(50.0, h / 2.0 - 2.0, 190.0, 4.0);
+    p.fill_round(track, 2.0, color(fg, 0.18))?;
+    let filled = (track.w * value.clamp(0.0, 1.0) as f32).max(if value > 0.0 { 4.0 } else { 0.0 });
+    if filled > 0.0 {
+        p.fill_round(
+            Rect::new(track.x, track.y, filled, track.h),
+            2.0,
+            color(accent, 1.0),
+        )?;
+    }
+    let family = p.gfx.text_font.clone();
+    p.text(
+        text,
+        Rect::new(244.0, 0.0, 46.0, h),
+        &style(&family, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Trailing),
+        color(fg, 0.9),
+    )
+}
+
+// ───────────────────────────── 展开面板 ─────────────────────────────
+
+pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<Targets> {
+    let mut t = Targets::default();
+    draw_header(p, v, &mut t)?;
+    match v.tab {
+        Tab::Music => match v.media {
+            Some(m) => draw_player(p, m, v, &mut t)?,
+            None => draw_empty_music(p, v)?,
+        },
+        Tab::Clipboard => draw_clipboard(p, v, &mut t)?,
+        Tab::Monitor => draw_monitor(p, v)?,
+        Tab::Appearance => draw_appearance(p, v, &mut t)?,
+    }
+    Ok(t)
+}
+
+fn hover_bg(p: &Painter, v: &ViewState, hit: Hit, r: Rect, radius: f32) -> Result<()> {
+    if v.hovered == Some(hit) {
+        let a = if v.pressed == Some(hit) { 0.18 } else { 0.10 };
+        p.fill_round(r, radius, color(v.palette.foreground, a))?;
+    }
     Ok(())
 }
 
-pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<()> {
-    use layout::*;
+fn draw_header(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
     let fg = v.palette.foreground;
     let family = p.gfx.text_font.clone();
-
-    // 标题栏：音乐标签、置顶、星期、时间
-    p.fill_round(TAB_MUSIC, 14.0, color(fg, 0.20))?;
-    p.icon(glyph::MUSIC, TAB_MUSIC, 14.0, color(fg, 1.0))?;
-
-    if v.hovered == Some(Hit::Pin) {
-        p.fill_circle(PIN.center_x(), PIN.center_y(), 13.0, color(fg, 0.12))?;
+    for (i, tab) in Tab::ALL.into_iter().enumerate() {
+        let r = Rect::new(16.0 + i as f32 * 40.0, 12.0, 36.0, 28.0);
+        if v.tab == tab {
+            p.fill_round(r, 14.0, color(fg, 0.20))?;
+        } else {
+            hover_bg(p, v, Hit::Tab(tab), r, 14.0)?;
+        }
+        let a = if v.tab == tab { 1.0 } else { 0.6 };
+        p.icon(tab.glyph(), r, 14.0, color(fg, a))?;
+        t.add(r, Hit::Tab(tab));
     }
+
+    let pin = Rect::new(304.0, 13.0, 26.0, 26.0);
+    hover_bg(p, v, Hit::Pin, pin, 13.0)?;
     let pin_color = if v.pinned {
         color(v.accent, 1.0)
     } else {
@@ -126,143 +270,167 @@ pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<()> {
     };
     p.icon(
         if v.pinned { glyph::UNPIN } else { glyph::PIN },
-        PIN,
+        pin,
         12.0,
         pin_color,
     )?;
+    t.add(pin, Hit::Pin);
 
-    let small = TextStyle {
-        family: &family,
-        size: 11.0,
-        weight: DWRITE_FONT_WEIGHT_NORMAL,
-        align: Align::Trailing,
-    };
-    p.text(weekday_zh(v.weekday), WEEKDAY, &small, color(fg, 0.4))?;
-    let clock_style = TextStyle {
-        family: &family,
-        size: 14.0,
-        weight: DWRITE_FONT_WEIGHT_SEMI_BOLD,
-        align: Align::Trailing,
-    };
+    p.text(
+        weekday_zh(v.weekday),
+        Rect::new(334.0, 12.0, 36.0, 28.0),
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing),
+        color(fg, 0.4),
+    )?;
     p.text(
         &clock(v.hour, v.minute),
-        CLOCK,
-        &clock_style,
+        Rect::new(372.0, 12.0, 52.0, 28.0),
+        &style(&family, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Trailing),
         color(fg, 1.0),
-    )?;
-
-    match v.media {
-        Some(m) => draw_player(p, m, v, &family),
-        None => draw_empty(p, v, &family),
-    }
+    )
 }
 
-fn draw_player(p: &Painter, m: &Snapshot, v: &ViewState, family: &HSTRING) -> Result<()> {
-    use layout::*;
-    let fg = v.palette.foreground;
-    draw_art(p, m, ART, 14.0, v)?;
+// ───────────────────────────── 音乐 ─────────────────────────────
 
-    let title = TextStyle {
-        family,
-        size: 16.0,
-        weight: DWRITE_FONT_WEIGHT_SEMI_BOLD,
-        align: Align::Leading,
+/// 音乐标签里音量条的轨道（相对胶囊）。
+pub const VOLUME_TRACK: Rect = Rect::new(44.0, 220.0, 330.0, 18.0);
+
+fn draw_player(p: &Painter, m: &Snapshot, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    draw_art(p, m, Rect::new(16.0, 56.0, 112.0, 112.0), 14.0, v)?;
+
+    let title = if m.title.is_empty() {
+        "未知歌曲"
+    } else {
+        &m.title
     };
     p.text(
-        if m.title.is_empty() {
-            "未知歌曲"
-        } else {
-            &m.title
-        },
-        TITLE,
-        &title,
+        title,
+        Rect::new(144.0, 58.0, 280.0, 26.0),
+        &style(&family, 16.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
         color(fg, 1.0),
     )?;
-    let artist = TextStyle {
-        family,
-        size: 13.0,
-        weight: DWRITE_FONT_WEIGHT_NORMAL,
-        align: Align::Leading,
-    };
-    p.text(&m.artist, ARTIST, &artist, color(fg, 0.6))?;
+    p.text(
+        &m.artist,
+        Rect::new(144.0, 84.0, 280.0, 20.0),
+        &style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(fg, 0.6),
+    )?;
+    p.text(
+        &m.app,
+        Rect::new(144.0, 104.0, 280.0, 16.0),
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(fg, 0.4),
+    )?;
 
-    for (rect, hit, g, size, enabled) in [
+    for (r, hit, g, size, enabled) in [
         (
-            PREVIOUS,
+            Rect::new(144.0, 128.0, 40.0, 40.0),
             Hit::Previous,
             glyph::PREVIOUS,
             16.0,
             m.can_previous,
         ),
         (
-            PLAY,
+            Rect::new(192.0, 124.0, 48.0, 48.0),
             Hit::PlayPause,
             if m.playing { glyph::PAUSE } else { glyph::PLAY },
             20.0,
             true,
         ),
-        (NEXT, Hit::Next, glyph::NEXT, 16.0, m.can_next),
+        (
+            Rect::new(248.0, 128.0, 40.0, 40.0),
+            Hit::Next,
+            glyph::NEXT,
+            16.0,
+            m.can_next,
+        ),
     ] {
-        let radius = rect.w / 2.0;
-        let pressed = v.pressed == Some(hit);
         if hit == Hit::PlayPause {
-            p.fill_circle(
-                rect.center_x(),
-                rect.center_y(),
-                radius,
-                color(fg, if pressed { 0.14 } else { 0.10 }),
-            )?;
-        } else if v.hovered == Some(hit) {
-            p.fill_circle(
-                rect.center_x(),
-                rect.center_y(),
-                radius,
-                color(fg, if pressed { 0.16 } else { 0.10 }),
-            )?;
+            let a = if v.pressed == Some(hit) {
+                0.18
+            } else if v.hovered == Some(hit) {
+                0.14
+            } else {
+                0.10
+            };
+            p.fill_circle(r.center_x(), r.center_y(), r.w / 2.0, color(fg, a))?;
+        } else {
+            hover_bg(p, v, hit, r, r.w / 2.0)?;
         }
-        if v.hovered == Some(hit) && hit == Hit::PlayPause {
-            p.fill_circle(rect.center_x(), rect.center_y(), radius, color(fg, 0.06))?;
+        p.icon(g, r, size, color(fg, if enabled { 1.0 } else { 0.3 }))?;
+        if enabled {
+            t.add(r, hit);
         }
-        p.icon(g, rect, size, color(fg, if enabled { 1.0 } else { 0.3 }))?;
     }
 
-    // 进度
-    if m.duration > 0.0 {
-        let position = m.position_at(v.now_ms);
-        let fraction = (position / m.duration).clamp(0.0, 1.0) as f32;
-        p.fill_round(PROGRESS, 2.0, color(fg, 0.15))?;
-        if fraction > 0.0 {
-            let filled = Rect::new(
-                PROGRESS.x,
-                PROGRESS.y,
-                (PROGRESS.w * fraction).max(4.0),
-                PROGRESS.h,
-            );
-            p.fill_round(filled, 2.0, color(v.accent, 1.0))?;
+    // 进度：播放器不报告进度时由 app 自己估算；不知道总时长时只显示已播放时间
+    if let Some((position, duration)) = v.progress {
+        let bar = Rect::new(16.0, 186.0, 408.0, 4.0);
+        let small = style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+        if let Some(total) = duration.filter(|d| *d > 0.0) {
+            let fraction = (position / total).clamp(0.0, 1.0) as f32;
+            p.fill_round(bar, 2.0, color(fg, 0.15))?;
+            if fraction > 0.0 {
+                p.fill_round(
+                    Rect::new(bar.x, bar.y, (bar.w * fraction).max(4.0), bar.h),
+                    2.0,
+                    color(v.accent, 1.0),
+                )?;
+            }
+            let right = TextStyle {
+                align: Align::Trailing,
+                ..small
+            };
+            p.text(
+                &format_duration(total),
+                Rect::new(344.0, 192.0, 80.0, 16.0),
+                &right,
+                color(fg, 0.5),
+            )?;
         }
-        let left = TextStyle {
-            family,
-            size: 11.0,
-            weight: DWRITE_FONT_WEIGHT_NORMAL,
-            align: Align::Leading,
-        };
-        let right = TextStyle {
-            align: Align::Trailing,
-            ..left
-        };
-        p.text(&format_duration(position), TIME_LEFT, &left, color(fg, 0.5))?;
         p.text(
-            &format_duration(m.duration),
-            TIME_RIGHT,
-            &right,
+            &format_duration(position),
+            Rect::new(16.0, 192.0, 120.0, 16.0),
+            &small,
             color(fg, 0.5),
         )?;
+    }
+
+    // 系统音量：点击或拖动调节，也可以在岛上滚动滚轮
+    if let Some((level_value, muted)) = v.volume {
+        let row_y = VOLUME_TRACK.center_y();
+        p.icon(
+            level::volume_glyph(level_value, muted),
+            Rect::new(16.0, row_y - 9.0, 20.0, 18.0),
+            12.0,
+            color(fg, 0.6),
+        )?;
+        let track = Rect::new(VOLUME_TRACK.x, row_y - 2.0, VOLUME_TRACK.w, 4.0);
+        p.fill_round(track, 2.0, color(fg, 0.15))?;
+        let value = if muted { 0.0 } else { level_value };
+        if value > 0.0 {
+            p.fill_round(
+                Rect::new(track.x, track.y, (track.w * value as f32).max(4.0), track.h),
+                2.0,
+                color(fg, 0.6),
+            )?;
+        }
+        p.text(
+            &level::percent(level_value, muted),
+            Rect::new(380.0, row_y - 9.0, 44.0, 18.0),
+            &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing),
+            color(fg, 0.5),
+        )?;
+        t.add(VOLUME_TRACK, Hit::Volume);
     }
     Ok(())
 }
 
-fn draw_empty(p: &Painter, v: &ViewState, family: &HSTRING) -> Result<()> {
+fn draw_empty_music(p: &Painter, v: &ViewState) -> Result<()> {
     let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
     let w = EXPANDED.width;
     p.icon(
         glyph::MUSIC,
@@ -270,34 +438,23 @@ fn draw_empty(p: &Painter, v: &ViewState, family: &HSTRING) -> Result<()> {
         28.0,
         color(fg, 0.3),
     )?;
-    let main = TextStyle {
-        family,
-        size: 13.0,
-        weight: DWRITE_FONT_WEIGHT_NORMAL,
-        align: Align::Center,
-    };
     p.text(
         "没有正在播放的音乐",
         Rect::new(0.0, 134.0, w, 22.0),
-        &main,
+        &style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
         color(fg, 0.6),
     )?;
-    let hint = TextStyle {
-        family,
-        size: 11.0,
-        ..main
-    };
     p.text(
         "在 Spotify、网易云音乐、QQ 音乐或浏览器里播放后会显示在这里",
         Rect::new(16.0, 158.0, w - 32.0, 18.0),
-        &hint,
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
         color(fg, 0.4),
     )
 }
 
 fn draw_art(p: &Painter, m: &Snapshot, r: Rect, radius: f32, v: &ViewState) -> Result<()> {
     match &m.art {
-        Some(art) => p.image(&art.pixels, art.width, art.height, r, radius),
+        Some(art) => p.image(art.id, &art.pixels, art.width, art.height, r, radius),
         None => {
             p.fill_round(r, radius, color(v.palette.foreground, 0.12))?;
             p.icon(
@@ -310,46 +467,376 @@ fn draw_art(p: &Painter, m: &Snapshot, r: Rect, radius: f32, v: &ViewState) -> R
     }
 }
 
+// ───────────────────────────── 剪贴板 ─────────────────────────────
+
+fn draw_clipboard(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    p.text(
+        "最近复制的文字，点一下重新复制",
+        Rect::new(16.0, 50.0, 340.0, 24.0),
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(fg, 0.4),
+    )?;
+
+    if v.clips.is_empty() {
+        let w = EXPANDED.width;
+        p.icon(
+            glyph::CLIPBOARD,
+            Rect::new(0.0, 112.0, w, 32.0),
+            24.0,
+            color(fg, 0.3),
+        )?;
+        return p.text(
+            "还没有复制过文字",
+            Rect::new(0.0, 148.0, w, 22.0),
+            &style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.5),
+        );
+    }
+
+    let clear = Rect::new(398.0, 49.0, 26.0, 26.0);
+    hover_bg(p, v, Hit::ClipClear, clear, 13.0)?;
+    p.icon(glyph::DELETE, clear, 12.0, color(fg, 0.6))?;
+    t.add(clear, Hit::ClipClear);
+
+    let text = style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    let time = style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing);
+    for (row, (i, entry)) in v
+        .clips
+        .iter()
+        .enumerate()
+        .skip(v.clip_scroll)
+        .take(CLIP_ROWS)
+        .enumerate()
+    {
+        let y = CLIP_TOP + row as f32 * CLIP_ROW_HEIGHT;
+        let r = Rect::new(12.0, y, 416.0, CLIP_ROW_HEIGHT - 4.0);
+        let hovered = matches!(v.hovered, Some(Hit::ClipItem(h) | Hit::ClipDelete(h)) if h == i);
+        p.fill_round(r, 10.0, color(fg, if hovered { 0.12 } else { 0.06 }))?;
+        p.text(
+            &entry.preview(),
+            Rect::new(24.0, y, 320.0, r.h),
+            &text,
+            color(fg, 0.95),
+        )?;
+        t.add(r, Hit::ClipItem(i));
+        if hovered {
+            let del = Rect::new(r.right() - 30.0, y + 2.0, 24.0, 24.0);
+            hover_bg(p, v, Hit::ClipDelete(i), del, 12.0)?;
+            p.icon(glyph::CLOSE, del, 10.0, color(fg, 0.7))?;
+            t.add(del, Hit::ClipDelete(i));
+        } else {
+            p.text(
+                &entry.time_label(v.today),
+                Rect::new(344.0, y, 72.0, r.h),
+                &time,
+                color(fg, 0.4),
+            )?;
+        }
+    }
+
+    if v.clips.len() > CLIP_ROWS {
+        let shown_to = (v.clip_scroll + CLIP_ROWS).min(v.clips.len());
+        p.text(
+            &format!(
+                "{}–{} / {}，滚动滚轮查看更多",
+                v.clip_scroll + 1,
+                shown_to,
+                v.clips.len()
+            ),
+            Rect::new(16.0, 240.0, 408.0, 14.0),
+            &style(&family, 10.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.35),
+        )?;
+    }
+    Ok(())
+}
+
+// ───────────────────────────── 系统监控 ─────────────────────────────
+
+fn draw_monitor(p: &Painter, v: &ViewState) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let label = style(&family, 12.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    let value = style(&family, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Trailing);
+    let Some(s) = v.sample else {
+        return p.text(
+            "正在采样…",
+            Rect::new(16.0, 120.0, 408.0, 24.0),
+            &label,
+            color(fg, 0.5),
+        );
+    };
+
+    let meter = |y: f32, name: &str, text: &str, fraction: f64, detail: &str| -> Result<()> {
+        p.text(
+            name,
+            Rect::new(16.0, y, 120.0, 22.0),
+            &label,
+            color(fg, 0.6),
+        )?;
+        p.text(
+            text,
+            Rect::new(260.0, y, 164.0, 22.0),
+            &value,
+            color(fg, 1.0),
+        )?;
+        let bar = Rect::new(16.0, y + 28.0, 408.0, 6.0);
+        p.fill_round(bar, 3.0, color(fg, 0.12))?;
+        let f = fraction.clamp(0.0, 1.0) as f32;
+        if f > 0.0 {
+            p.fill_round(
+                Rect::new(bar.x, bar.y, (bar.w * f).max(6.0), bar.h),
+                3.0,
+                color(v.accent, 1.0),
+            )?;
+        }
+        if !detail.is_empty() {
+            p.text(
+                detail,
+                Rect::new(140.0, y, 120.0, 22.0),
+                &label,
+                color(fg, 0.4),
+            )?;
+        }
+        Ok(())
+    };
+    meter(58.0, "CPU", &format!("{:.0}%", s.cpu), s.cpu / 100.0, "")?;
+    meter(
+        112.0,
+        "内存",
+        &format!("{:.0}%", s.memory),
+        s.memory / 100.0,
+        &format!("{:.1} / {:.1} GB", s.memory_used_gb, s.memory_total_gb),
+    )?;
+
+    p.text(
+        "网络",
+        Rect::new(16.0, 166.0, 120.0, 22.0),
+        &label,
+        color(fg, 0.6),
+    )?;
+    let big = style(&family, 15.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading);
+    p.text(
+        &format!("↓ {}", speed(s.download)),
+        Rect::new(16.0, 194.0, 200.0, 28.0),
+        &big,
+        color(fg, 1.0),
+    )?;
+    p.text(
+        &format!("↑ {}", speed(s.upload)),
+        Rect::new(224.0, 194.0, 200.0, 28.0),
+        &big,
+        color(fg, 1.0),
+    )
+}
+
+// ───────────────────────────── 外观 ─────────────────────────────
+
+/// 一个分段按钮：选中时用强调色填充。返回下一个按钮的起点。
+#[allow(clippy::too_many_arguments)]
+fn segment(
+    p: &Painter,
+    v: &ViewState,
+    t: &mut Targets,
+    x: f32,
+    y: f32,
+    text: &str,
+    selected: bool,
+    hit: Hit,
+) -> Result<f32> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let w = 22.0
+        + text
+            .chars()
+            .map(|c| if c.is_ascii() { 7.0 } else { 12.0 })
+            .sum::<f32>();
+    let r = Rect::new(x, y, w, 22.0);
+    let (bg, text_color) = if selected {
+        (color(v.accent, 1.0), color(on(v.accent), 1.0))
+    } else if v.hovered == Some(hit) {
+        (color(fg, 0.16), color(fg, 1.0))
+    } else {
+        (color(fg, 0.08), color(fg, 0.9))
+    };
+    p.fill_round(r, 11.0, bg)?;
+    p.text(
+        text,
+        r,
+        &style(&family, 12.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+        text_color,
+    )?;
+    t.add(r, hit);
+    Ok(x + w + 6.0)
+}
+
+fn row_label(p: &Painter, v: &ViewState, y: f32, text: &str) -> Result<f32> {
+    let family = p.gfx.text_font.clone();
+    p.text(
+        text,
+        Rect::new(16.0, y, 56.0, 22.0),
+        &style(&family, 12.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(v.palette.foreground, 0.6),
+    )?;
+    Ok(72.0)
+}
+
+fn draw_appearance(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let s = v.settings;
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+
+    let mut x = 16.0;
+    for mode in ThemeMode::ALL {
+        x = segment(
+            p,
+            v,
+            t,
+            x,
+            52.0,
+            mode.label(),
+            s.theme.mode == mode,
+            Hit::Theme(mode),
+        )?;
+    }
+
+    if s.theme.mode == ThemeMode::Custom {
+        let current = [
+            &s.theme.custom_background,
+            &s.theme.custom_foreground,
+            &s.theme.custom_accent,
+        ];
+        for (kind, (name, presets)) in [
+            ("背景", BACKGROUND_PRESETS),
+            ("文字", FOREGROUND_PRESETS),
+            ("强调色", ACCENT_PRESETS),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let y = 82.0 + kind as f32 * 26.0;
+            let x0 = row_label(p, v, y, name)?;
+            for (i, hex) in presets.iter().enumerate() {
+                let c = color::parse_hex(hex).unwrap_or(v.palette.background);
+                let cx = x0 + 11.0 + i as f32 * 28.0;
+                let cy = y + 11.0;
+                let selected = current[kind].eq_ignore_ascii_case(hex);
+                p.fill_circle(cx, cy, 10.0, color(fg, if selected { 1.0 } else { 0.25 }))?;
+                p.fill_circle(cx, cy, if selected { 7.5 } else { 9.0 }, color(c, 1.0))?;
+                t.add(
+                    Rect::new(cx - 11.0, cy - 11.0, 22.0, 22.0),
+                    Hit::Swatch(kind as u8, i as u8),
+                );
+            }
+        }
+    } else {
+        let hint = match s.theme.mode {
+            ThemeMode::Dark => "黑色的经典灵动岛".to_string(),
+            ThemeMode::Light => "浅色胶囊，适合浅色桌面".to_string(),
+            ThemeMode::System => "跟随 Windows 的浅色 / 深色应用模式".to_string(),
+            ThemeMode::Schedule => format!(
+                "白天 {}–{} 用浅色，其余时间用深色",
+                s.theme.day_starts, s.theme.night_starts
+            ),
+            ThemeMode::Custom => String::new(),
+        };
+        p.text(
+            &hint,
+            Rect::new(16.0, 84.0, 408.0, 20.0),
+            &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+            color(fg, 0.4),
+        )?;
+    }
+
+    let mut y = 164.0;
+    let x0 = row_label(p, v, y, "待机时")?;
+    let x1 = segment(
+        p,
+        v,
+        t,
+        x0,
+        y,
+        "收成细线",
+        s.idle_as_line,
+        Hit::IdleStyle(true),
+    )?;
+    segment(
+        p,
+        v,
+        t,
+        x1,
+        y,
+        "显示时间",
+        !s.idle_as_line,
+        Hit::IdleStyle(false),
+    )?;
+
+    y += 28.0;
+    let x0 = row_label(p, v, y, "放音乐时")?;
+    let x1 = segment(
+        p,
+        v,
+        t,
+        x0,
+        y,
+        "显示音乐胶囊",
+        !s.media_as_line,
+        Hit::MediaStyle(false),
+    )?;
+    segment(
+        p,
+        v,
+        t,
+        x1,
+        y,
+        "也收成细线",
+        s.media_as_line,
+        Hit::MediaStyle(true),
+    )?;
+
+    y += 28.0;
+    let mut x = row_label(p, v, y, "位置")?;
+    for (edge, name) in [
+        (Edge::Top, "顶部"),
+        (Edge::Left, "左侧"),
+        (Edge::Right, "右侧"),
+    ] {
+        x = segment(p, v, t, x, y, name, s.dock == edge, Hit::Dock(edge))?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn buttons_do_not_overlap_and_fit_in_the_panel() {
-        use layout::*;
-        let all = [
-            TAB_MUSIC, PIN, WEEKDAY, CLOCK, ART, TITLE, ARTIST, PREVIOUS, PLAY, NEXT, PROGRESS,
-            TIME_LEFT, TIME_RIGHT,
-        ];
-        for r in all {
-            assert!(
-                r.x >= 16.0 - 0.01 && r.right() <= EXPANDED.width - 16.0 + 0.01,
-                "{r:?}"
-            );
-            assert!(r.bottom() <= EXPANDED.height - 14.0, "{r:?}");
+    fn tab_names_round_trip() {
+        for t in Tab::ALL {
+            assert_eq!(Tab::parse(t.name()), t);
         }
-        let buttons = [TAB_MUSIC, PIN, PREVIOUS, PLAY, NEXT];
-        for (i, a) in buttons.iter().enumerate() {
-            for b in &buttons[i + 1..] {
-                let overlap =
-                    a.x < b.right() && b.x < a.right() && a.y < b.bottom() && b.y < a.bottom();
-                assert!(!overlap, "{a:?} {b:?}");
-            }
-        }
+        assert_eq!(Tab::parse("Todo"), Tab::Music); // 还没移植的标签回到音乐
     }
 
     #[test]
-    fn hit_testing() {
-        use layout::*;
-        assert_eq!(
-            hit_test(PLAY.center_x(), PLAY.center_y(), true),
-            Some(Hit::PlayPause)
-        );
-        assert_eq!(hit_test(PLAY.center_x(), PLAY.center_y(), false), None);
-        assert_eq!(
-            hit_test(PIN.center_x(), PIN.center_y(), false),
-            Some(Hit::Pin)
-        );
-        assert_eq!(hit_test(5.0, 250.0, true), None);
+    fn hit_targets_prefer_the_topmost() {
+        let mut t = Targets::default();
+        t.add(Rect::new(0.0, 0.0, 100.0, 30.0), Hit::ClipItem(0));
+        t.add(Rect::new(70.0, 2.0, 24.0, 24.0), Hit::ClipDelete(0));
+        assert_eq!(t.hit(80.0, 10.0), Some(Hit::ClipDelete(0)));
+        assert_eq!(t.hit(10.0, 10.0), Some(Hit::ClipItem(0)));
+        assert_eq!(t.hit(10.0, 100.0), None);
+        assert!(t.any(|h| h == Hit::ClipDelete(0)) && !t.any(|h| h == Hit::Pin));
+    }
+
+    #[test]
+    fn panel_content_fits() {
+        assert!(CLIP_TOP + CLIP_ROWS as f32 * CLIP_ROW_HEIGHT <= EXPANDED.height - 14.0);
+        assert!(VOLUME_TRACK.bottom() <= EXPANDED.height - 14.0);
+        // 最长的一行分段按钮放得下
+        let widest = 72.0 + (22.0 + 6.0 * 12.0) + 6.0 + (22.0 + 5.0 * 12.0);
+        assert!(widest <= EXPANDED.width - 16.0);
     }
 }

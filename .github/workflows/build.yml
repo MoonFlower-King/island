@@ -34,8 +34,17 @@ jobs:
       - name: Version
         id: version
         shell: pwsh
+        # 手动输入的版本号经环境变量传入并校验格式，不直接拼进脚本（防止命令注入）
+        env:
+          MANUAL_TAG: ${{ github.event.inputs.release_tag }}
         run: |
-          $manualTag = '${{ github.event.inputs.release_tag }}'
+          $manualTag = "$env:MANUAL_TAG"
+          if ($manualTag -and $manualTag -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') {
+            throw "版本标签格式不对：$manualTag（应该像 v1.2.3）"
+          }
+          if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') {
+            throw "标签格式不对：$env:GITHUB_REF_NAME"
+          }
           if ($manualTag -like 'v*') {
             $version = $manualTag.Substring(1)
           } elseif ($env:GITHUB_REF -like 'refs/tags/v*') {
@@ -48,6 +57,14 @@ jobs:
 
       - name: Build
         run: dotnet build Island.sln -c Release -warnaserror -p:Version=${{ steps.version.outputs.version }}
+
+      # 检查 NuGet 依赖（包括间接依赖）有没有已知漏洞，有就让构建失败
+      - name: Vulnerable packages
+        shell: pwsh
+        run: |
+          $report = dotnet list Island.sln package --vulnerable --include-transitive 2>&1 | Out-String
+          Write-Host $report
+          if ($report -match '(?m)^\s*>\s') { throw '发现有已知漏洞的 NuGet 包' }
 
       - name: Unit tests
         run: dotnet test Island.sln -c Release --no-build --logger "console;verbosity=normal"
