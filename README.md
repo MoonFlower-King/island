@@ -73,7 +73,7 @@ WPF + .NET 8，轻量、开箱即用。
 
 ## 原生版（预览）
 
-正在用 Rust 重写一个更轻、更顺滑的版本：单个 exe 约 0.3 MB，内存约 35 MB，动画全部交给系统合成器在独立线程上运行。目前做好了胶囊动画和音乐，其他功能正在移植，详见 [native/README.md](native/README.md)。
+用 Rust 重写的更轻、更顺滑的版本：单个 exe 约 0.6 MB，刚启动内存约 27 MB，动画全部交给系统合成器在独立线程上运行。功能已经和 WPF 版基本一致，可以在 [Releases](https://github.com/MoonFlower-King/island/releases) 里下载标着"预览"的原生版试用（先退出 WPF 版）。详见 [native/README.md](native/README.md) 和 [native/CHANGELOG.md](native/CHANGELOG.md)。
 
 ## 开发
 
