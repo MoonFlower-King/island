@@ -70,6 +70,10 @@ WPF + .NET 8，轻量、开箱即用。
 | `shelf.json` | 中转站里的文件路径 |
 | `island.log` | 运行日志。遇到问题时可以附上这个文件 |
 
+## 原生版（预览）
+
+正在用 Rust 重写一个更轻、更顺滑的版本：单个 exe 约 0.3 MB，内存约 35 MB，动画全部交给系统合成器在独立线程上运行。目前做好了胶囊动画和音乐，其他功能正在移植，详见 [native/README.md](native/README.md)。
+
 ## 开发
 
 需要 Windows 10 1809 及以上，以及 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)。
