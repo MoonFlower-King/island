@@ -500,8 +500,8 @@ pub fn step(app: &mut App) {
                     c.map(island::color::to_hex).unwrap_or_default()
                 ),
             );
-            // 面板四角（让开圆角）都应该是背景色：背景和内容的大小、位置对得上（缩放时尤其容易错）
-            let corners = [(40.0, 20.0), (400.0, 20.0), (40.0, 244.0), (400.0, 244.0)];
+            // 面板四角（让开圆角和顶部的标签栏）都应该是背景色：背景和内容的大小、位置对得上（缩放时尤其容易错）
+            let corners = [(40.0, 46.0), (400.0, 46.0), (40.0, 244.0), (400.0, 244.0)];
             let got = sample_points(app, expanded, &corners);
             let all =
                 got.len() == corners.len() && got.iter().all(|c| near(*c, LIGHT.background, 16));

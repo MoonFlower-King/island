@@ -976,7 +976,8 @@ impl App {
 
     /// (光标在热区里, 光标在热区附近)。
     fn cursor_zone(&self) -> (bool, bool) {
-        if self.hidden {
+        // 冒烟测试自己控制悬停，不看真实光标（CI 屏幕小，150% 时窗口会盖到屏幕中间的光标）
+        if self.hidden || self.smoke.as_ref().is_some_and(|s| s.drives_input()) {
             return (false, false);
         }
         let zone = self.metrics(self.state).hover_zone(self.edge());
