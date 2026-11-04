@@ -1,0 +1,91 @@
+name: native
+
+# Rust 原生版（native/）：Windows 合成器 + Direct2D，目标是几 MB 的单文件、几十 MB 内存。
+on:
+  push:
+    branches: ["**"]
+    paths: ["native/**", ".github/workflows/native.yml"]
+  pull_request:
+    paths: ["native/**", ".github/workflows/native.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: native
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本固定在 rust-toolchain.toml 里，rustup 会自动安装
+      - name: Toolchain
+        run: rustc --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            native/target
+          key: native-${{ hashFiles('native/Cargo.lock') }}
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: cargo test
+
+      - name: Build
+        shell: pwsh
+        run: |
+          cargo build --release
+          cargo build --release --target aarch64-pc-windows-msvc
+          Get-Item target/release/Island.exe, target/aarch64-pc-windows-msvc/release/Island.exe |
+            Format-Table FullName, @{ n = 'KB'; e = { [math]::Round($_.Length / 1KB) } }
+
+      # 在真实 Windows 桌面上启动，走一遍待机、音乐胶囊、展开、浅色主题，截图并检查屏幕上真的画出了胶囊
+      - name: Smoke test
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'native-smoke'
+          $env:ISLAND_DATA_DIR = Join-Path $env:RUNNER_TEMP 'native-smoke-data'
+          $p = Start-Process -FilePath target/release/Island.exe -ArgumentList '--smoke-test', $out -PassThru
+          $null = $p.Handle
+          $finished = $p.WaitForExit(60000)
+          if (-not $finished) { $p.Kill() }
+
+          Write-Host '===== report.txt ====='
+          Get-Content (Join-Path $out 'report.txt') -ErrorAction SilentlyContinue
+          Write-Host '===== island.log ====='
+          Get-Content (Join-Path $env:ISLAND_DATA_DIR 'island.log') -ErrorAction SilentlyContinue
+
+          if (-not $finished) { throw 'Smoke test timed out' }
+          if ($p.ExitCode -ne 0) { throw "Smoke test failed with exit code $($p.ExitCode)" }
+
+      - name: Upload smoke test screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-smoke-test
+          path: ${{ runner.temp }}/native-smoke/
+          if-no-files-found: ignore
+
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/release/Island.exe dist/Island-native-win-x64.exe
+          Copy-Item target/aarch64-pc-windows-msvc/release/Island.exe dist/Island-native-win-arm64.exe
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Island-native
+          path: native/dist/
