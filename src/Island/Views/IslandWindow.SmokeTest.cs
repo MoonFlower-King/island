@@ -210,8 +210,7 @@ public partial class IslandWindow
 
     private static Task Settle(int milliseconds) => Task.Delay(milliseconds);
 
-    private static Color BrushColor(string key) =>
-        Application.Current.Resources[key] is SolidColorBrush brush ? brush.Color : default;
+    private static Color BrushColor(string key) => App.Theme.ColorOf(key);
 
     /// <summary>动画结束后胶囊尺寸应与该状态的设计尺寸一致。</summary>
     private void CheckSize(IslandState state, Action<bool, string> check)

@@ -7,8 +7,11 @@ using Microsoft.Win32;
 namespace Island.Views;
 
 /// <summary>
-/// 把配色写进应用资源。界面通过 DynamicResource 引用这些画刷；
+/// 把配色写进窗口资源。界面通过 DynamicResource 引用这些画刷；
 /// 换主题时直接给同一批画刷做颜色动画，所有界面一起平滑变色，不需要重建任何控件。
+///
+/// 注意画刷必须放在窗口（而不是 Application）的资源里：WPF 会自动冻结应用级资源里
+/// 被访问过的 Freezable，冻结后的画刷不能再做动画或修改颜色。
 /// </summary>
 public sealed class ThemeManager
 {
@@ -16,16 +19,20 @@ public sealed class ThemeManager
 
     private readonly Dictionary<string, SolidColorBrush> _brushes = new();
 
-    public ThemeManager(ResourceDictionary resources)
+    public ThemeManager()
     {
         foreach (var (key, color) in ColorsFor(ThemePalette.Dark))
-        {
-            var brush = new SolidColorBrush(color); // 不冻结：之后要对它做动画
-            _brushes[key] = brush;
-            resources[key] = brush;
-        }
+            _brushes[key] = new SolidColorBrush(color); // 不冻结：之后要对它做动画
         Current = ThemePalette.Dark;
     }
+
+    /// <summary>把主题画刷放进窗口资源。要在窗口 InitializeComponent 之前调用。</summary>
+    public void AttachTo(ResourceDictionary windowResources)
+    {
+        foreach (var (key, brush) in _brushes) windowResources[key] = brush;
+    }
+
+    public Color ColorOf(string key) => _brushes.TryGetValue(key, out var brush) ? brush.Color : default;
 
     public ThemePalette Current { get; private set; }
 

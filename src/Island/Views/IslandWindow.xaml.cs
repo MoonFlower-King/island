@@ -53,6 +53,7 @@ public partial class IslandWindow : Window
 
     public IslandWindow()
     {
+        App.Theme.AttachTo(Resources); // 必须在 InitializeComponent 之前，界面加载时就能找到主题画刷
         InitializeComponent();
         _settings = AppSettings.Load();
 

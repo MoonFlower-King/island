@@ -38,7 +38,7 @@ public partial class App : Application
 
         Log.Info($"启动 Island {typeof(App).Assembly.GetName().Version}，系统 {Environment.OSVersion}");
 
-        Theme = new ThemeManager(Resources);
+        Theme = new ThemeManager();
 
         var island = new IslandWindow();
         island.Show();
