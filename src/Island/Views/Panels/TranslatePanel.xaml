@@ -15,7 +15,7 @@
         </Style>
         <Style x:Key="FieldBox" TargetType="TextBox" BasedOn="{StaticResource IslandTextBox}">
             <Setter Property="Height" Value="26" />
-            <Setter Property="Padding" Value="8,3" />
+            <Setter Property="Padding" Value="8,0" />
             <Setter Property="FontSize" Value="12" />
         </Style>
     </UserControl.Resources>
@@ -31,7 +31,7 @@
 
             <TextBox x:Name="Input" Style="{StaticResource IslandTextBox}"
                      Tag="输入要翻译的文字，Enter 翻译，Shift+Enter 换行"
-                     AcceptsReturn="True" TextWrapping="Wrap" VerticalContentAlignment="Top"
+                     AcceptsReturn="True" TextWrapping="Wrap" VerticalContentAlignment="Stretch" Padding="10,6"
                      PreviewKeyDown="OnInputKeyDown" />
 
             <Grid Grid.Row="1" Margin="0,6">

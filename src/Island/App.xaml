@@ -196,7 +196,8 @@
             <Setter Property="Background" Value="{DynamicResource IslandSurface}" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="FontSize" Value="13" />
-            <Setter Property="Padding" Value="10,6" />
+            <!-- 上下不留内边距：中文回退到微软雅黑后行高比 Segoe UI 高，留了内边距单行框会放不下、文字被裁掉一截 -->
+            <Setter Property="Padding" Value="10,0" />
             <Setter Property="VerticalContentAlignment" Value="Center" />
             <Setter Property="Template">
                 <Setter.Value>
@@ -204,6 +205,7 @@
                         <Border x:Name="Bg" Background="{TemplateBinding Background}" CornerRadius="10">
                             <Grid>
                                 <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                               VerticalScrollBarVisibility="Hidden"
                                               HorizontalScrollBarVisibility="Hidden" />
                                 <TextBlock x:Name="Placeholder" Text="{TemplateBinding Tag}"

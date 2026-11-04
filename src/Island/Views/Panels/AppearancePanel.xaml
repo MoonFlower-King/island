@@ -20,11 +20,11 @@
         <StackPanel x:Name="ScheduleRow" Orientation="Horizontal" Margin="0,10,0,0" Visibility="Collapsed">
             <TextBlock Text="白天" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
             <TextBox x:Name="DayStartsInput" Style="{StaticResource IslandTextBox}" Width="64" Height="28"
-                     Margin="8,0" Padding="8,4" Tag="07:00"
+                     Margin="8,0" Padding="8,0" Tag="07:00"
                      KeyDown="OnInputKeyDown" LostKeyboardFocus="OnScheduleCommitted" />
             <TextBlock Text="到" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
             <TextBox x:Name="NightStartsInput" Style="{StaticResource IslandTextBox}" Width="64" Height="28"
-                     Margin="8,0" Padding="8,4" Tag="19:00"
+                     Margin="8,0" Padding="8,0" Tag="19:00"
                      KeyDown="OnInputKeyDown" LostKeyboardFocus="OnScheduleCommitted" />
             <TextBlock Text="，其余时间为黑夜" FontSize="12" VerticalAlignment="Center"
                        Foreground="{DynamicResource IslandSecondary}" />
@@ -46,17 +46,17 @@
             <TextBlock Text="背景" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
             <StackPanel x:Name="BackgroundSwatches" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" />
             <TextBox x:Name="BackgroundInput" Grid.Column="2" Style="{StaticResource IslandTextBox}" Width="84" Height="26"
-                     Padding="8,3" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
+                     Padding="8,0" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
 
             <TextBlock Grid.Row="1" Text="文字" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
             <StackPanel x:Name="ForegroundSwatches" Grid.Row="1" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" />
             <TextBox x:Name="ForegroundInput" Grid.Row="1" Grid.Column="2" Style="{StaticResource IslandTextBox}" Width="84" Height="26"
-                     Padding="8,3" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
+                     Padding="8,0" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
 
             <TextBlock Grid.Row="2" Text="强调色" FontSize="12" VerticalAlignment="Center" Foreground="{DynamicResource IslandSecondary}" />
             <StackPanel x:Name="AccentSwatches" Grid.Row="2" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" />
             <TextBox x:Name="AccentInput" Grid.Row="2" Grid.Column="2" Style="{StaticResource IslandTextBox}" Width="84" Height="26"
-                     Padding="8,3" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
+                     Padding="8,0" Tag="#RRGGBB" KeyDown="OnInputKeyDown" LostKeyboardFocus="OnHexCommitted" />
         </Grid>
 
         <TextBlock x:Name="Hint" FontSize="11" Margin="0,6,0,0" Foreground="{DynamicResource IslandTertiary}"
