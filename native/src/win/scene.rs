@@ -4,7 +4,7 @@
 //! root（DPI 缩放）
 //!  └ capsule（位置、大小跟着属性集 p 走）
 //!     ├ layer（LayerVisual，带 DropShadow：阴影跟着形状实时变化）
-//!     │   └ shape（圆角矩形，填充背景色）
+//!     │   └ background（纯色，用圆角矩形裁剪）
 //!     └ content（用同样的圆角矩形裁剪）
 //!         ├ compact（音乐胶囊：封面、歌名、律动条）
 //!         └ expanded（展开面板）
@@ -111,13 +111,13 @@ impl Scene {
         root.Children()?.InsertAtTop(&capsule)?;
 
         // 背景形状 + 阴影
-        let geometry = rounded_geometry(c, &props)?;
-        let shape = c.CreateSpriteShapeWithGeometry(&geometry)?;
+        // 背景：纯色 SpriteVisual，用圆角矩形裁剪。
+        // （ShapeVisual 放在 LayerVisual 里时，填充色改了不生效，所以不用它。）
         let bg_brush = c.CreateColorBrushWithColor(ui_color(palette.background, 255))?;
-        shape.SetFillBrush(&bg_brush)?;
-        let shape_visual = c.CreateShapeVisual()?;
-        bind(c, &shape_visual, "Size", "Vector2(p.W, p.H)", &props, &[])?;
-        shape_visual.Shapes()?.Append(&shape)?;
+        let background = c.CreateSpriteVisual()?;
+        background.SetBrush(&bg_brush)?;
+        bind(c, &background, "Size", "Vector2(p.W, p.H)", &props, &[])?;
+        background.SetClip(&c.CreateGeometricClipWithGeometry(&rounded_geometry(c, &props)?)?)?;
 
         let layer = c.CreateLayerVisual()?;
         bind(c, &layer, "Size", "Vector2(p.W, p.H)", &props, &[])?;
@@ -136,7 +136,7 @@ impl Scene {
         })?;
         shadow.SetOpacity(0.45)?;
         layer.SetShadow(&shadow)?;
-        layer.Children()?.InsertAtTop(&shape_visual)?;
+        layer.Children()?.InsertAtTop(&background)?;
         capsule.Children()?.InsertAtTop(&layer)?;
 
         // 内容：用同样的形状裁剪
