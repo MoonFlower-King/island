@@ -18,7 +18,7 @@
 
   <PropertyGroup>
     <!-- 发布正式版时由 CI 根据 Git 标签（v1.2.3）覆盖 -->
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <Product>Island</Product>
     <AssemblyTitle>Island 灵动岛</AssemblyTitle>
     <Description>Windows 上的灵动岛：音乐、待办、剪贴板历史、文件中转站、AI 翻译、系统监控。</Description>
@@ -30,6 +30,8 @@
   <ItemGroup>
     <!-- 官方 Anthropic C# SDK，用于 AI 翻译 -->
     <PackageReference Include="Anthropic" Version="13.1.0" />
+    <!-- WMI：笔记本屏幕亮度变化事件 -->
+    <PackageReference Include="System.Management" Version="8.0.0" />
   </ItemGroup>
 
   <ItemGroup>

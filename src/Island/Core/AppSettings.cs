@@ -18,6 +18,9 @@ public sealed class AppSettings
     /// <summary>外观主题。</summary>
     public ThemeSettings Theme { get; set; } = new();
 
+    /// <summary>调节音量或亮度时在岛上显示提示。</summary>
+    public bool ShowLevelHud { get; set; } = true;
+
     /// <summary>待机时缩成顶端的一条细线（否则显示带时间的小胶囊）。</summary>
     public bool IdleAsLine { get; set; } = true;
 

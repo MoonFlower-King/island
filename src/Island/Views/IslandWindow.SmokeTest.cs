@@ -63,6 +63,22 @@ public partial class IslandWindow
             await Settle(1300);
             Check(_currentState == IslandState.Idle, "关闭通知后回到待机");
 
+            // 音量 / 亮度提示
+            Note(_volume is { IsAvailable: true }
+                ? $"找到音频输出设备，当前音量 {LevelGlyphs.Percent(_volume.Current?.Level ?? 0, _volume.Current?.Muted ?? false)}"
+                : "没有音频输出设备（CI 环境常见），只测试提示界面");
+            ShowLevel(LevelGlyphs.ForVolume(0.42, false), 0.42, LevelGlyphs.Percent(0.42, false));
+            await Settle(1000);
+            Check(_currentState == IslandState.Level && ReferenceEquals(_currentView, LevelView), "显示音量提示");
+            CheckSize(IslandState.Level, Check);
+            Check(Math.Abs(LevelFillScale.ScaleX - 0.42) < 0.01, $"音量进度 {LevelFillScale.ScaleX:0.00}");
+            Snapshot(outputDirectory, "02b-level-volume");
+            ShowLevel(LevelGlyphs.Brightness, 0.8, LevelGlyphs.Percent(0.8, false));
+            await Settle(300);
+            Check(LevelIcon.Text == LevelGlyphs.Brightness && LevelText.Text == "80%", "连续调节时提示原地更新");
+            await Settle(2200);
+            Check(_currentState == IslandState.Idle, "停手后提示自动缩回");
+
             // 紧凑
             SetBaseState(IslandState.Compact, "冒烟测试进行中");
             await Settle(1300);

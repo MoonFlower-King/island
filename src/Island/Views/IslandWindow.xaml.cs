@@ -78,7 +78,7 @@ public partial class IslandWindow : Window
         _hoverInTimer.Tick += (_, _) =>
         {
             _hoverInTimer.Stop();
-            if (!IsCursorOverIsland()) return;
+            if (!IsCursorOverIsland() || IsWheelActive()) return;
             Expand();
         };
         _hoverOutTimer.Tick += (_, _) =>
@@ -100,6 +100,7 @@ public partial class IslandWindow : Window
         InitializeMedia();
         InitializeFeatures();
         InitializeTheme();
+        InitializeLevels();
 
         PositionWindow();
         UpdateClock();
@@ -107,7 +108,7 @@ public partial class IslandWindow : Window
     }
 
     private FrameworkElement[] AllViews =>
-        [LineView, IdleView, CompactView, MediaCompactView, NotificationView, ExpandedView];
+        [LineView, IdleView, CompactView, MediaCompactView, NotificationView, LevelView, ExpandedView];
 
     /// <summary>待机时是细线（默认）还是显示时间的小胶囊。</summary>
     private bool IdleAsLine => _settings.IdleAsLine;
@@ -127,6 +128,7 @@ public partial class IslandWindow : Window
             (CompactView, IslandMetrics.For(IslandState.Compact)),
             (MediaCompactView, IslandMetrics.For(IslandState.Compact)),
             (NotificationView, IslandMetrics.For(IslandState.Notification)),
+            (LevelView, IslandMetrics.For(IslandState.Level)),
             (ExpandedView, IslandMetrics.For(IslandState.Expanded)),
         ];
 
@@ -263,6 +265,7 @@ public partial class IslandWindow : Window
         ShutdownMedia();
         ShutdownFeatures();
         ShutdownTheme();
+        ShutdownLevels();
     }
 
     // ───────────────────────────── 状态机 ─────────────────────────────
@@ -270,6 +273,7 @@ public partial class IslandWindow : Window
     private IslandState ResolveState()
     {
         if (_isHovering) return IslandState.Expanded;
+        if (_showingLevel) return IslandState.Level;
         if (_hasNotification) return IslandState.Notification;
         return _baseState == IslandState.Compact || MediaWantsCompact ? IslandState.Compact : IslandState.Idle;
     }
@@ -309,6 +313,7 @@ public partial class IslandWindow : Window
         IslandState.Idle => IdleAsLine ? LineView : IdleView,
         IslandState.Compact => MediaWantsCompact ? MediaCompactView : CompactView,
         IslandState.Notification => NotificationView,
+        IslandState.Level => LevelView,
         IslandState.Expanded => ExpandedView,
         _ => IdleView,
     };
@@ -441,13 +446,14 @@ public partial class IslandWindow : Window
 
     private void OnIslandMouseEnter(object sender, MouseEventArgs e)
     {
-        if (_hiddenForFullscreen) return;
+        if (_hiddenForFullscreen || IsWheelActive()) return;
         _hoverOutTimer.Stop();
         if (!_isHovering && !_hoverInTimer.IsEnabled) _hoverInTimer.Start();
     }
 
     private void OnIslandMouseLeave(object sender, MouseEventArgs e)
     {
+        if (_wheelMode && !IsCursorOverIsland()) _wheelMode = false;
         if (_isHovering) _hoverOutTimer.Start();
         else if (!IsCursorOverIsland()) _hoverInTimer.Stop();
     }

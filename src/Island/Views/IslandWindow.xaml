@@ -33,6 +33,7 @@
                 Width="220" Height="6"
                 Background="#01000000"
                 AllowDrop="True"
+                PreviewMouseWheel="OnIslandMouseWheel"
                 MouseEnter="OnIslandMouseEnter"
                 MouseLeave="OnIslandMouseLeave"
                 DragEnter="OnIslandDragOver"
@@ -53,6 +54,7 @@
               MouseEnter="OnIslandMouseEnter"
               MouseLeave="OnIslandMouseLeave"
               MouseLeftButtonUp="OnCapsuleClick"
+              PreviewMouseWheel="OnIslandMouseWheel"
               PreviewMouseLeftButtonDown="OnCapsulePreviewMouseDown"
               DragEnter="OnIslandDragOver"
               DragOver="OnIslandDragOver"
@@ -64,6 +66,8 @@
                     <MenuItem Header="演示：弹出一条通知" Click="OnDemoNotification" />
                     <MenuItem x:Name="PersistClipboardMenu" Header="保存剪贴板历史到磁盘"
                               IsCheckable="True" Click="OnTogglePersistClipboard" />
+                    <MenuItem x:Name="LevelHudMenu" Header="显示音量和亮度提示"
+                              IsCheckable="True" Click="OnToggleLevelHud" />
                     <MenuItem x:Name="StartupMenu" Header="开机自动启动"
                               IsCheckable="True" Click="OnToggleStartup" />
                     <MenuItem Header="打开数据文件夹" Click="OnOpenDataFolder" />
@@ -174,6 +178,29 @@
                         </StackPanel>
                     </Grid>
 
+                    <!-- 音量 / 亮度提示：图标 + 进度 + 百分比 -->
+                    <Grid x:Name="LevelView" Opacity="0" IsHitTestVisible="False" Margin="16,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="22" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="40" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="LevelIcon" Text="&#xE995;" FontFamily="{StaticResource IconFont}" FontSize="15"
+                                   VerticalAlignment="Center" />
+                        <Border Grid.Column="1" Height="6" CornerRadius="3" Margin="10,0"
+                                Background="{DynamicResource IslandSurfaceStrong}" VerticalAlignment="Center">
+                            <!-- 只缩放、不改宽度：变化时只重绘，不触发布局 -->
+                            <Border x:Name="LevelFill" CornerRadius="3" Background="{DynamicResource IslandForeground}"
+                                    RenderTransformOrigin="0,0.5">
+                                <Border.RenderTransform>
+                                    <ScaleTransform x:Name="LevelFillScale" ScaleX="0.5" />
+                                </Border.RenderTransform>
+                            </Border>
+                        </Border>
+                        <TextBlock x:Name="LevelText" Grid.Column="2" Text="50%" FontSize="12" FontWeight="SemiBold"
+                                   TextAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+
                     <!-- 展开：顶部功能标签 + 内容区 -->
                     <Grid x:Name="ExpandedView" Opacity="0" IsHitTestVisible="False" Margin="16,12,16,14">
                         <Grid.RowDefinitions>
@@ -215,6 +242,7 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
                                     <Grid Margin="4,6,4,0">
@@ -269,6 +297,34 @@
                                         <Button x:Name="NextButton" Style="{StaticResource IslandIconButton}"
                                                 Content="&#xE893;" ToolTip="下一首" Click="OnNextClick" />
                                     </StackPanel>
+
+                                    <!-- 系统音量：点击或拖动调节，也可以在岛上滚动滚轮 -->
+                                    <Grid x:Name="MediaVolumeRow" Grid.Row="3" Margin="4,0,4,0" Visibility="Collapsed">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="36" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="MediaVolumeIcon" Text="&#xE995;" FontFamily="{StaticResource IconFont}"
+                                                   FontSize="12" Foreground="{DynamicResource IslandSecondary}"
+                                                   VerticalAlignment="Center" />
+                                        <Grid x:Name="MediaVolumeTrack" Grid.Column="1" Height="18" Margin="10,0"
+                                              Background="Transparent" Cursor="Hand"
+                                              MouseLeftButtonDown="OnVolumeTrackMouseDown"
+                                              MouseMove="OnVolumeTrackMouseMove"
+                                              MouseLeftButtonUp="OnVolumeTrackMouseUp">
+                                            <Border Height="4" CornerRadius="2" Background="{DynamicResource IslandSurfaceStrong}" />
+                                            <Border x:Name="MediaVolumeFill" Height="4" CornerRadius="2"
+                                                    Background="{DynamicResource IslandSecondary}" RenderTransformOrigin="0,0.5">
+                                                <Border.RenderTransform>
+                                                    <ScaleTransform x:Name="MediaVolumeScale" ScaleX="0.5" />
+                                                </Border.RenderTransform>
+                                            </Border>
+                                        </Grid>
+                                        <TextBlock x:Name="MediaVolumeText" Grid.Column="2" Text="50%" FontSize="11"
+                                                   Foreground="{DynamicResource IslandSecondary}"
+                                                   TextAlignment="Right" VerticalAlignment="Center" />
+                                    </Grid>
                                 </Grid>
 
                                 <TextBlock x:Name="MusicEmpty" Style="{StaticResource IslandEmptyText}"
