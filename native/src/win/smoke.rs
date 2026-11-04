@@ -110,7 +110,7 @@ fn capture(app: &App) -> Option<(u32, u32, Vec<u8>)> {
         let _ = DeleteObject(bmp.into());
         let _ = DeleteDC(mem);
         ReleaseDC(None, screen);
-        for px in pixels.chunks_exact_mut(4) {
+        for px in pixels.as_chunks_mut::<4>().0 {
             px[3] = 255;
         }
         (ok && lines > 0).then_some((w, h, pixels))

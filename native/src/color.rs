@@ -94,7 +94,7 @@ pub fn ensure_readable(color: Rgb, background: Rgb, min: f64) -> Rgb {
 /// 按饱和度和亮度加权平均，太暗、太亮、太灰的像素权重很低。
 pub fn dominant(bgra: &[u8]) -> Option<Rgb> {
     let (mut r, mut g, mut b, mut total) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
-    for px in bgra.chunks_exact(4).step_by(3) {
+    for px in bgra.as_chunks::<4>().0.iter().step_by(3) {
         let (pb, pg, pr, pa) = (px[0] as f64, px[1] as f64, px[2] as f64, px[3] as f64);
         if pa < 128.0 {
             continue;
