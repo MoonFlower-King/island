@@ -24,7 +24,7 @@ use windows::core::{HSTRING, Interface, Result};
 use windows_numerics::{Vector2, Vector3};
 
 use island::color::{Palette, Rgb};
-use island::metrics::{self, Edge, Metrics, WINDOW_HEIGHT, WINDOW_WIDTH};
+use island::metrics::{self, Edge, Metrics, Rect, WINDOW_HEIGHT, WINDOW_WIDTH};
 
 use super::gfx::Gfx;
 
@@ -82,6 +82,8 @@ pub struct Scene {
     scale: f32,
     /// 上一次设置的细线染色和律动条状态：没变就不重新启动动画（重启会让动画跳一下）。
     line_state: Cell<Option<(Option<Rgb>, bool)>>,
+    caret: SpriteVisual,
+    caret_brush: CompositionColorBrush,
     equalizer: Cell<Option<bool>>,
 }
 
@@ -206,8 +208,17 @@ impl Scene {
             bars.push(bar);
         }
 
+        // 输入框的光标：展开面板上的一根细条，闪烁动画在合成器里跑
+        let caret_brush = c.CreateColorBrushWithColor(ui_color(palette.foreground, 255))?;
+        let caret = c.CreateSpriteVisual()?;
+        caret.SetBrush(&caret_brush)?;
+        caret.SetOpacity(0.0)?;
+        expanded.visual.Children()?.InsertAtTop(&caret)?;
+
         let mut scene = Self {
             compositor: c.clone(),
+            caret,
+            caret_brush,
             root,
             props,
             capsule,
@@ -307,6 +318,32 @@ impl Scene {
         )?;
         a.SetDuration(ms(if line_visible { 220.0 } else { 80.0 }))?;
         self.line.StartAnimation(&HSTRING::from("Opacity"), &a)
+    }
+
+    /// 输入框光标（相对展开面板的 DIP 矩形）；None 隐藏。每次移动都从"亮"开始闪。
+    pub fn set_caret(&self, caret: Option<(Rect, Rgb)>) -> Result<()> {
+        let opacity = HSTRING::from("Opacity");
+        let Some((r, c)) = caret else {
+            self.caret.StopAnimation(&opacity)?;
+            return self.caret.SetOpacity(0.0);
+        };
+        self.caret_brush.SetColor(ui_color(c, 255))?;
+        self.caret.SetOffset(Vector3 {
+            X: r.x,
+            Y: r.y,
+            Z: 0.0,
+        })?;
+        self.caret.SetSize(Vector2 { X: r.w, Y: r.h })?;
+        let a = self.compositor.CreateScalarKeyFrameAnimation()?;
+        a.InsertKeyFrame(0.0, 1.0)?;
+        a.InsertKeyFrame(0.5, 1.0)?;
+        a.InsertKeyFrame(0.55, 0.0)?;
+        a.InsertKeyFrame(0.95, 0.0)?;
+        a.InsertKeyFrame(1.0, 1.0)?;
+        a.SetDuration(ms(1060.0))?;
+        a.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
+        self.caret.SetOpacity(1.0)?;
+        self.caret.StartAnimation(&opacity, &a)
     }
 
     pub fn scale(&self) -> f32 {

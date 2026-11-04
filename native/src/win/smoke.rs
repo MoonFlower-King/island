@@ -23,10 +23,17 @@ use windows::core::{HSTRING, Result};
 
 use island::color::{DARK, LIGHT, Rgb};
 use island::metrics::{Edge, IslandState, Metrics};
+use island::settings::ThemeMode;
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_BACK, VK_ESCAPE, VK_LEFT, VK_RETURN};
 
 use super::app::{App, TIMER_SMOKE, tick};
 use super::media::{Art, Snapshot};
-use super::views::{Hit, Tab};
+use super::translator::Status;
+use super::views::{Field, Hit, Tab};
+use island::translate::Format;
+use windows::Win32::Foundation::{DRAGDROP_E_ALREADYREGISTERED, POINTL};
+use windows::Win32::System::Ole::{DROPEFFECT_COPY, DROPEFFECT_MOVE, RegisterDragDrop};
+use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 
 pub struct Smoke {
     dir: PathBuf,
@@ -34,6 +41,7 @@ pub struct Smoke {
     lines: Vec<String>,
     failures: u32,
     started: u64,
+    waits: u32,
 }
 
 impl Smoke {
@@ -45,6 +53,7 @@ impl Smoke {
             lines: Vec::new(),
             failures: 0,
             started: tick(),
+            waits: 0,
         }
     }
 
@@ -247,6 +256,118 @@ fn fake_media(playing: bool) -> Snapshot {
     }
 }
 
+static LAST_REQUEST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn last_request() -> String {
+    LAST_REQUEST.lock().map(|r| r.clone()).unwrap_or_default()
+}
+
+/// 本机的假翻译服务：按路径回 OpenAI 或 Anthropic 格式的流式响应；模型名是 bad 时回 401。
+fn fake_server() -> u16 {
+    use std::io::{Read, Write};
+    let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else {
+        return 0;
+    };
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(8) {
+            let Ok(mut stream) = stream else { continue };
+            let mut data = Vec::new();
+            let mut buf = [0u8; 4096];
+            // 读完请求头和 Content-Length 指定的请求体
+            while let Ok(n) = stream.read(&mut buf) {
+                if n == 0 {
+                    break;
+                }
+                data.extend_from_slice(&buf[..n]);
+                let text = String::from_utf8_lossy(&data);
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let length = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())?
+                        })
+                        .unwrap_or(0);
+                    if data.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let request = String::from_utf8_lossy(&data).to_string();
+            let response = if request.contains("\"model\":\"bad\"") {
+                let body =
+                    r#"{"error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
+                format!(
+                    "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+            } else if request.contains("/v1/messages") {
+                let events = [
+                    r#"{"type":"message_start","message":{}}"#,
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"你好"}}"#,
+                    r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"，世界"}}"#,
+                    r#"{"type":"message_stop"}"#,
+                ];
+                let body: String = events
+                    .iter()
+                    .map(|e| format!("event: x\ndata: {e}\n\n"))
+                    .collect();
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
+                )
+            } else {
+                let body = [
+                    r#"data: {"choices":[{"delta":{"content":"Hello"}}]}"#,
+                    ": keep-alive",
+                    r#"data: {"choices":[{"delta":{"content":", world"}}]}"#,
+                    "data: [DONE]",
+                ]
+                .join("\n\n");
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}\n\n"
+                )
+            };
+            if let Ok(mut r) = LAST_REQUEST.lock() {
+                *r = request;
+            }
+            let _ = stream.write_all(response.as_bytes());
+        }
+    });
+    port
+}
+
+/// 当前进程的工作集和私有内存。
+fn memory() -> String {
+    let mut mem = PROCESS_MEMORY_COUNTERS_EX::default();
+    let ok = unsafe {
+        K32GetProcessMemoryInfo(
+            GetCurrentProcess(),
+            (&mut mem as *mut PROCESS_MEMORY_COUNTERS_EX).cast(),
+            std::mem::size_of_val(&mem) as u32,
+        )
+    }
+    .as_bool();
+    if ok {
+        format!(
+            "工作集 {:.1} MB，私有 {:.1} MB",
+            mem.WorkingSetSize as f64 / 1048576.0,
+            mem.PrivateUsage as f64 / 1048576.0
+        )
+    } else {
+        "读取失败".into()
+    }
+}
+
+fn has_target(app: &App, f: impl Fn(Hit) -> bool) -> bool {
+    app.has_target(f)
+}
+
+fn has_caret(app: &App) -> bool {
+    app.caret_rect().is_some()
+}
+
 fn reschedule(app: &App, ms: u32) {
     unsafe {
         SetTimer(Some(app.hwnd), TIMER_SMOKE, ms, None);
@@ -294,6 +415,7 @@ pub fn step(app: &mut App) {
             smoke.check(unsafe { IsWindowVisible(app.hwnd) }.as_bool(), "窗口已显示");
             smoke.check(app.state == IslandState::Idle, "启动后是待机细线");
             smoke.check(placed_at(app, Edge::Top), "窗口在屏幕顶部正中");
+            smoke.note(&format!("内存（刚启动）：{}", memory()));
             snapshot(app, &mut smoke, "01-idle", None);
             app.set_media(Some(fake_media(true)));
         }
@@ -450,6 +572,261 @@ pub fn step(app: &mut App) {
             );
             snapshot(app, &mut smoke, "15b-idle-clock", None);
             app.activate(Hit::IdleStyle(true));
+            // 待办：输入框获得焦点，打字（含中文和表情的代理对），回车添加
+            app.set_pinned(true);
+            app.set_tab(Tab::Todo);
+            app.focus_field(Field::Todo);
+            for unit in "买牛奶 smoke 😀".encode_utf16() {
+                app.on_char(unit);
+            }
+        }
+        61 => {
+            smoke.check(
+                app.editing
+                    .as_ref()
+                    .is_some_and(|(f, e)| *f == Field::Todo && e.text() == "买牛奶 smoke 😀"),
+                "待办输入框收到输入",
+            );
+            smoke.check(has_caret(app), "输入框有光标");
+            snapshot(app, &mut smoke, "17-todo-typing", None);
+            app.on_key(VK_LEFT);
+            app.on_key(VK_BACK); // 删掉表情前的空格
+            app.on_key(VK_RETURN);
+            app.on_char('第' as u16);
+            app.on_char('二' as u16);
+            app.on_key(VK_RETURN);
+        }
+        62 => {
+            let texts: Vec<&str> = app.todos.items.iter().map(|t| t.text.as_str()).collect();
+            smoke.check(
+                texts == ["第二", "买牛奶 smoke😀"],
+                &format!("回车添加待办，新的在前（{texts:?}）"),
+            );
+            smoke.check(
+                app.editing.as_ref().is_some_and(|(_, e)| e.is_empty()),
+                "添加后输入框清空、继续编辑",
+            );
+            app.activate(Hit::TodoToggle(0));
+            smoke.check(
+                app.todos
+                    .items
+                    .last()
+                    .is_some_and(|t| t.done && t.text == "第二"),
+                "勾选完成的待办沉到底部",
+            );
+            snapshot(app, &mut smoke, "18-todo-list", None);
+            // 自定义主题：直接填强调色
+            app.set_tab(Tab::Appearance);
+            app.activate(Hit::Theme(ThemeMode::Custom));
+            app.focus_field(Field::Hex(2));
+            for unit in "#30d158".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.on_key(VK_RETURN);
+        }
+        63 => {
+            smoke.check(app.editing.is_none(), "回车结束编辑");
+            smoke.check(
+                app.settings.theme.custom_accent == "#30D158",
+                &format!("填写的颜色写进设置（{}）", app.settings.theme.custom_accent),
+            );
+            snapshot(app, &mut smoke, "19-custom-hex", None);
+            // 格式不对的颜色不接受
+            app.focus_field(Field::Hex(0));
+            for unit in "#12".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.on_key(VK_RETURN);
+            smoke.check(
+                app.settings.theme.custom_background == "#1C1C1E",
+                "格式不对的颜色被忽略",
+            );
+            app.activate(Hit::Theme(ThemeMode::Schedule));
+            app.focus_field(Field::DayStarts);
+            for unit in "6:30".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.on_key(VK_ESCAPE);
+            smoke.check(app.settings.theme.day_starts == "07:00", "Esc 放弃修改");
+            app.focus_field(Field::DayStarts);
+            for unit in "6:30".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.blur(true);
+            smoke.check(
+                app.settings.theme.day_starts == "06:30",
+                &format!("时间规范成 HH:MM（{}）", app.settings.theme.day_starts),
+            );
+        }
+        64 => {
+            snapshot(app, &mut smoke, "20-schedule", None);
+            app.activate(Hit::Theme(ThemeMode::Dark));
+            // 翻译：本机起一个假的服务，走一遍 OpenAI 和 Anthropic 两种流式格式
+            let port = fake_server();
+            app.set_tab(Tab::Translate);
+            app.activate(Hit::TranslateSettings);
+            smoke.check(app.translate.settings_open, "打开翻译服务设置");
+            app.activate(Hit::Provider(7)); // 自定义
+            app.activate(Hit::ApiFormat(Format::OpenAI));
+            app.focus_field(Field::BaseUrl);
+            for unit in format!("http://127.0.0.1:{port}/v1").encode_utf16() {
+                app.on_char(unit);
+            }
+            app.focus_field(Field::Model);
+            for unit in "smoke".encode_utf16() {
+                app.on_char(unit);
+            }
+            snapshot(app, &mut smoke, "21-translate-settings", None);
+            app.activate(Hit::SettingsSave);
+            smoke.check(
+                !app.translate.settings_open
+                    && app.settings.translate_provider == "custom"
+                    && app.settings.translate_profile("custom").model == "smoke",
+                "保存翻译服务设置",
+            );
+            app.focus_field(Field::TranslateInput);
+            for unit in "你好".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.on_key(VK_RETURN);
+            next = 2000;
+        }
+        // 翻译请求还没回来（第一次连接时 WinHTTP 可能要先探测代理）：再等等
+        65..=67 if app.translate.status == Status::Busy && smoke.waits < 60 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 500;
+        }
+        65 => {
+            smoke.check(
+                app.translate.output == "Hello, world" && app.translate.status == Status::Idle,
+                &format!(
+                    "OpenAI 格式流式翻译（译文 {:?}，状态 {:?}）",
+                    app.translate.output, app.translate.status
+                ),
+            );
+            let request = last_request();
+            smoke.check(
+                request.contains("POST /v1/chat/completions")
+                    && request.contains("\"model\":\"smoke\"")
+                    && request.contains("你好"),
+                "请求地址和请求体正确",
+            );
+            snapshot(app, &mut smoke, "22-translate-openai", None);
+            // 换成 Anthropic 格式，填 Key，点测试
+            app.activate(Hit::TranslateSettings);
+            app.activate(Hit::ApiFormat(Format::Anthropic));
+            app.focus_field(Field::ApiKey);
+            for unit in "sk-smoke".encode_utf16() {
+                app.on_char(unit);
+            }
+            app.blur(true);
+            app.activate(Hit::SettingsTest);
+            next = 2000;
+        }
+        66 => {
+            let request = last_request();
+            smoke.check(
+                app.test_output == "你好，世界"
+                    && app
+                        .translate
+                        .hint
+                        .as_ref()
+                        .is_some_and(|(h, e)| !e && h.contains("成功")),
+                &format!(
+                    "Anthropic 格式测试（回复 {:?}，提示 {:?}）",
+                    app.test_output, app.translate.hint
+                ),
+            );
+            smoke.check(
+                request.contains("POST /v1/messages")
+                    && request.contains("x-api-key: sk-smoke")
+                    && request.contains("anthropic-version: 2023-06-01"),
+                "Anthropic 请求头正确",
+            );
+            let stored = app.settings.translate_profile("custom").protected_key;
+            smoke.check(
+                stored
+                    .as_deref()
+                    .and_then(super::net::unprotect)
+                    .is_some_and(|k| k == "sk-smoke"),
+                "Key 用 DPAPI 加密保存，能解出来",
+            );
+            snapshot(app, &mut smoke, "23-translate-test", None);
+            // 模型名不对：服务返回 401
+            app.translate.draft.model = "bad".into();
+            app.activate(Hit::SettingsSave);
+            app.start_translation("x", false);
+            next = 2000;
+        }
+        67 => {
+            smoke.check(
+                matches!(&app.translate.status, Status::Error(e) if e.contains("API Key")),
+                &format!("错误状态码变成可读的提示（{:?}）", app.translate.status),
+            );
+            snapshot(app, &mut smoke, "24-translate-error", None);
+            // 中转站：用真实的外壳数据对象模拟从资源管理器拖进来一个文件
+            app.set_tab(Tab::Shelf);
+            let file = smoke.dir.join("shelf-test.txt");
+            let _ = std::fs::write(&file, vec![b'x'; 1536]);
+            let target = super::drag::DropTarget::create(app.hwnd);
+            let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
+            let dropped =
+                super::drag::data_object_for(&file.to_string_lossy()).and_then(|data| unsafe {
+                    target.DragEnter(
+                        &data,
+                        MODIFIERKEYS_FLAGS(0),
+                        POINTL::default(),
+                        &mut effect,
+                    )?;
+                    let entered = effect;
+                    target.Drop(&data, MODIFIERKEYS_FLAGS(0), POINTL::default(), &mut effect)?;
+                    Ok(entered)
+                });
+            smoke.check(
+                dropped.as_ref().is_ok_and(|e| *e == DROPEFFECT_COPY),
+                &format!("拖进文件：接受为复制（{dropped:?}）"),
+            );
+            // 窗口已经注册成放置目标（再注册一次会报"已注册"）
+            let again = unsafe { RegisterDragDrop(app.hwnd, &target) };
+            smoke.check(
+                again
+                    .as_ref()
+                    .err()
+                    .is_some_and(|e| e.code() == DRAGDROP_E_ALREADYREGISTERED),
+                &format!("窗口已注册为拖放目标（{again:?}）"),
+            );
+        }
+        68 => {
+            let first = app.shelf.items.first();
+            smoke.check(
+                first.is_some_and(|i| i.name() == "shelf-test.txt" && i.detail() == "1.5 KB"),
+                &format!(
+                    "放下后进了中转站（{:?}）",
+                    first.map(|i| (i.name().to_string(), i.detail().to_string()))
+                ),
+            );
+            app.shelf_add(&[smoke.dir.to_string_lossy().to_string()]);
+            smoke.check(
+                app.shelf.items.len() == 2
+                    && app.shelf.items[0].is_folder()
+                    && app.shelf.items[0].detail() == "文件夹",
+                "文件夹也能放",
+            );
+            app.shelf_add(&[smoke
+                .dir
+                .join("shelf-test.txt")
+                .to_string_lossy()
+                .to_string()]);
+            smoke.check(app.shelf.items.len() == 2, "重复的不再加");
+            smoke.check(
+                has_target(app, |h| h == Hit::ShelfClear),
+                "中转站有清空按钮",
+            );
+            snapshot(app, &mut smoke, "25-shelf", None);
+            app.activate(Hit::ShelfClear);
+            app.set_tab(Tab::Music);
+            app.set_pinned(false);
             smoke.step = 15;
             next = 35;
         }
@@ -465,22 +842,7 @@ pub fn step(app: &mut App) {
             smoke.check(app.state == IslandState::Idle, "快速切换后回到待机");
             snapshot(app, &mut smoke, "16-after-stress", None);
 
-            let mut mem = PROCESS_MEMORY_COUNTERS_EX::default();
-            let ok = unsafe {
-                K32GetProcessMemoryInfo(
-                    GetCurrentProcess(),
-                    (&mut mem as *mut PROCESS_MEMORY_COUNTERS_EX).cast(),
-                    std::mem::size_of_val(&mem) as u32,
-                )
-            }
-            .as_bool();
-            if ok {
-                smoke.note(&format!(
-                    "内存：工作集 {:.1} MB，私有 {:.1} MB",
-                    mem.WorkingSetSize as f64 / 1048576.0,
-                    mem.PrivateUsage as f64 / 1048576.0
-                ));
-            }
+            smoke.note(&format!("内存（用过全部功能后）：{}", memory()));
             if let Ok(size) = std::env::current_exe()
                 .and_then(std::fs::metadata)
                 .map(|m| m.len())

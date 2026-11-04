@@ -10,32 +10,51 @@ use windows::core::{HSTRING, Result};
 
 use island::clip::Entry;
 use island::color::{self, ACCENT_PRESETS, BACKGROUND_PRESETS, FOREGROUND_PRESETS, Palette, Rgb};
+use island::edit::TextEdit;
 use island::level;
 use island::metrics::{COMPACT, EXPANDED, Edge, IDLE_CLOCK, LEVEL, Rect};
 use island::settings::{Settings, ThemeMode};
+use island::shelf::Item as ShelfEntry;
 use island::text::{clock, format_duration, speed, weekday_zh};
+use island::todo::Todo;
 
-use super::gfx::{Align, Painter, TextStyle, color};
+use super::gfx::{Align, FieldDraw, FieldGeometry, Painter, TextStyle, color};
 use super::media::Snapshot;
 use super::system::Sample;
+use super::translator::{Status, TranslateUi};
+use island::translate::{self as tr, Format, PRESETS};
 
 /// 展开面板的功能标签。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Music,
+    Todo,
     Clipboard,
+    Shelf,
+    Translate,
     Monitor,
     Appearance,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 4] = [Tab::Music, Tab::Clipboard, Tab::Monitor, Tab::Appearance];
+    pub const ALL: [Tab; 7] = [
+        Tab::Music,
+        Tab::Todo,
+        Tab::Clipboard,
+        Tab::Shelf,
+        Tab::Translate,
+        Tab::Monitor,
+        Tab::Appearance,
+    ];
 
     /// 和 WPF 版 settings.json 里 LastTab 的取值一致。
     pub fn name(self) -> &'static str {
         match self {
             Tab::Music => "Music",
+            Tab::Todo => "Todo",
             Tab::Clipboard => "Clipboard",
+            Tab::Shelf => "Shelf",
+            Tab::Translate => "Translate",
             Tab::Monitor => "Monitor",
             Tab::Appearance => "Appearance",
         }
@@ -51,11 +70,88 @@ impl Tab {
     fn glyph(self) -> char {
         match self {
             Tab::Music => '\u{E8D6}',
+            Tab::Todo => '\u{E762}',
             Tab::Clipboard => '\u{E77F}',
+            Tab::Shelf => '\u{E8B7}',
+            Tab::Translate => '\u{E8C1}',
             Tab::Monitor => '\u{E9D9}',
             Tab::Appearance => '\u{E790}',
         }
     }
+}
+
+/// 文字输入框。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Field {
+    /// 添加待办。
+    Todo,
+    /// 自定义颜色：0 背景 / 1 文字 / 2 强调色。
+    Hex(u8),
+    /// "按时间"主题：白天 / 夜晚开始的时间。
+    DayStarts,
+    NightStarts,
+    /// 要翻译的文字（多行）。
+    TranslateInput,
+    /// 翻译服务设置：地址、模型、Key。
+    BaseUrl,
+    Model,
+    ApiKey,
+}
+
+impl Field {
+    pub fn max_chars(self) -> usize {
+        match self {
+            Field::Todo => island::todo::MAX_LENGTH,
+            Field::Hex(_) => 7,
+            Field::DayStarts | Field::NightStarts => 5,
+            Field::TranslateInput => 20_000,
+            Field::BaseUrl => 500,
+            Field::Model | Field::ApiKey => 200,
+        }
+    }
+
+    pub fn multiline(self) -> bool {
+        self == Field::TranslateInput
+    }
+
+    pub fn font_size(self) -> f32 {
+        match self {
+            Field::Todo | Field::TranslateInput => 13.0,
+            _ => 12.0,
+        }
+    }
+
+    /// 只填 ASCII 的框（颜色、时间、地址、Key）不需要输入法。
+    pub fn wants_ime(self) -> bool {
+        matches!(self, Field::Todo | Field::TranslateInput | Field::Model)
+    }
+
+    /// Key 显示成圆点。
+    pub fn masked(self) -> bool {
+        self == Field::ApiKey
+    }
+}
+
+/// 输入框里实际显示的文字：Key 换成圆点（一个字符对一个圆点，光标位置不变）。
+pub fn display_text(field: Field, text: &str) -> std::borrow::Cow<'_, str> {
+    if field.masked() {
+        std::borrow::Cow::Owned(
+            text.chars()
+                .map(|c| if c.len_utf16() == 1 { '•' } else { c })
+                .collect(),
+        )
+    } else {
+        std::borrow::Cow::Borrowed(text)
+    }
+}
+
+/// 正在编辑的输入框：内容、光标、输入法组字。
+pub struct Editing<'a> {
+    pub field: Field,
+    pub edit: &'a TextEdit,
+    /// 输入法正在组的字和组字内的光标（UTF-16）。
+    pub composition: &'a str,
+    pub composition_caret: usize,
 }
 
 /// 可以点的东西。
@@ -77,15 +173,43 @@ pub enum Hit {
     IdleStyle(bool),
     MediaStyle(bool),
     Dock(Edge),
+    Field(Field),
+    TodoToggle(usize),
+    TodoDelete(usize),
+    TodoClearDone,
+    /// 中转站：一行（按下拖出、双击打开）、在资源管理器中显示、移出、清空。
+    ShelfItem(usize),
+    ShelfReveal(usize),
+    ShelfRemove(usize),
+    ShelfClear,
+    /// 翻译（翻译中时是"停止"）。
+    TranslateGo,
+    TranslatePaste,
+    TranslateCopy,
+    TranslateSettings,
+    /// 设置页：选服务（预设下标）、选格式、返回、测试、保存。
+    Provider(u8),
+    ApiFormat(Format),
+    SettingsBack,
+    SettingsTest,
+    SettingsSave,
 }
 
 /// 一次绘制登记下来的可点区域（相对胶囊左上角）。
 #[derive(Default, Clone)]
 pub struct Targets {
     items: Vec<(Rect, Hit)>,
+    fields: Vec<(Field, FieldGeometry)>,
+    /// 译文区域：(区域, 实际滚动位置, 最大滚动位置)。
+    pub output: Option<(Rect, f32, f32)>,
 }
 
 impl Targets {
+    /// 某个输入框这次画在哪、文字原点和光标在哪。
+    pub fn field(&self, f: Field) -> Option<FieldGeometry> {
+        self.fields.iter().find(|(k, _)| *k == f).map(|(_, g)| *g)
+    }
+
     fn add(&mut self, r: Rect, hit: Hit) {
         self.items.push((r, hit));
     }
@@ -115,6 +239,16 @@ pub struct ViewState<'a> {
     pub volume: Option<(f64, bool)>,
     pub clips: &'a [Entry],
     pub clip_scroll: usize,
+    pub todos: &'a [Todo],
+    pub shelf: &'a [ShelfEntry],
+    pub shelf_scroll: usize,
+    /// 正拖着文件经过岛。
+    pub drag_over: bool,
+    pub todo_scroll: usize,
+    pub editing: Option<Editing<'a>>,
+    pub translate: &'a TranslateUi,
+    /// 当前翻译服务的简短说明、是否已经可以翻译。
+    pub translate_summary: (String, bool),
     pub today: &'a str,
     pub sample: Option<Sample>,
     pub hour: u16,
@@ -136,7 +270,15 @@ mod glyph {
     pub const DELETE: char = '\u{E74D}';
     pub const CLOSE: char = '\u{E711}';
     pub const CLIPBOARD: char = '\u{E77F}';
+    pub const CHECK: char = '\u{E73E}';
+    pub const TODO: char = '\u{E762}';
+    pub const CLEAR_DONE: char = '\u{E74D}';
 }
+
+/// 待办列表每页几行。
+pub const TODO_ROWS: usize = 5;
+const TODO_TOP: f32 = 88.0;
+const TODO_ROW_HEIGHT: f32 = 31.0;
 
 /// 每页最多显示几条剪贴板记录。
 pub const CLIP_ROWS: usize = 5;
@@ -231,7 +373,11 @@ pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<Targets> {
             Some(m) => draw_player(p, m, v, &mut t)?,
             None => draw_empty_music(p, v)?,
         },
+        Tab::Todo => draw_todos(p, v, &mut t)?,
         Tab::Clipboard => draw_clipboard(p, v, &mut t)?,
+        Tab::Shelf => draw_shelf(p, v, &mut t)?,
+        Tab::Translate if v.translate.settings_open => draw_translate_settings(p, v, &mut t)?,
+        Tab::Translate => draw_translate(p, v, &mut t)?,
         Tab::Monitor => draw_monitor(p, v)?,
         Tab::Appearance => draw_appearance(p, v, &mut t)?,
     }
@@ -467,6 +613,172 @@ fn draw_art(p: &Painter, m: &Snapshot, r: Rect, radius: f32, v: &ViewState) -> R
     }
 }
 
+// ───────────────────────────── 输入框 ─────────────────────────────
+
+/// 画一个输入框并登记点击区域。`value` 是没在编辑时显示的内容。
+fn draw_field(
+    p: &Painter,
+    v: &ViewState,
+    t: &mut Targets,
+    field: Field,
+    rect: Rect,
+    value: &str,
+    placeholder: &str,
+) -> Result<()> {
+    let draw = |text: &str,
+                caret: Option<usize>,
+                selection: Option<(usize, usize)>,
+                composition: Option<(usize, usize)>| {
+        p.field(&FieldDraw {
+            text,
+            placeholder,
+            rect,
+            size: field.font_size(),
+            multiline: field.multiline(),
+            foreground: v.palette.foreground,
+            accent: v.accent,
+            caret,
+            selection,
+            composition,
+        })
+    };
+    let geometry = match v.editing.as_ref().filter(|e| e.field == field) {
+        Some(e) => {
+            let edit = e.edit;
+            let caret = edit.utf16_index(edit.caret());
+            if e.composition.is_empty() {
+                let selection = edit
+                    .selection()
+                    .map(|(a, b)| (edit.utf16_index(a), edit.utf16_index(b)));
+                draw(
+                    &display_text(field, edit.text()),
+                    Some(caret),
+                    selection,
+                    None,
+                )?
+            } else {
+                // 组字内容先插在光标处显示，上屏后才真正写进去
+                let mut text = edit.text().to_string();
+                text.insert_str(edit.caret(), e.composition);
+                let len = e.composition.encode_utf16().count();
+                draw(
+                    &text,
+                    Some(caret + e.composition_caret.min(len)),
+                    None,
+                    Some((caret, caret + len)),
+                )?
+            }
+        }
+        None => draw(&display_text(field, value), None, None, None)?,
+    };
+    t.add(rect, Hit::Field(field));
+    t.fields.push((field, geometry));
+    Ok(())
+}
+
+// ───────────────────────────── 待办 ─────────────────────────────
+
+fn draw_todos(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    draw_field(
+        p,
+        v,
+        t,
+        Field::Todo,
+        Rect::new(16.0, 50.0, 372.0, 30.0),
+        "",
+        "添加待办，回车确认",
+    )?;
+    let clear = Rect::new(396.0, 52.0, 26.0, 26.0);
+    if v.todos.iter().any(|todo| todo.done) {
+        hover_bg(p, v, Hit::TodoClearDone, clear, 13.0)?;
+        p.icon(glyph::CLEAR_DONE, clear, 12.0, color(fg, 0.6))?;
+        t.add(clear, Hit::TodoClearDone);
+    }
+
+    if v.todos.is_empty() {
+        let w = EXPANDED.width;
+        p.icon(
+            glyph::TODO,
+            Rect::new(0.0, 124.0, w, 32.0),
+            24.0,
+            color(fg, 0.3),
+        )?;
+        return p.text(
+            "今天还没有待办",
+            Rect::new(0.0, 160.0, w, 22.0),
+            &style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.5),
+        );
+    }
+
+    let text = style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    for (row, (i, todo)) in v
+        .todos
+        .iter()
+        .enumerate()
+        .skip(v.todo_scroll)
+        .take(TODO_ROWS)
+        .enumerate()
+    {
+        let y = TODO_TOP + row as f32 * TODO_ROW_HEIGHT;
+        let r = Rect::new(12.0, y, 416.0, TODO_ROW_HEIGHT - 4.0);
+        let hovered = matches!(v.hovered, Some(Hit::TodoToggle(h) | Hit::TodoDelete(h)) if h == i);
+        p.fill_round(r, 10.0, color(fg, if hovered { 0.12 } else { 0.06 }))?;
+
+        // 勾选框
+        let (cx, cy) = (r.x + 18.0, r.center_y());
+        if todo.done {
+            p.fill_circle(cx, cy, 8.0, color(v.accent, 1.0))?;
+            p.icon(
+                glyph::CHECK,
+                Rect::new(cx - 8.0, cy - 8.0, 16.0, 16.0),
+                9.0,
+                color(on(v.accent), 1.0),
+            )?;
+        } else {
+            p.fill_circle(cx, cy, 8.0, color(fg, 0.45))?;
+            p.fill_circle(cx, cy, 6.5, color(v.palette.background, 1.0))?;
+            p.fill_circle(cx, cy, 6.5, color(fg, 0.06))?;
+        }
+        t.add(r, Hit::TodoToggle(i));
+
+        let text_rect = Rect::new(r.x + 34.0, y, r.w - 70.0, r.h);
+        if todo.done {
+            p.text_struck(&todo.text, text_rect, &text, color(fg, 0.4))?;
+        } else {
+            p.text(&todo.text, text_rect, &text, color(fg, 0.95))?;
+        }
+        if hovered {
+            let del = Rect::new(r.right() - 30.0, y + 1.5, 24.0, 24.0);
+            hover_bg(p, v, Hit::TodoDelete(i), del, 12.0)?;
+            p.icon(glyph::CLOSE, del, 10.0, color(fg, 0.7))?;
+            t.add(del, Hit::TodoDelete(i));
+        }
+    }
+
+    let pending = v.todos.iter().filter(|todo| !todo.done).count();
+    let footer = if v.todos.len() > TODO_ROWS {
+        format!(
+            "还有 {pending} 项未完成 · {}–{} / {}，滚动滚轮查看更多",
+            v.todo_scroll + 1,
+            (v.todo_scroll + TODO_ROWS).min(v.todos.len()),
+            v.todos.len()
+        )
+    } else if pending > 0 {
+        format!("还有 {pending} 项未完成")
+    } else {
+        "全部完成".to_string()
+    };
+    p.text(
+        &footer,
+        Rect::new(16.0, 244.0, 408.0, 12.0),
+        &style(&family, 10.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+        color(fg, 0.35),
+    )
+}
+
 // ───────────────────────────── 剪贴板 ─────────────────────────────
 
 fn draw_clipboard(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
@@ -553,6 +865,412 @@ fn draw_clipboard(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
     Ok(())
 }
 
+// ───────────────────────────── 中转站 ─────────────────────────────
+
+/// 中转站每页几行。
+pub const SHELF_ROWS: usize = 5;
+const SHELF_TOP: f32 = 80.0;
+const SHELF_ROW_HEIGHT: f32 = 32.0;
+
+fn draw_shelf(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let w = EXPANDED.width;
+    p.text(
+        "拖进来暂存，拖出去使用，双击打开",
+        Rect::new(16.0, 50.0, 340.0, 24.0),
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(fg, 0.4),
+    )?;
+
+    if v.drag_over {
+        let r = Rect::new(12.0, 78.0, 416.0, 166.0);
+        p.fill_round(r, 14.0, color(v.accent, 0.18))?;
+        p.icon(
+            '\u{E896}',
+            Rect::new(0.0, 120.0, w, 36.0),
+            26.0,
+            color(v.accent, 1.0),
+        )?;
+        return p.text(
+            "松开就放进中转站",
+            Rect::new(0.0, 160.0, w, 22.0),
+            &style(&family, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center),
+            color(fg, 0.9),
+        );
+    }
+
+    if v.shelf.is_empty() {
+        p.icon(
+            '\u{E898}',
+            Rect::new(0.0, 112.0, w, 32.0),
+            24.0,
+            color(fg, 0.3),
+        )?;
+        return p.text(
+            "把文件拖到灵动岛上",
+            Rect::new(0.0, 148.0, w, 22.0),
+            &style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.5),
+        );
+    }
+
+    let clear = Rect::new(398.0, 49.0, 26.0, 26.0);
+    hover_bg(p, v, Hit::ShelfClear, clear, 13.0)?;
+    p.icon(glyph::DELETE, clear, 12.0, color(fg, 0.6))?;
+    t.add(clear, Hit::ShelfClear);
+
+    let name = style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    let detail = style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing);
+    for (row, (i, item)) in v
+        .shelf
+        .iter()
+        .enumerate()
+        .skip(v.shelf_scroll)
+        .take(SHELF_ROWS)
+        .enumerate()
+    {
+        let y = SHELF_TOP + row as f32 * SHELF_ROW_HEIGHT;
+        let r = Rect::new(12.0, y, 416.0, SHELF_ROW_HEIGHT - 4.0);
+        let hovered = matches!(
+            v.hovered,
+            Some(Hit::ShelfItem(h) | Hit::ShelfReveal(h) | Hit::ShelfRemove(h)) if h == i
+        );
+        p.fill_round(r, 10.0, color(fg, if hovered { 0.12 } else { 0.06 }))?;
+        p.icon(
+            item.glyph(),
+            Rect::new(r.x + 6.0, y, 26.0, r.h),
+            13.0,
+            color(v.accent, 1.0),
+        )?;
+        p.text(
+            item.name(),
+            Rect::new(r.x + 36.0, y, 250.0, r.h),
+            &name,
+            color(fg, 0.95),
+        )?;
+        t.add(r, Hit::ShelfItem(i));
+        if hovered {
+            let reveal = Rect::new(r.right() - 58.0, y + 2.0, 24.0, 24.0);
+            hover_bg(p, v, Hit::ShelfReveal(i), reveal, 12.0)?;
+            p.icon('\u{E8DA}', reveal, 11.0, color(fg, 0.7))?;
+            t.add(reveal, Hit::ShelfReveal(i));
+            let remove = Rect::new(r.right() - 30.0, y + 2.0, 24.0, 24.0);
+            hover_bg(p, v, Hit::ShelfRemove(i), remove, 12.0)?;
+            p.icon(glyph::CLOSE, remove, 10.0, color(fg, 0.7))?;
+            t.add(remove, Hit::ShelfRemove(i));
+        } else {
+            p.text(
+                item.detail(),
+                Rect::new(r.right() - 120.0, y, 110.0, r.h),
+                &detail,
+                color(fg, 0.4),
+            )?;
+        }
+    }
+
+    if v.shelf.len() > SHELF_ROWS {
+        p.text(
+            &format!(
+                "{}–{} / {}，滚动滚轮查看更多",
+                v.shelf_scroll + 1,
+                (v.shelf_scroll + SHELF_ROWS).min(v.shelf.len()),
+                v.shelf.len()
+            ),
+            Rect::new(16.0, 240.0, 408.0, 14.0),
+            &style(&family, 10.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.35),
+        )?;
+    }
+    Ok(())
+}
+
+// ───────────────────────────── 翻译 ─────────────────────────────
+
+/// 圆形图标按钮。
+fn icon_button(
+    p: &Painter,
+    v: &ViewState,
+    t: &mut Targets,
+    r: Rect,
+    g: char,
+    hit: Hit,
+) -> Result<()> {
+    hover_bg(p, v, hit, r, r.h / 2.0)?;
+    p.icon(g, r, 12.0, color(v.palette.foreground, 0.7))?;
+    t.add(r, hit);
+    Ok(())
+}
+
+/// 文字按钮；`primary` 时用强调色。
+#[allow(clippy::too_many_arguments)]
+fn text_button(
+    p: &Painter,
+    v: &ViewState,
+    t: &mut Targets,
+    r: Rect,
+    text: &str,
+    primary: bool,
+    hit: Hit,
+) -> Result<()> {
+    let fg = v.palette.foreground;
+    let hovered = v.hovered == Some(hit);
+    let (bg, text_color) = if primary {
+        (
+            color(v.accent, if hovered { 0.85 } else { 1.0 }),
+            color(on(v.accent), 1.0),
+        )
+    } else {
+        (
+            color(fg, if hovered { 0.16 } else { 0.08 }),
+            color(fg, 0.95),
+        )
+    };
+    p.fill_round(r, r.h / 2.0, bg)?;
+    let family = p.gfx.text_font.clone();
+    p.text(
+        text,
+        r,
+        &style(&family, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center),
+        text_color,
+    )?;
+    t.add(r, hit);
+    Ok(())
+}
+
+const ERROR_RED: Rgb = Rgb::new(0xFF, 0x45, 0x3A);
+
+/// 译文区域（相对胶囊）。
+pub const OUTPUT_RECT: Rect = Rect::new(16.0, 170.0, 408.0, 76.0);
+
+fn draw_translate(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let tu = v.translate;
+    draw_field(
+        p,
+        v,
+        t,
+        Field::TranslateInput,
+        Rect::new(16.0, 50.0, 408.0, 78.0),
+        &tu.input,
+        "输入要翻译的文字，Enter 翻译，Shift+Enter 换行",
+    )?;
+
+    // 状态 + 按钮
+    let y = 136.0;
+    let (status, status_color) = match &tu.status {
+        Status::Busy => ("正在翻译…".to_string(), color(fg, 0.6)),
+        Status::Error(e) => (e.clone(), color(ERROR_RED, 1.0)),
+        Status::Idle if !v.translate_summary.1 => (
+            "还没有设置翻译服务，点右边的齿轮".to_string(),
+            color(fg, 0.5),
+        ),
+        Status::Idle => (v.translate_summary.0.clone(), color(fg, 0.4)),
+    };
+    p.text(
+        &status,
+        Rect::new(16.0, y, 236.0, 26.0),
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        status_color,
+    )?;
+    icon_button(
+        p,
+        v,
+        t,
+        Rect::new(258.0, y, 26.0, 26.0),
+        '\u{E713}',
+        Hit::TranslateSettings,
+    )?;
+    icon_button(
+        p,
+        v,
+        t,
+        Rect::new(288.0, y, 26.0, 26.0),
+        glyph::CLIPBOARD,
+        Hit::TranslatePaste,
+    )?;
+    if !tu.output.is_empty() {
+        icon_button(
+            p,
+            v,
+            t,
+            Rect::new(318.0, y, 26.0, 26.0),
+            '\u{E8C8}',
+            Hit::TranslateCopy,
+        )?;
+    }
+    let busy = tu.status == Status::Busy;
+    text_button(
+        p,
+        v,
+        t,
+        Rect::new(352.0, y, 72.0, 26.0),
+        if busy { "停止" } else { "翻译" },
+        !busy,
+        Hit::TranslateGo,
+    )?;
+
+    if tu.output.is_empty() {
+        return Ok(());
+    }
+    let (scroll, max) = p.paragraph(
+        &tu.output,
+        OUTPUT_RECT,
+        13.0,
+        color(fg, 0.95),
+        tu.output_scroll,
+    )?;
+    t.output = Some((OUTPUT_RECT, scroll, max));
+    Ok(())
+}
+
+fn draw_translate_settings(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let d = &v.translate.draft;
+
+    // 服务：放不下就换行
+    let (mut x, mut y) = (16.0, 48.0);
+    for (i, preset) in PRESETS.iter().enumerate() {
+        let w = segment_width(preset.name);
+        if x + w > 424.0 {
+            x = 16.0;
+            y += 26.0;
+        }
+        x = segment(
+            p,
+            v,
+            t,
+            x,
+            y,
+            preset.name,
+            preset.id.eq_ignore_ascii_case(&d.provider),
+            Hit::Provider(i as u8),
+        )?;
+    }
+
+    let row = |y: f32, name: &str| -> Result<()> {
+        p.text(
+            name,
+            Rect::new(16.0, y, 40.0, 22.0),
+            &style(&family, 12.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+            color(fg, 0.6),
+        )
+    };
+    let y = 104.0;
+    row(y, "格式")?;
+    let x1 = segment(
+        p,
+        v,
+        t,
+        56.0,
+        y,
+        "Anthropic",
+        d.format == Format::Anthropic,
+        Hit::ApiFormat(Format::Anthropic),
+    )?;
+    segment(
+        p,
+        v,
+        t,
+        x1,
+        y,
+        "OpenAI 兼容",
+        d.format == Format::OpenAI,
+        Hit::ApiFormat(Format::OpenAI),
+    )?;
+
+    let preset = tr::preset(&d.provider);
+    row(130.0, "地址")?;
+    draw_field(
+        p,
+        v,
+        t,
+        Field::BaseUrl,
+        Rect::new(56.0, 130.0, 368.0, 22.0),
+        &d.base_url,
+        "留空使用默认地址",
+    )?;
+    row(156.0, "模型")?;
+    draw_field(
+        p,
+        v,
+        t,
+        Field::Model,
+        Rect::new(56.0, 156.0, 368.0, 22.0),
+        &d.model,
+        "模型名称",
+    )?;
+    row(182.0, "Key")?;
+    let key_hint = if d.has_stored_key {
+        "已保存（不改就留空）"
+    } else {
+        preset.key_hint
+    };
+    draw_field(
+        p,
+        v,
+        t,
+        Field::ApiKey,
+        Rect::new(56.0, 182.0, 368.0, 22.0),
+        d.key.as_deref().unwrap_or(""),
+        key_hint,
+    )?;
+
+    // 提示：正在改地址时实时显示最终请求的地址
+    let base_url = match v.editing.as_ref() {
+        Some(e) if e.field == Field::BaseUrl => e.edit.text(),
+        _ => d.base_url.as_str(),
+    };
+    let (hint, error) = match &v.translate.hint {
+        Some((h, e)) => (h.clone(), *e),
+        None if !tr::is_valid(base_url) => (tr::INVALID_URL_HINT.to_string(), true),
+        None => (
+            format!("请求 {}", tr::request_url(d.format, base_url)),
+            false,
+        ),
+    };
+    p.text(
+        &hint,
+        Rect::new(16.0, 208.0, 408.0, 16.0),
+        &style(&family, 10.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        if error {
+            color(ERROR_RED, 1.0)
+        } else {
+            color(fg, 0.4)
+        },
+    )?;
+
+    icon_button(
+        p,
+        v,
+        t,
+        Rect::new(16.0, 228.0, 26.0, 24.0),
+        '\u{E72B}',
+        Hit::SettingsBack,
+    )?;
+    let testing = v.translate.testing && v.translate.status == Status::Busy;
+    text_button(
+        p,
+        v,
+        t,
+        Rect::new(276.0, 228.0, 70.0, 24.0),
+        if testing { "测试中…" } else { "测试" },
+        false,
+        Hit::SettingsTest,
+    )?;
+    text_button(
+        p,
+        v,
+        t,
+        Rect::new(354.0, 228.0, 70.0, 24.0),
+        "保存",
+        true,
+        Hit::SettingsSave,
+    )
+}
+
 // ───────────────────────────── 系统监控 ─────────────────────────────
 
 fn draw_monitor(p: &Painter, v: &ViewState) -> Result<()> {
@@ -634,6 +1352,14 @@ fn draw_monitor(p: &Painter, v: &ViewState) -> Result<()> {
 
 // ───────────────────────────── 外观 ─────────────────────────────
 
+/// 分段按钮的宽度（按字数估算）。
+fn segment_width(text: &str) -> f32 {
+    22.0 + text
+        .chars()
+        .map(|c| if c.is_ascii() { 7.0 } else { 12.0 })
+        .sum::<f32>()
+}
+
 /// 一个分段按钮：选中时用强调色填充。返回下一个按钮的起点。
 #[allow(clippy::too_many_arguments)]
 fn segment(
@@ -648,11 +1374,7 @@ fn segment(
 ) -> Result<f32> {
     let fg = v.palette.foreground;
     let family = p.gfx.text_font.clone();
-    let w = 22.0
-        + text
-            .chars()
-            .map(|c| if c.is_ascii() { 7.0 } else { 12.0 })
-            .sum::<f32>();
+    let w = segment_width(text);
     let r = Rect::new(x, y, w, 22.0);
     let (bg, text_color) = if selected {
         (color(v.accent, 1.0), color(on(v.accent), 1.0))
@@ -730,17 +1452,62 @@ fn draw_appearance(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
                     Hit::Swatch(kind as u8, i as u8),
                 );
             }
+            // 也可以直接填 #RRGGBB
+            draw_field(
+                p,
+                v,
+                t,
+                Field::Hex(kind as u8),
+                Rect::new(252.0, y, 84.0, 22.0),
+                current[kind],
+                "#RRGGBB",
+            )?;
         }
+    } else if s.theme.mode == ThemeMode::Schedule {
+        let small = style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+        let y = 82.0;
+        p.text(
+            "白天从",
+            Rect::new(16.0, y, 40.0, 22.0),
+            &small,
+            color(fg, 0.6),
+        )?;
+        draw_field(
+            p,
+            v,
+            t,
+            Field::DayStarts,
+            Rect::new(56.0, y, 60.0, 22.0),
+            &s.theme.day_starts,
+            "07:00",
+        )?;
+        p.text(
+            "到",
+            Rect::new(124.0, y, 16.0, 22.0),
+            &small,
+            color(fg, 0.6),
+        )?;
+        draw_field(
+            p,
+            v,
+            t,
+            Field::NightStarts,
+            Rect::new(144.0, y, 60.0, 22.0),
+            &s.theme.night_starts,
+            "19:00",
+        )?;
+        p.text(
+            "用浅色，其余时间用深色",
+            Rect::new(212.0, y, 212.0, 22.0),
+            &small,
+            color(fg, 0.6),
+        )?;
     } else {
         let hint = match s.theme.mode {
             ThemeMode::Dark => "黑色的经典灵动岛".to_string(),
             ThemeMode::Light => "浅色胶囊，适合浅色桌面".to_string(),
             ThemeMode::System => "跟随 Windows 的浅色 / 深色应用模式".to_string(),
-            ThemeMode::Schedule => format!(
-                "白天 {}–{} 用浅色，其余时间用深色",
-                s.theme.day_starts, s.theme.night_starts
-            ),
-            ThemeMode::Custom => String::new(),
+            ThemeMode::Schedule | ThemeMode::Custom => String::new(),
         };
         p.text(
             &hint,
@@ -817,7 +1584,9 @@ mod tests {
         for t in Tab::ALL {
             assert_eq!(Tab::parse(t.name()), t);
         }
-        assert_eq!(Tab::parse("Todo"), Tab::Music); // 还没移植的标签回到音乐
+        assert_eq!(Tab::parse("Nope"), Tab::Music); // 不认识的标签回到音乐
+        assert_eq!(display_text(Field::ApiKey, "sk-1"), "••••");
+        assert_eq!(display_text(Field::Model, "m"), "m");
     }
 
     #[test]
@@ -834,6 +1603,9 @@ mod tests {
     #[test]
     fn panel_content_fits() {
         assert!(CLIP_TOP + CLIP_ROWS as f32 * CLIP_ROW_HEIGHT <= EXPANDED.height - 14.0);
+        const {
+            assert!(TODO_TOP + TODO_ROWS as f32 * TODO_ROW_HEIGHT <= 244.0);
+        }
         assert!(VOLUME_TRACK.bottom() <= EXPANDED.height - 14.0);
         // 最长的一行分段按钮放得下
         let widest = 72.0 + (22.0 + 6.0 * 12.0) + 6.0 + (22.0 + 5.0 * 12.0);

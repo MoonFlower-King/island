@@ -173,8 +173,10 @@ impl Volume {
 
 // ───────────────────────────── 剪贴板 ─────────────────────────────
 
-/// 读剪贴板里的文字。密码管理器等标记了“不要记录”的内容返回 None。剪贴板被占用时重试几次。
-pub fn read_clipboard_text(hwnd: HWND) -> Option<String> {
+/// 读剪贴板里的文字。剪贴板被占用时重试几次。
+/// `for_history` 时（记进剪贴板历史）跳过密码管理器等标记了“不要记录”的内容，也不读超长的文字；
+/// 粘贴进输入框时不管这些。
+pub fn read_clipboard_text(hwnd: HWND, for_history: bool) -> Option<String> {
     unsafe {
         let mut opened = false;
         for _ in 0..5 {
@@ -194,7 +196,7 @@ pub fn read_clipboard_text(hwnd: HWND) -> Option<String> {
                 w!("CanIncludeInClipboardHistory"),
             ] {
                 let format = RegisterClipboardFormatW(name);
-                if format != 0 && IsClipboardFormatAvailable(format).is_ok() {
+                if for_history && format != 0 && IsClipboardFormatAvailable(format).is_ok() {
                     // CanIncludeInClipboardHistory 为 0 表示不要记录；另外两个只要存在就不记录
                     if name == w!("CanIncludeInClipboardHistory") {
                         if let Ok(h) = GetClipboardData(format) {
@@ -220,7 +222,11 @@ pub fn read_clipboard_text(hwnd: HWND) -> Option<String> {
                 return None;
             }
             // 太长的不记录（历史只存 MAX_LENGTH 个字以内的），也就不必整段解码
-            let limit = island::clip::MAX_LENGTH * 2 + 1;
+            let limit = if for_history {
+                island::clip::MAX_LENGTH * 2 + 1
+            } else {
+                1 << 20
+            };
             let max = (GlobalSize(global) / 2).min(limit);
             let mut len = 0;
             while len < max && *p.add(len) != 0 {

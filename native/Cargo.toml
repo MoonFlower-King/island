@@ -16,6 +16,8 @@ serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"
+# COM 接口的实现宏（拖放目标）需要直接依赖 windows-core
+windows-core = "0.62"
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.62"
@@ -50,6 +52,9 @@ features = [
     "Win32_System_WinRT",
     "Win32_System_WinRT_Composition",
     "Win32_UI_HiDpi",
+    "Win32_Networking_WinHttp",
+    "Win32_Security_Cryptography",
+    "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_Media_Audio",
