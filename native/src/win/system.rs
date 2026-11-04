@@ -1,10 +1,19 @@
 //! 和系统打交道的小功能：CPU / 内存 / 网速采样、系统音量、剪贴板、开机启动、系统浅色模式。
 
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Foundation::{FILETIME, HANDLE, HGLOBAL, HWND};
+use windows::Win32::Foundation::{LPARAM, RECT};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayMonitors, GetMonitorInfoW, HDC, HMONITOR, MONITORINFOEXW,
+};
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-use windows::Win32::Media::Audio::{IMMDeviceEnumerator, MMDeviceEnumerator, eMultimedia, eRender};
+use windows::Win32::Media::Audio::{
+    IMMDevice, IMMDeviceEnumerator, MMDeviceEnumerator, eMultimedia, eRender,
+};
 use windows::Win32::NetworkManagement::IpHelper::{FreeMibTable, GetIfTable2, MIB_IF_TABLE2};
+use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
 use windows::Win32::System::Com::{CLSCTX_ALL, CoCreateInstance};
+use windows::Win32::System::Com::{CoTaskMemFree, STGM_READ};
 use windows::Win32::System::DataExchange::*;
 use windows::Win32::System::Memory::{
     GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock,
@@ -13,6 +22,8 @@ use windows::Win32::System::Ole::CF_UNICODETEXT;
 use windows::Win32::System::Registry::*;
 use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::Win32::System::Threading::GetSystemTimes;
+use windows::Win32::UI::WindowsAndMessaging::MONITORINFOF_PRIMARY;
+use windows::core::BOOL;
 use windows::core::{PCWSTR, w};
 
 // ───────────────────────────── 系统监控 ─────────────────────────────
@@ -117,6 +128,10 @@ fn network_totals() -> Option<(u64, u64)> {
 pub struct Volume {
     enumerator: Option<IMMDeviceEnumerator>,
     cached: std::cell::RefCell<Option<(IAudioEndpointVolume, std::time::Instant)>>,
+    /// 上次的默认设备 ID，用来发现"换了输出设备"。
+    device_id: std::cell::RefCell<Option<String>>,
+    /// 换了设备、还没取走的新设备名。
+    switched_to: std::cell::RefCell<Option<String>>,
 }
 
 impl Volume {
@@ -125,6 +140,8 @@ impl Volume {
         Self {
             enumerator,
             cached: std::cell::RefCell::new(None),
+            device_id: std::cell::RefCell::new(None),
+            switched_to: std::cell::RefCell::new(None),
         }
     }
 
@@ -140,12 +157,30 @@ impl Volume {
                 .as_ref()?
                 .GetDefaultAudioEndpoint(eRender, eMultimedia)
                 .ok()?;
+            self.track_device(&device);
             device
                 .Activate::<IAudioEndpointVolume>(CLSCTX_ALL, None)
                 .ok()?
         };
         *self.cached.borrow_mut() = Some((ep.clone(), std::time::Instant::now()));
         Some(ep)
+    }
+
+    fn track_device(&self, device: &IMMDevice) {
+        let id = unsafe { device.GetId() }
+            .ok()
+            .and_then(|p| unsafe { p.to_string() }.ok());
+        let Some(id) = id else { return };
+        let previous = self.device_id.replace(Some(id.clone()));
+        if previous.is_some_and(|p| p != id) {
+            *self.switched_to.borrow_mut() =
+                Some(device_name(device).unwrap_or_else(|| "新的设备".into()));
+        }
+    }
+
+    /// 默认输出设备换了（插拔耳机、蓝牙连上）：返回新设备的名字，只返回一次。
+    pub fn take_switch(&self) -> Option<String> {
+        self.switched_to.borrow_mut().take()
     }
 
     /// (音量 0..1, 是否静音)；没有输出设备时返回 None。
@@ -169,6 +204,51 @@ impl Volume {
             }
         }
     }
+}
+
+/// 音频设备的显示名（如"耳机 (WH-1000XM5)"）。
+fn device_name(device: &IMMDevice) -> Option<String> {
+    unsafe {
+        let store = device.OpenPropertyStore(STGM_READ).ok()?;
+        let value = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+        let name = PropVariantToStringAlloc(&value).ok()?;
+        let s = name.to_string().ok();
+        CoTaskMemFree(Some(name.0 as *const _));
+        s.filter(|s| !s.is_empty())
+    }
+}
+
+// ───────────────────────────── 屏幕 ─────────────────────────────
+
+/// 所有屏幕（句柄, 设备名），主屏幕排第一个。
+pub fn monitors() -> Vec<(HMONITOR, String)> {
+    unsafe extern "system" fn collect(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
+        let list = unsafe { &mut *(data.0 as *mut Vec<(HMONITOR, String, bool)>) };
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if unsafe { GetMonitorInfoW(m, &mut info.monitorInfo) }.as_bool() {
+            let len = info
+                .szDevice
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(info.szDevice.len());
+            let primary = info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0;
+            list.push((m, String::from_utf16_lossy(&info.szDevice[..len]), primary));
+        }
+        true.into()
+    }
+    let mut list: Vec<(HMONITOR, String, bool)> = Vec::new();
+    unsafe {
+        let _ = EnumDisplayMonitors(
+            None,
+            None,
+            Some(collect),
+            LPARAM(&mut list as *mut _ as isize),
+        );
+    }
+    // 主屏幕在前，其余按系统枚举顺序
+    list.sort_by_key(|(_, _, primary)| !primary);
+    list.into_iter().map(|(m, name, _)| (m, name)).collect()
 }
 
 // ───────────────────────────── 剪贴板 ─────────────────────────────

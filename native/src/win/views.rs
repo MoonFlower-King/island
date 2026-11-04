@@ -12,7 +12,7 @@ use island::clip::Entry;
 use island::color::{self, ACCENT_PRESETS, BACKGROUND_PRESETS, FOREGROUND_PRESETS, Palette, Rgb};
 use island::edit::TextEdit;
 use island::level;
-use island::metrics::{COMPACT, EXPANDED, Edge, IDLE_CLOCK, LEVEL, Rect};
+use island::metrics::{COMPACT, EXPANDED, Edge, IDLE_CLOCK, LEVEL, NOTIFICATION, Rect};
 use island::settings::{Settings, ThemeMode};
 use island::shelf::Item as ShelfEntry;
 use island::text::{clock, format_duration, speed, weekday_zh};
@@ -173,6 +173,8 @@ pub enum Hit {
     IdleStyle(bool),
     MediaStyle(bool),
     Dock(Edge),
+    /// 换到下一块屏幕。
+    NextMonitor,
     Field(Field),
     TodoToggle(usize),
     TodoDelete(usize),
@@ -247,6 +249,8 @@ pub struct ViewState<'a> {
     pub todo_scroll: usize,
     pub editing: Option<Editing<'a>>,
     pub translate: &'a TranslateUi,
+    /// 有多块屏幕时，当前所在屏幕的名字。
+    pub monitor_label: Option<String>,
     /// 当前翻译服务的简短说明、是否已经可以翻译。
     pub translate_summary: (String, bool),
     pub today: &'a str,
@@ -360,6 +364,40 @@ pub fn draw_level(
         Rect::new(244.0, 0.0, 46.0, h),
         &style(&family, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Trailing),
         color(fg, 0.9),
+    )
+}
+
+// ───────────────────────────── 通知 ─────────────────────────────
+
+pub fn draw_notification(
+    p: &Painter,
+    palette: &Palette,
+    accent: Rgb,
+    glyph: char,
+    title: &str,
+    body: &str,
+) -> Result<()> {
+    let fg = palette.foreground;
+    let h = NOTIFICATION.height;
+    p.fill_circle(34.0, h / 2.0, 20.0, color(accent, 1.0))?;
+    p.icon(
+        glyph,
+        Rect::new(14.0, h / 2.0 - 20.0, 40.0, 40.0),
+        17.0,
+        color(on(accent), 1.0),
+    )?;
+    let family = p.gfx.text_font.clone();
+    p.text(
+        title,
+        Rect::new(66.0, 12.0, 256.0, 20.0),
+        &style(&family, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
+        color(fg, 1.0),
+    )?;
+    p.text(
+        body,
+        Rect::new(66.0, 32.0, 256.0, 20.0),
+        &style(&family, 12.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(fg, 0.65),
     )
 }
 
@@ -1571,6 +1609,19 @@ fn draw_appearance(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
         (Edge::Right, "右侧"),
     ] {
         x = segment(p, v, t, x, y, name, s.dock == edge, Hit::Dock(edge))?;
+    }
+    // 多块屏幕：点一下换到下一块
+    if let Some(label) = &v.monitor_label {
+        segment(
+            p,
+            v,
+            t,
+            x + 8.0,
+            y,
+            &format!("{label} ›"),
+            false,
+            Hit::NextMonitor,
+        )?;
     }
     Ok(())
 }

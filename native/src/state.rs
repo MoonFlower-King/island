@@ -17,6 +17,8 @@ pub struct Inputs {
     pub media_as_line: bool,
     /// 正在显示音量 / 亮度提示。
     pub level: bool,
+    /// 有一条通知在显示。
+    pub notification: bool,
 }
 
 pub fn resolve(i: Inputs) -> IslandState {
@@ -28,6 +30,9 @@ pub fn resolve(i: Inputs) -> IslandState {
     }
     if i.level {
         return IslandState::Level;
+    }
+    if i.notification {
+        return IslandState::Notification;
     }
     if i.media_active && !i.media_as_line {
         return IslandState::Compact;
@@ -141,6 +146,27 @@ mod tests {
                 ..base
             }),
             IslandState::Idle
+        );
+        // 通知盖过音乐胶囊，但让位给音量提示和展开
+        let note = Inputs {
+            notification: true,
+            media_active: true,
+            ..base
+        };
+        assert_eq!(resolve(note), IslandState::Notification);
+        assert_eq!(
+            resolve(Inputs {
+                level: true,
+                ..note
+            }),
+            IslandState::Level
+        );
+        assert_eq!(
+            resolve(Inputs {
+                hovering: true,
+                ..note
+            }),
+            IslandState::Expanded
         );
     }
 

@@ -7,6 +7,8 @@ pub enum IslandState {
     Idle,
     /// 紧凑：正在播放音乐时，左封面右律动条。
     Compact,
+    /// 通知：临时弹出几秒后自动缩回（点一下也会关掉）。
+    Notification,
     /// 音量 / 亮度提示：调节时短暂显示一条进度。
     Level,
     /// 展开：鼠标悬停或置顶时的功能面板。
@@ -89,6 +91,12 @@ pub const COMPACT: Metrics = Metrics {
     radius: 19.0,
     top: TOP_MARGIN,
 };
+pub const NOTIFICATION: Metrics = Metrics {
+    width: 340.0,
+    height: 64.0,
+    radius: 32.0,
+    top: TOP_MARGIN,
+};
 pub const LEVEL: Metrics = Metrics {
     width: 300.0,
     height: 40.0,
@@ -101,6 +109,24 @@ pub const EXPANDED: Metrics = Metrics {
     radius: 32.0,
     top: TOP_MARGIN,
 };
+
+/// 选哪块屏幕：`monitors` 是各屏幕的设备名（主屏幕在第一个），`saved` 是设置里记的设备名。
+/// 没设置过、或者那块屏幕已经拔掉了，就用主屏幕。
+pub fn pick_monitor(saved: &str, monitors: &[String]) -> usize {
+    monitors
+        .iter()
+        .position(|m| !saved.is_empty() && m.eq_ignore_ascii_case(saved))
+        .unwrap_or(0)
+}
+
+/// 屏幕在界面上的叫法：主屏幕、屏幕 2、屏幕 3……
+pub fn monitor_label(index: usize) -> String {
+    if index == 0 {
+        "主屏幕".into()
+    } else {
+        format!("屏幕 {}", index + 1)
+    }
+}
 
 impl IslandState {
     /// `idle_as_line` 为 false 时，待机是显示时间的小胶囊。
@@ -116,6 +142,7 @@ impl IslandState {
             IslandState::Idle if edge == Edge::Top => LINE,
             IslandState::Idle => VERTICAL_LINE,
             IslandState::Compact => COMPACT,
+            IslandState::Notification => NOTIFICATION,
             IslandState::Level => LEVEL,
             IslandState::Expanded => EXPANDED,
         }
@@ -242,6 +269,17 @@ impl Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn picks_the_saved_monitor_or_the_primary_one() {
+        let m = vec![r"\\.\DISPLAY1".to_string(), r"\\.\DISPLAY2".to_string()];
+        assert_eq!(pick_monitor("", &m), 0);
+        assert_eq!(pick_monitor(r"\\.\display2", &m), 1);
+        assert_eq!(pick_monitor(r"\\.\DISPLAY9", &m), 0);
+        assert_eq!(pick_monitor("x", &[]), 0);
+        assert_eq!(monitor_label(0), "主屏幕");
+        assert_eq!(monitor_label(1), "屏幕 2");
+    }
 
     #[test]
     fn idle_clock_style() {

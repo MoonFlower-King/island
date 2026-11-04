@@ -360,6 +360,35 @@ fn memory() -> String {
     }
 }
 
+/// 胶囊里有多少和背景色明显不同的像素（也就是画出来的文字和图标）。
+/// 左右各让开一个圆角半径、上下让开几个像素，免得把圆角外露出来的桌面算进去。
+fn bright_pixels(app: &App, m: Metrics) -> usize {
+    let Some((w, h, pixels)) = capture(app) else {
+        return 0;
+    };
+    let s = app.scene.scale();
+    let f = m.frame(app.settings.dock);
+    let r = island::metrics::Rect::new(f.x + m.radius, f.y + 3.0, f.w - 2.0 * m.radius, f.h - 6.0);
+    let bg = app.palette.background;
+    let bg_l = (bg.r as i32 + bg.g as i32 + bg.b as i32) / 3;
+    let (x0, y0) = ((r.x.max(0.0) * s) as u32, (r.y.max(0.0) * s) as u32);
+    let (x1, y1) = (
+        ((r.right() * s) as u32).min(w),
+        ((r.bottom() * s) as u32).min(h),
+    );
+    let mut count = 0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let i = ((y * w + x) * 4) as usize;
+            let l = (pixels[i] as i32 + pixels[i + 1] as i32 + pixels[i + 2] as i32) / 3;
+            if (l - bg_l).abs() > 90 {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 fn has_target(app: &App, f: impl Fn(Hit) -> bool) -> bool {
     app.has_target(f)
 }
@@ -570,6 +599,8 @@ pub fn step(app: &mut App) {
                 app.state == IslandState::Idle && !app.settings.idle_as_line,
                 "待机样式：显示时间",
             );
+            let lit = bright_pixels(app, island::metrics::IDLE_CLOCK);
+            smoke.check(lit > 20, &format!("时间小胶囊里画出了时间（亮像素 {lit}）"));
             snapshot(app, &mut smoke, "15b-idle-clock", None);
             app.activate(Hit::IdleStyle(true));
             // 待办：输入框获得焦点，打字（含中文和表情的代理对），回车添加
@@ -827,6 +858,29 @@ pub fn step(app: &mut App) {
             app.activate(Hit::ShelfClear);
             app.set_tab(Tab::Music);
             app.set_pinned(false);
+            // 通知
+            app.show_notification('\u{E8BD}', "冒烟测试", "这是一条测试通知");
+        }
+        69 => {
+            smoke.check(app.state == IslandState::Notification, "显示通知");
+            let lit = bright_pixels(app, island::metrics::NOTIFICATION);
+            smoke.check(lit > 50, &format!("通知里画出了文字（亮像素 {lit}）"));
+            snapshot(app, &mut smoke, "26-notification", None);
+            // 点一下关掉
+            let f = island::metrics::NOTIFICATION.frame(app.settings.dock);
+            app.on_mouse_down(f.center_x(), f.center_y());
+            smoke.check(app.notification.is_none(), "点一下通知就关掉");
+            // 记住的屏幕不存在（拔掉了）：回到主屏幕
+            smoke.note(&format!("屏幕数量：{}", super::system::monitors().len()));
+            app.settings.monitor = r"\\.\DISPLAY_GONE".into();
+            app.set_dock(Edge::Top);
+        }
+        70 => {
+            smoke.check(
+                placed_at(app, Edge::Top),
+                "记住的屏幕不在了：显示在主屏幕上",
+            );
+            app.settings.monitor.clear();
             smoke.step = 15;
             next = 35;
         }

@@ -58,6 +58,7 @@ const TIMER_TOPMOST: usize = 2;
 const TIMER_TICK: usize = 3;
 pub const TIMER_SMOKE: usize = 4;
 const TIMER_LEVEL: usize = 5;
+const TIMER_NOTIFICATION: usize = 6;
 
 /// 光标在岛附近时每 40 ms 看一次，悬停反应及时。
 const POLL_MS: u32 = 40;
@@ -67,6 +68,8 @@ const POLL_FAR_MS: u32 = 120;
 const NEAR_DIP: f32 = 160.0;
 /// 停手后音量提示停留多久。
 const LEVEL_HUD_MS: u32 = 1600;
+/// 通知停留多久。
+const NOTIFICATION_MS: u32 = 3500;
 /// 系统音量多久看一次。
 const VOLUME_POLL_MS: u64 = 110;
 
@@ -125,6 +128,8 @@ pub struct App {
     wheel_until: u64,
     /// 音量 / 亮度提示正在显示。
     pub level_hud: Option<(char, f64, String)>,
+    /// 正在显示的通知：(图标, 标题, 内容)。
+    pub notification: Option<(char, String, String)>,
     poll_ms: u32,
     last_volume_poll: u64,
     targets: Targets,
@@ -227,7 +232,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
                 &std::fs::read_to_string(data_file("settings.json")).unwrap_or_default(),
             )
         };
-        let (scale, origin) = place(hwnd, settings.dock);
+        let (scale, origin) = place(hwnd, settings.dock, &settings.monitor);
         let compositor = Compositor::new()?;
         let interop: ICompositorDesktopInterop = compositor.cast()?;
         let target = interop.CreateDesktopWindowTarget(hwnd, true)?;
@@ -306,6 +311,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             wheel: WheelAccumulator::default(),
             wheel_until: 0,
             level_hud: None,
+            notification: None,
             poll_ms: POLL_MS,
             last_volume_poll: 0,
             targets: Targets::default(),
@@ -363,10 +369,15 @@ fn resolve_palette(settings: &Settings) -> Palette {
     color::resolve(&settings.theme, minute, light)
 }
 
-/// 放到主屏幕工作区的顶部正中或左 / 右边正中，返回 DPI 缩放和窗口左上角。
-fn place(hwnd: HWND, edge: Edge) -> (f32, POINT) {
+/// 放到所选屏幕（默认主屏幕）工作区的顶部正中或左 / 右边正中，返回 DPI 缩放和窗口左上角。
+fn place(hwnd: HWND, edge: Edge, monitor_name: &str) -> (f32, POINT) {
     unsafe {
-        let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+        let monitors = system::monitors();
+        let names: Vec<String> = monitors.iter().map(|(_, n)| n.clone()).collect();
+        let monitor = monitors
+            .get(island::metrics::pick_monitor(monitor_name, &names))
+            .map(|(m, _)| *m)
+            .unwrap_or_else(|| MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY));
         let (mut dx, mut dy) = (96u32, 96u32);
         let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dx, &mut dy);
         let scale = dx as f32 / 96.0;
@@ -414,6 +425,7 @@ impl App {
             media_active: self.media_active(),
             media_as_line: self.settings.media_as_line,
             level: self.level_hud.is_some(),
+            notification: self.notification.is_some(),
         }
     }
 
@@ -428,6 +440,7 @@ impl App {
             IslandState::Idle => View::Clock,
             IslandState::Compact => View::Compact,
             IslandState::Level => View::Level,
+            IslandState::Notification => View::Notification,
             IslandState::Expanded => View::Expanded,
         }
     }
@@ -491,6 +504,7 @@ impl App {
     }
 
     fn redraw_all(&mut self) {
+        self.redraw_notification();
         self.redraw_clock();
         self.redraw_compact();
         self.redraw_level();
@@ -519,6 +533,42 @@ impl App {
             });
         if let Err(e) = r {
             log::warn(&format!("绘制时钟失败：{e}"));
+        }
+    }
+
+    fn redraw_notification(&self) {
+        let Some((glyph, title, body)) = &self.notification else {
+            return;
+        };
+        let r = self
+            .gfx
+            .draw(&self.scene.notification.surface, self.scene.scale(), |p| {
+                views::draw_notification(p, &self.palette, self.accent, *glyph, title, body)
+            });
+        if let Err(e) = r {
+            log::warn(&format!("绘制通知失败：{e}"));
+        }
+    }
+
+    /// 弹出一条通知，几秒后自动缩回。全屏时不打扰。
+    pub fn show_notification(&mut self, glyph: char, title: &str, body: &str) {
+        if self.hidden {
+            return;
+        }
+        self.notification = Some((glyph, title.into(), body.into()));
+        self.redraw_notification();
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_NOTIFICATION, NOTIFICATION_MS, None);
+        }
+        self.update_state();
+    }
+
+    pub fn dismiss_notification(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_NOTIFICATION);
+        }
+        if self.notification.take().is_some() {
+            self.update_state();
         }
     }
 
@@ -573,6 +623,16 @@ impl App {
             shelf_scroll: self.shelf_scroll,
             drag_over: self.drag_over,
             translate: &self.translate,
+            monitor_label: {
+                let monitors = system::monitors();
+                (monitors.len() > 1).then(|| {
+                    let names: Vec<String> = monitors.into_iter().map(|(_, n)| n).collect();
+                    island::metrics::monitor_label(island::metrics::pick_monitor(
+                        &self.settings.monitor,
+                        &names,
+                    ))
+                })
+            },
             translate_summary: (TranslateUi::summary(&self.settings), self.translate_ready()),
             editing: self.editing.as_ref().map(|(field, edit)| Editing {
                 field: *field,
@@ -678,6 +738,16 @@ impl App {
             }
             Hit::MediaStyle(line) => self.settings.media_as_line = line,
             Hit::Dock(edge) if edge != self.edge() => self.set_dock(edge),
+            Hit::NextMonitor => {
+                let names: Vec<String> = system::monitors().into_iter().map(|(_, n)| n).collect();
+                if names.len() < 2 {
+                    return;
+                }
+                let i = island::metrics::pick_monitor(&self.settings.monitor, &names);
+                self.settings.monitor = names[(i + 1) % names.len()].clone();
+                self.relayout();
+                let _ = self.scene.jump_to(self.metrics(self.state));
+            }
             _ => return,
         }
         self.save_settings();
@@ -775,6 +845,13 @@ impl App {
         };
         if changed && let Some(v) = current {
             self.on_volume_changed(v);
+        }
+        // 插拔耳机、连上蓝牙音箱：提示换到了哪个设备
+        if let Some(name) = self.volume.take_switch()
+            && self.settings.show_level_hud
+            && !self.hover.hovering()
+        {
+            self.show_notification('\u{E7F5}', "声音输出已切换", &name);
         }
     }
 
@@ -1003,7 +1080,12 @@ impl App {
         self.set_volume(value);
     }
 
-    fn on_mouse_down(&mut self, x: f32, y: f32) {
+    pub fn on_mouse_down(&mut self, x: f32, y: f32) {
+        // 点一下通知就关掉
+        if self.state == IslandState::Notification {
+            self.dismiss_notification();
+            return;
+        }
         if self.state != IslandState::Expanded {
             return;
         }
@@ -1196,7 +1278,8 @@ impl App {
             | Hit::Swatch(..)
             | Hit::IdleStyle(_)
             | Hit::MediaStyle(_)
-            | Hit::Dock(_) => self.change_setting(hit),
+            | Hit::Dock(_)
+            | Hit::NextMonitor => self.change_setting(hit),
         }
     }
 
@@ -1819,7 +1902,7 @@ impl App {
     }
 
     fn relayout(&mut self) {
-        let (scale, origin) = place(self.hwnd, self.edge());
+        let (scale, origin) = place(self.hwnd, self.edge(), &self.settings.monitor);
         self.origin = origin;
         if (scale - self.scene.scale()).abs() > 0.001 {
             let _ = self.scene.set_scale(&self.gfx, scale);
@@ -1890,6 +1973,7 @@ const MENU_DATA: usize = 2;
 const MENU_LEVEL: usize = 3;
 const MENU_STARTUP: usize = 4;
 const MENU_CLIPBOARD: usize = 5;
+const MENU_DEMO: usize = 6;
 const MENU_EXIT: usize = 9;
 
 struct MenuState {
@@ -1930,6 +2014,7 @@ fn show_menu(hwnd: HWND, s: &MenuState) -> usize {
             MENU_STARTUP,
             w!("开机自动启动"),
         );
+        let _ = AppendMenuW(menu, MF_STRING, MENU_DEMO, w!("演示：弹出一条通知"));
         let _ = AppendMenuW(menu, MF_STRING, MENU_DATA, w!("打开数据文件夹"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("退出"));
@@ -1989,6 +2074,12 @@ fn on_menu_command(a: &mut App, cmd: usize) {
             let path = windows::core::HSTRING::from(dir.as_os_str());
             unsafe { ShellExecuteW(None, w!("open"), &path, None, None, SW_SHOWNORMAL) };
         }
+        MENU_DEMO => {
+            // 点菜单时鼠标还停在岛上，先收起展开态，好让通知立刻可见
+            a.hover.set(false);
+            a.wheel_until = tick() + NOTIFICATION_MS as u64;
+            a.show_notification('\u{E8BD}', "新消息", "这是一条来自灵动岛的演示通知");
+        }
         MENU_EXIT => unsafe { PostQuitMessage(0) },
         _ => {}
     }
@@ -2002,6 +2093,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 TIMER_TOPMOST => with_app(|a| a.on_topmost_tick()),
                 TIMER_TICK => with_app(|a| a.on_tick()),
                 TIMER_LEVEL => with_app(|a| a.hide_level()),
+                TIMER_NOTIFICATION => with_app(|a| a.dismiss_notification()),
                 TIMER_SMOKE => with_app(smoke::step),
                 _ => None,
             };
