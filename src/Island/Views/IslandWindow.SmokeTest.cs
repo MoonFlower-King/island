@@ -149,6 +149,19 @@ public partial class IslandWindow
             Snapshot(outputDirectory, $"{index++:00}-shelf-items");
             _shelf.Clear();
 
+            // 翻译服务设置：选服务商会自动填好格式、地址和模型
+            ShowTab(IslandTab.Translate, remember: false);
+            TranslatePanel.ShowSettings(true);
+            TranslatePanel.SelectProvider("deepseek");
+            await Settle(300);
+            Check(TranslatePanel.IsShowingSettings && TranslatePanel.FormatOpenAI.IsChecked == true &&
+                  TranslatePanel.BaseUrlInput.Text == "https://api.deepseek.com" &&
+                  TranslatePanel.ModelInput.Text == "deepseek-chat", "翻译设置：选 DeepSeek 自动填写");
+            Snapshot(outputDirectory, $"{index++:00}-translate-settings");
+            TranslatePanel.SelectProvider(ProviderPresets.Anthropic.Id);
+            Check(TranslatePanel.FormatAnthropic.IsChecked == true && TranslatePanel.ModelInput.Text == "claude-opus-5-5",
+                "翻译设置：切回 Claude");
+
             // 主题：白天、自定义，再回到黑夜；颜色资源应随之改变
             ShowTab(IslandTab.Music, remember: false);
             ThemeMode originalMode = _settings.Theme.Mode;
@@ -183,6 +196,17 @@ public partial class IslandWindow
             Check(_currentState == IslandState.Idle, "收起后回到待机");
             CheckSize(IslandState.Idle, Check);
             Check(ReferenceEquals(_currentView, LineView) == IdleAsLine, "待机样式与设置一致");
+
+            // 置顶：鼠标不在岛上也保持展开，取消后收起
+            SetPinned(true);
+            await Settle(1300);
+            TryCollapse();
+            await Settle(300);
+            Check(_currentState == IslandState.Expanded, "置顶后鼠标不在岛上也保持展开");
+            Snapshot(outputDirectory, $"{index++:00}-pinned");
+            SetPinned(false);
+            await Settle(1300);
+            Check(_currentState == IslandState.Idle, "取消置顶后收起");
 
             // 待机样式：切到“显示时间”再切回细线
             bool originalIdle = _settings.IdleAsLine;
