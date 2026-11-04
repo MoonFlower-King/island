@@ -70,12 +70,29 @@ jobs:
           if (-not $finished) { throw 'Smoke test timed out' }
           if ($p.ExitCode -ne 0) { throw "Smoke test failed with exit code $($p.ExitCode)" }
 
+      # 诊断：不用分层窗口再跑一次，对比合成内容能不能显示出来（不影响结果）
+      - name: Smoke test (no layered window)
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP 'native-smoke-nolayer'
+          $env:ISLAND_DATA_DIR = Join-Path $env:RUNNER_TEMP 'native-smoke-nolayer-data'
+          $env:ISLAND_NO_LAYERED = '1'
+          $p = Start-Process -FilePath target/release/Island.exe -ArgumentList '--smoke-test', $out -PassThru
+          $null = $p.Handle
+          if (-not $p.WaitForExit(60000)) { $p.Kill() }
+          Get-Content (Join-Path $out 'report.txt') -ErrorAction SilentlyContinue
+          Get-Content (Join-Path $env:ISLAND_DATA_DIR 'island.log') -ErrorAction SilentlyContinue
+
       - name: Upload smoke test screenshots
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: native-smoke-test
-          path: ${{ runner.temp }}/native-smoke/
+          path: |
+            ${{ runner.temp }}/native-smoke/
+            ${{ runner.temp }}/native-smoke-nolayer/
           if-no-files-found: ignore
 
       - name: Package

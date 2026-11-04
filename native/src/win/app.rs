@@ -115,13 +115,15 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         };
         RegisterClassExW(&wc);
 
+        // 诊断开关：ISLAND_NO_LAYERED=1 时不用分层窗口（用来排查合成内容不显示的问题）
+        let layered = std::env::var_os("ISLAND_NO_LAYERED").is_none();
+        let mut ex_style =
+            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_NOREDIRECTIONBITMAP;
+        if layered {
+            ex_style |= WS_EX_LAYERED | WS_EX_TRANSPARENT;
+        }
         let hwnd = CreateWindowExW(
-            WS_EX_TOPMOST
-                | WS_EX_TOOLWINDOW
-                | WS_EX_NOACTIVATE
-                | WS_EX_NOREDIRECTIONBITMAP
-                | WS_EX_LAYERED
-                | WS_EX_TRANSPARENT,
+            ex_style,
             class,
             w!("Island"),
             WS_POPUP,
@@ -135,7 +137,9 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             None,
         )?;
         // 分层窗口必须设置一次属性才会显示；整体不透明，透明效果来自合成内容本身
-        SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+        if layered {
+            SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA)?;
+        }
 
         let (scale, origin) = place(hwnd);
         let compositor = Compositor::new()?;
@@ -182,7 +186,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         } else {
             media::start(hwnd, tick);
         }
-        log::info(&format!("启动，缩放 {scale}"));
+        log::info(&format!("启动，缩放 {scale}，分层窗口 {layered}"));
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {

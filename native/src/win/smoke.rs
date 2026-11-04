@@ -148,13 +148,36 @@ fn snapshot(
         smoke.note(&format!("{name}：截屏失败"));
         return None;
     };
+    // 诊断：截图里非黑像素的比例，以及窗口正中、胶囊顶部中间的颜色
+    let total = (w * h) as usize;
+    let lit = pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|p| p[0] > 8 || p[1] > 8 || p[2] > 8)
+        .count();
+    let at = |x: u32, y: u32| {
+        let i = ((y.min(h - 1) * w + x.min(w - 1)) * 4) as usize;
+        format!(
+            "#{:02X}{:02X}{:02X}",
+            pixels[i + 2],
+            pixels[i + 1],
+            pixels[i]
+        )
+    };
+    let s = app.scene.scale();
+    smoke.note(&format!(
+        "{name}：{w}×{h}，非黑像素 {:.1}%，窗口中心 {}，胶囊顶部 {}",
+        lit as f64 * 100.0 / total.max(1) as f64,
+        at(w / 2, h / 2),
+        at(w / 2, (10.0 * s) as u32)
+    ));
     let path = smoke.dir.join(format!("{name}.png"));
     if let Err(e) = save_png(&path, w, h, &pixels) {
         smoke.note(&format!("{name}：保存截图失败 {e}"));
     }
     let (m, lx, ly) = sample?;
     let r = m.rect();
-    let s = app.scene.scale();
     let (x, y) = (((r.x + lx) * s) as u32, ((r.y + ly) * s) as u32);
     if x >= w || y >= h {
         return None;
