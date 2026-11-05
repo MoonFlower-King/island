@@ -2,15 +2,16 @@
 
 Windows 上的"灵动岛"：屏幕顶部正中的一个黑色胶囊。鼠标移上去展开成功能面板，移开立刻收起。
 
-WPF + .NET 8，轻量、开箱即用。
+推荐使用 2.0 起的原生版（Rust 重写，单个 exe 不到 1 MB）；1.x 的 WPF 版仍然可以下载。
 
 ## 下载
 
 到 [Releases](https://github.com/MoonFlower-King/island/releases) 下载最新版本，解压后双击 `Island.exe` 即可，不需要安装。
 
-- `win-x64`：大多数电脑（Intel / AMD）
-- `win-arm64`：ARM 处理器的电脑（如骁龙笔记本）
-- `win-x64-framework-dependent`：已安装 .NET 8 桌面运行时的电脑，体积更小
+- **原生版（推荐）**：`Island-native-<版本>-win-x64.zip`，ARM 处理器的电脑（如骁龙笔记本）选 `win-arm64`。不需要任何运行时，需要 Windows 10 1903 或更新版本。功能和设置说明见 [native/README.md](native/README.md)
+- **WPF 版（1.x）**：`win-x64`、`win-arm64`，或已安装 .NET 8 桌面运行时的电脑用 `win-x64-framework-dependent`（体积更小）
+
+两个版本共用设置和数据，可以来回切换，但不要同时运行。
 
 系统要求：Windows 10 1809 或更高版本、Windows 11。想开机自动运行，右键胶囊勾选"开机自动启动"。
 
@@ -71,9 +72,9 @@ WPF + .NET 8，轻量、开箱即用。
 | `shelf.json` | 中转站里的文件路径 |
 | `island.log` | 运行日志。遇到问题时可以附上这个文件 |
 
-## 原生版（预览）
+## 原生版
 
-用 Rust 重写的更轻、更顺滑的版本：单个 exe 约 0.6 MB，刚启动内存约 27 MB，动画全部交给系统合成器在独立线程上运行。功能已经和 WPF 版基本一致，可以在 [Releases](https://github.com/MoonFlower-King/island/releases) 里下载标着"预览"的原生版试用（先退出 WPF 版）。详见 [native/README.md](native/README.md) 和 [native/CHANGELOG.md](native/CHANGELOG.md)。
+用 Rust 重写的更轻、更顺滑的版本：单个 exe 不到 1 MB，刚启动内存约 27 MB，动画全部交给系统合成器在独立线程上运行。包含 WPF 版的全部功能，另外还能显示其他软件的通知、提醒 AI 工具完成任务、停在屏幕两侧时收成竖胶囊。详见 [native/README.md](native/README.md) 和 [native/CHANGELOG.md](native/CHANGELOG.md)。
 
 ## 开发
 
