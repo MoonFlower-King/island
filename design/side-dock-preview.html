@@ -1,0 +1,427 @@
+<title>灵动岛侧边停靠</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* 布局：上方是一块模拟屏幕（岛在里面按真实尺寸比例显示），下方是控制条和尺寸表 */
+:root {
+  --bg: #eef0f3;
+  --panel: #ffffff;
+  --fg: #1b1e24;
+  --muted: #5d6470;
+  --line: #d9dde3;
+  --accent: #2f6fe4;
+  --chip: #e6ebf3;
+  --chip-on: #1b1e24;
+  --chip-on-fg: #ffffff;
+  --font-ui: "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111317; --panel: #1a1d23; --fg: #e8eaee; --muted: #9aa1ad; --line: #2c3038;
+    --accent: #6c9cff; --chip: #262a32; --chip-on: #e8eaee; --chip-on-fg: #111317; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111317; --panel: #1a1d23; --fg: #e8eaee; --muted: #9aa1ad; --line: #2c3038;
+  --accent: #6c9cff; --chip: #262a32; --chip-on: #e8eaee; --chip-on-fg: #111317; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 14px; line-height: 1.55;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 40px;
+}
+.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 18px; }
+header h1 { font-size: 22px; margin: 0; font-weight: 700; text-wrap: balance; }
+header p { margin: 4px 0 0; color: var(--muted); max-width: 68ch; }
+
+/* 模拟屏幕：代表 1440 × 900 DIP 的桌面 */
+.screen {
+  position: relative; width: 100%; aspect-ratio: 16 / 10; max-width: 100%;
+  border-radius: 14px; overflow: hidden; border: 1px solid var(--line);
+  background:
+    radial-gradient(120% 90% at 15% 20%, #4a6fa5 0%, transparent 60%),
+    radial-gradient(90% 80% at 85% 80%, #c9846b 0%, transparent 55%),
+    linear-gradient(160deg, #2d3a52, #5d4d5f 60%, #8d6a5f);
+}
+.screen.light-wall {
+  background:
+    radial-gradient(120% 90% at 15% 20%, #d9e6f7 0%, transparent 60%),
+    radial-gradient(90% 80% at 85% 80%, #f6dcc9 0%, transparent 55%),
+    linear-gradient(160deg, #eef2f8, #f5ece6);
+}
+.win {
+  position: absolute; left: 22%; top: 24%; width: 56%; height: 52%;
+  border-radius: 8px; background: rgba(255,255,255,.86); box-shadow: 0 10px 30px rgba(0,0,0,.25);
+}
+.win::before { content: ""; display: block; height: 9%; background: rgba(0,0,0,.06); border-radius: 8px 8px 0 0; }
+.taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 5.3%; background: rgba(20,22,28,.72); }
+.hint {
+  position: absolute; right: 10px; bottom: calc(5.3% + 8px); font-size: 12px; color: #fff;
+  background: rgba(0,0,0,.45); padding: 2px 8px; border-radius: 6px; pointer-events: none;
+}
+
+/* 岛：尺寸、位置由脚本按弹簧动画逐帧设置 */
+.island { position: absolute; overflow: hidden; cursor: default; will-change: width, height, left, top; }
+.island .bg { position: absolute; inset: 0; border-radius: inherit; }
+.layer { position: absolute; inset: 0; display: flex; opacity: 0; transition: opacity 90ms ease-out; pointer-events: none; }
+.layer.on { opacity: 1; transition: opacity 200ms ease-out 90ms; }
+.layer.on .inner { animation: zoom 320ms cubic-bezier(.2,.9,.3,1) 60ms both; }
+@keyframes zoom { from { transform: scale(.94); } to { transform: scale(1); } }
+.content { position: absolute; }
+.inner { position: absolute; inset: 0; transform-origin: center; }
+
+/* 岛里面的内容，单位是 DIP，外面整体按屏幕比例缩放 */
+.dip { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+.cover { border-radius: 6px; background: linear-gradient(135deg, #c83454, #f0a35e); flex: none; }
+.eq { display: flex; gap: 2px; align-items: flex-end; height: 14px; }
+.eq i { display: block; width: 3px; border-radius: 2px; background: var(--isl-accent); animation: eq 0.9s ease-in-out infinite; }
+.eq i:nth-child(2) { animation-delay: -.3s; } .eq i:nth-child(3) { animation-delay: -.6s; } .eq i:nth-child(4) { animation-delay: -.15s; }
+.eq.v { flex-direction: column; height: auto; width: 14px; align-items: flex-start; }
+.eq.v i { height: 3px; animation-name: eqv; }
+@keyframes eq { 0%,100% { height: 30%; } 50% { height: 100%; } }
+@keyframes eqv { 0%,100% { width: 30%; } 50% { width: 100%; } }
+.isl-text { color: var(--isl-fg); font-family: var(--font-ui); white-space: nowrap; }
+.isl-sub { color: var(--isl-sub); font-family: var(--font-ui); white-space: nowrap; }
+.vtext { writing-mode: vertical-rl; text-orientation: mixed; overflow: hidden; text-overflow: ellipsis; }
+.glyph { color: var(--isl-fg); font-family: var(--font-ui); }
+.bar { border-radius: 99px; background: var(--isl-track); position: relative; overflow: hidden; }
+.bar b { position: absolute; border-radius: 99px; background: var(--isl-fg); }
+
+/* 控制区 */
+.controls { display: grid; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.row > .label { width: 4.5em; color: var(--muted); font-size: 13px; flex: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  border: 0; border-radius: 99px; padding: 5px 12px; font: inherit; font-size: 13px;
+  background: var(--chip); color: var(--fg); cursor: pointer;
+}
+.chip[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-fg); }
+.chip:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.slider { display: flex; align-items: center; gap: 10px; flex: 1 1 260px; min-width: 0; }
+.slider input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.slider output { font-family: var(--font-mono); font-size: 13px; width: 5.5em; text-align: right; font-variant-numeric: tabular-nums; }
+
+.spec { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 8px; }
+.spec h2 { font-size: 15px; margin: 0; }
+.spec p { margin: 0; color: var(--muted); font-size: 13px; max-width: 70ch; }
+.table-scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 13px; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+th { color: var(--muted); font-weight: 500; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+@media (prefers-reduced-motion: reduce) {
+  .layer, .layer.on { transition: none; }
+  .layer.on .inner, .eq i { animation: none; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>灵动岛侧边停靠预览</h1>
+    <p>停在左侧或右侧时，收起状态都变成贴着屏幕边、竖着的胶囊；鼠标移到岛上会从侧边展开。动画和原生版用的是同一组弹簧参数。</p>
+  </header>
+
+  <div class="screen" id="screen">
+    <div class="win"></div>
+    <div class="taskbar"></div>
+    <div class="island" id="island"><div class="bg" id="islandBg"></div></div>
+    <div class="hint" id="hint">把鼠标移到岛上试试展开</div>
+  </div>
+
+  <section class="controls" aria-label="预览设置">
+    <div class="row"><span class="label">停靠</span>
+      <div class="chips" data-group="dock">
+        <button class="chip" data-v="left">左侧</button>
+        <button class="chip" data-v="top">顶部</button>
+        <button class="chip" data-v="right">右侧</button>
+      </div>
+    </div>
+    <div class="row"><span class="label">状态</span>
+      <div class="chips" data-group="state">
+        <button class="chip" data-v="line">待机细线</button>
+        <button class="chip" data-v="clock">待机时间</button>
+        <button class="chip" data-v="music">音乐</button>
+        <button class="chip" data-v="level">音量提示</button>
+        <button class="chip" data-v="note">通知</button>
+        <button class="chip" data-v="expanded">展开</button>
+      </div>
+    </div>
+    <div class="row"><span class="label">主题</span>
+      <div class="chips" data-group="theme">
+        <button class="chip" data-v="dark">黑色岛</button>
+        <button class="chip" data-v="light">白色岛</button>
+      </div>
+      <div class="chips" data-group="wall">
+        <button class="chip" data-v="dark">深色壁纸</button>
+        <button class="chip" data-v="light">浅色壁纸</button>
+      </div>
+    </div>
+    <div class="row"><span class="label">竖胶囊</span>
+      <label class="slider"><span>粗细</span><input id="thick" type="range" min="0.7" max="1.4" step="0.05" value="1"><output id="thickOut"></output></label>
+      <label class="slider"><span>长度</span><input id="length" type="range" min="0.6" max="1.5" step="0.05" value="1"><output id="lengthOut"></output></label>
+    </div>
+  </section>
+
+  <section class="spec">
+    <h2>尺寸（DIP，100% 缩放下等于像素）</h2>
+    <p>侧边一栏是竖胶囊的宽 × 高，会跟着上面的滑块变；顶部一栏是现在原生版的尺寸，作为对照。定下来以后告诉我滑块的数值（或者直接说某一行要多大），我按这个改原生版。</p>
+    <div class="table-scroll"><table>
+      <thead><tr><th>状态</th><th>顶部（宽 × 高）</th><th>侧边（宽 × 高）</th><th>侧边里放什么</th></tr></thead>
+      <tbody id="specBody"></tbody>
+    </table></div>
+  </section>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  // 屏幕代表 1440 × 900 DIP
+  const SCREEN_W = 1440, SCREEN_H = 900, TASKBAR = 48, MARGIN = 6, LINE_VIS = 5;
+
+  // 顶部尺寸：和 native/src/metrics.rs 一致
+  const TOP = {
+    line:     { w: 120, h: 10, r: 5, off: -LINE_VIS },
+    clock:    { w: 140, h: 34, r: 17, off: MARGIN },
+    music:    { w: 260, h: 38, r: 19, off: MARGIN },
+    level:    { w: 300, h: 40, r: 20, off: MARGIN },
+    note:     { w: 340, h: 64, r: 32, off: MARGIN },
+    expanded: { w: 440, h: 260, r: 32, off: MARGIN },
+  };
+  // 侧边竖胶囊的基础尺寸（粗细 × 长度），滑块在此基础上缩放
+  const SIDE = {
+    line:     { t: 10, l: 120, what: "竖着的细线，一半藏在屏幕外" },
+    clock:    { t: 40, l: 92,  what: "时和分上下叠着" },
+    music:    { t: 40, l: 188, what: "封面、竖排歌名、律动条" },
+    level:    { t: 42, l: 200, what: "图标、竖着的音量条、百分比" },
+    note:     { t: 64, l: 236, what: "图标、竖排的标题和正文" },
+    expanded: { t: 440, l: 260, what: "和顶部同样的面板，从侧边滑出（不缩放）" },
+  };
+  const NAMES = { line: "待机细线", clock: "待机时间", music: "音乐", level: "音量提示", note: "通知", expanded: "展开" };
+
+  const PALETTE = {
+    dark:  { bg: "#000000", fg: "#ffffff", sub: "rgba(255,255,255,.6)", track: "rgba(255,255,255,.22)", accent: "#f0a35e", edge: "rgba(255,255,255,.11)" },
+    light: { bg: "#f7f7f8", fg: "#111111", sub: "rgba(0,0,0,.55)", track: "rgba(0,0,0,.14)", accent: "#c83454", edge: "rgba(0,0,0,.14)" },
+  };
+
+  const ui = { dock: "left", state: "music", theme: "dark", wall: "dark", thick: 1, length: 1, hover: false };
+  try { const s = JSON.parse(localStorage.getItem("island-side-preview") || "{}"); Object.assign(ui, s, { hover: false }); } catch (e) {}
+  function save() { try { localStorage.setItem("island-side-preview", JSON.stringify({ dock: ui.dock, state: ui.state, theme: ui.theme, wall: ui.wall, thick: ui.thick, length: ui.length })); } catch (e) {} }
+
+  const screen = document.getElementById("screen");
+  const island = document.getElementById("island");
+  const bg = document.getElementById("islandBg");
+  const hint = document.getElementById("hint");
+
+  // 当前状态的目标形状（DIP）。w/h 是屏幕上的宽高，off 是离贴着的那条边的距离
+  function target() {
+    const st = ui.hover ? "expanded" : ui.state;
+    if (ui.dock === "top") return Object.assign({ st }, TOP[st]);
+    if (st === "expanded") return { st, w: 440, h: 260, r: 32, off: MARGIN };
+    const s = SIDE[st];
+    const t = st === "line" ? s.t : Math.round(s.t * ui.thick);
+    const l = Math.round(s.l * ui.length);
+    const off = st === "line" ? -LINE_VIS : MARGIN;
+    return { st, w: t, h: l, r: t / 2, off };
+  }
+
+  // 一维阻尼弹簧（和 WPF 版 CapsuleAnimator 相同的公式）
+  function Spring(v) { this.v = v; this.vel = 0; this.t = v; }
+  Spring.prototype.step = function (dt, R, Z) {
+    const k = Math.pow(2 * Math.PI / R, 2), c = 4 * Math.PI * Z / R;
+    const n = Math.max(1, Math.ceil(dt / (1 / 480))), h = dt / n;
+    for (let i = 0; i < n; i++) { const a = -k * (this.v - this.t) - c * this.vel; this.vel += a * h; this.v += this.vel * h; }
+  };
+  const t0 = target();
+  const sp = { w: new Spring(t0.w), h: new Spring(t0.h), r: new Spring(t0.r), off: new Spring(t0.off) };
+  let growing = true;
+
+  function setTargets() {
+    const t = target();
+    const area = sp.w.t * sp.h.t;
+    growing = t.w * t.h > area;
+    sp.w.t = t.w; sp.h.t = t.h; sp.r.t = t.r; sp.off.t = t.off;
+    showLayer(t.st);
+    renderSpec(t.st);
+  }
+
+  // 每个状态一层内容，切换时旧的淡出、新的稍后淡入
+  const layers = {};
+  function vertical() { return ui.dock !== "top"; }
+  function now() { const d = new Date(); return [String(d.getHours()).padStart(2, "0"), String(d.getMinutes()).padStart(2, "0")]; }
+
+  function build(st) {
+    const vert = vertical() && st !== "expanded";
+    const shape = ui.dock === "top" || st === "expanded" ? TOP[st] : null;
+    const s = SIDE[st];
+    const W = vert ? (st === "line" ? s.t : Math.round(s.t * ui.thick)) : shape.w;
+    const H = vert ? Math.round(s.l * ui.length) : shape.h;
+    const [hh, mm] = now();
+    let html = "";
+    const box = (style, inner) => `<div style="position:absolute;${style}">${inner}</div>`;
+    if (st === "line") {
+      html = "";
+    } else if (st === "clock") {
+      html = vert
+        ? box(`inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px`,
+            `<span class="isl-text" style="font-size:16px;font-weight:600;line-height:1.05">${hh}</span><span class="isl-sub" style="font-size:16px;font-weight:600;line-height:1.05">${mm}</span>`)
+        : box(`inset:0;display:flex;align-items:center;justify-content:center`, `<span class="isl-text" style="font-size:15px;font-weight:600">${hh}:${mm}</span>`);
+    } else if (st === "music") {
+      const eq = (v) => `<div class="eq${v ? " v" : ""}"><i></i><i></i><i></i><i></i></div>`;
+      html = vert
+        ? box(`inset:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:${Math.max(6, (W - 28) / 2)}px 0`,
+            `<div class="cover" style="width:28px;height:28px"></div>
+             <div class="isl-text vtext" style="font-size:12.5px;flex:1;margin:8px 0;max-height:100%">晴天 · 周杰伦</div>
+             ${eq(true)}`)
+        : box(`inset:0;display:flex;align-items:center;gap:10px;padding:0 14px 0 6px`,
+            `<div class="cover" style="width:28px;height:28px;border-radius:50%"></div>
+             <span class="isl-text" style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis">晴天 · 周杰伦</span>${eq(false)}`);
+    } else if (st === "level") {
+      const pct = 42;
+      html = vert
+        ? box(`inset:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:12px 0`,
+            `<span class="glyph" style="font-size:15px">🔊</span>
+             <div class="bar" style="width:6px;flex:1;margin:10px 0"><b style="left:0;right:0;bottom:0;height:${pct}%"></b></div>
+             <span class="isl-text" style="font-size:12px;font-variant-numeric:tabular-nums">${pct}</span>`)
+        : box(`inset:0;display:flex;align-items:center;gap:12px;padding:0 16px`,
+            `<span class="glyph" style="font-size:15px">🔊</span>
+             <div class="bar" style="height:6px;flex:1"><b style="left:0;top:0;bottom:0;width:${pct}%"></b></div>
+             <span class="isl-text" style="font-size:12px;width:30px;text-align:right">${pct}%</span>`);
+    } else if (st === "note") {
+      html = vert
+        ? box(`inset:0;display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:10px`,
+            `<span style="width:32px;height:32px;border-radius:50%;background:var(--isl-track);display:grid;place-items:center" class="glyph">✉</span>
+             <div style="flex:1;display:flex;flex-direction:row-reverse;gap:6px;min-height:0">
+               <span class="isl-text vtext" style="font-size:13px;font-weight:600;max-height:100%">新消息</span>
+               <span class="isl-sub vtext" style="font-size:12px;max-height:100%">这是一条来自灵动岛的演示通知</span>
+             </div>`)
+        : box(`inset:0;display:flex;align-items:center;gap:12px;padding:0 18px 0 14px`,
+            `<span style="width:36px;height:36px;border-radius:50%;background:var(--isl-track);display:grid;place-items:center;flex:none" class="glyph">✉</span>
+             <div style="min-width:0"><div class="isl-text" style="font-size:13.5px;font-weight:600">新消息</div>
+             <div class="isl-sub" style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis">这是一条来自灵动岛的演示通知</div></div>`);
+    } else if (st === "expanded") {
+      const tabs = ["音乐", "待办", "剪贴板", "中转站", "翻译", "监控", "外观"].map((n, i) =>
+        `<span class="${i ? "isl-sub" : "isl-text"}" style="font-size:12px;padding:3px 9px;border-radius:99px;${i ? "" : "background:var(--isl-track)"}">${n}</span>`).join("");
+      html = box(`inset:0;padding:12px 18px;display:flex;flex-direction:column;gap:14px`,
+        `<div style="display:flex;gap:2px;overflow:hidden">${tabs}</div>
+         <div style="display:flex;gap:16px;align-items:center">
+           <div class="cover" style="width:96px;height:96px;border-radius:14px"></div>
+           <div style="min-width:0;display:grid;gap:4px">
+             <span class="isl-text" style="font-size:17px;font-weight:700">晴天</span>
+             <span class="isl-sub" style="font-size:13px">周杰伦 · 叶惠美</span>
+             <span class="isl-sub" style="font-size:12px">网易云音乐</span>
+           </div>
+         </div>
+         <div class="bar" style="height:4px"><b style="left:0;top:0;bottom:0;width:38%"></b></div>
+         <div style="display:flex;justify-content:center;gap:34px" class="glyph"><span style="font-size:18px">⏮</span><span style="font-size:22px">⏸</span><span style="font-size:18px">⏭</span></div>`);
+    }
+    return { html, W, H };
+  }
+
+  function showLayer(st) {
+    for (const k of Object.keys(NAMES)) {
+      let el = layers[k];
+      if (!el) { el = layers[k] = document.createElement("div"); el.className = "layer"; island.appendChild(el); }
+      if (k === st) {
+        const b = build(k);
+        el.innerHTML = `<div class="content dip" data-w="${b.W}" data-h="${b.H}" style="width:${b.W}px;height:${b.H}px"><div class="inner">${b.html}</div></div>`;
+        el.classList.remove("on"); void el.offsetWidth; el.classList.add("on");
+      } else {
+        el.classList.remove("on");
+      }
+    }
+  }
+
+  // 逐帧：弹簧 → 屏幕上的位置和大小
+  let last = performance.now();
+  function frame(t) {
+    const dt = Math.min(0.05, (t - last) / 1000); last = t;
+    const R = growing ? 0.42 : 0.30, Z = growing ? 0.74 : 0.92, ZR = Math.max(Z, 0.85);
+    sp.w.step(dt, R, Z); sp.h.step(dt, R, Z); sp.r.step(dt, R, ZR); sp.off.step(dt, R, ZR);
+    const rect = screen.getBoundingClientRect();
+    const k = rect.width / SCREEN_W;
+    const w = Math.max(0, sp.w.v), h = Math.max(0, sp.h.v), off = sp.off.v;
+    const usableH = SCREEN_H - TASKBAR;
+    let x, y;
+    if (ui.dock === "top") { x = (SCREEN_W - w) / 2; y = off; }
+    else if (ui.dock === "left") { x = off; y = (usableH - h) / 2; }
+    else { x = SCREEN_W - w - off; y = (usableH - h) / 2; }
+    island.style.left = (x * k) + "px"; island.style.top = (y * k) + "px";
+    island.style.width = (w * k) + "px"; island.style.height = (h * k) + "px";
+    island.style.borderRadius = (Math.min(sp.r.v, w / 2, h / 2) * k) + "px";
+    // 内容按最终尺寸画好，居中对齐贴边的一侧，整体按屏幕比例缩放（和原生版一样只裁出可见部分）
+    for (const el of island.querySelectorAll(".layer .content")) {
+      const cw = +el.dataset.w, ch = +el.dataset.h;
+      let cx, cy;
+      if (ui.dock === "top") { cx = (w - cw) / 2; cy = 0; }
+      else if (ui.dock === "left") { cx = 0; cy = (h - ch) / 2; }
+      else { cx = w - cw; cy = (h - ch) / 2; }
+      el.style.left = (cx * k) + "px"; el.style.top = (cy * k) + "px";
+      el.style.transform = `scale(${k})`;
+      el.style.transformOrigin = "0 0";
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function applyPalette() {
+    const p = PALETTE[ui.theme];
+    island.style.setProperty("--isl-fg", p.fg);
+    island.style.setProperty("--isl-sub", p.sub);
+    island.style.setProperty("--isl-track", p.track);
+    island.style.setProperty("--isl-accent", p.accent);
+    bg.style.background = p.bg;
+    bg.style.boxShadow = `0 0 0 1px ${p.edge}`;
+    screen.classList.toggle("light-wall", ui.wall === "light");
+  }
+
+  function renderSpec(current) {
+    const body = document.getElementById("specBody");
+    body.innerHTML = Object.keys(NAMES).map((k) => {
+      const top = TOP[k], s = SIDE[k];
+      const side = k === "expanded" ? "440 × 260" : k === "line" ? `${s.t} × ${Math.round(s.l * ui.length)}` : `${Math.round(s.t * ui.thick)} × ${Math.round(s.l * ui.length)}`;
+      return `<tr class="${k === current ? "current" : ""}"><td>${NAMES[k]}</td><td class="num">${top.w} × ${top.h}</td><td class="num">${side}</td><td>${s.what}</td></tr>`;
+    }).join("");
+    document.getElementById("thickOut").textContent = "× " + ui.thick.toFixed(2);
+    document.getElementById("lengthOut").textContent = "× " + ui.length.toFixed(2);
+  }
+
+  function syncChips() {
+    document.querySelectorAll(".chips").forEach((g) => {
+      const v = ui[g.dataset.group];
+      g.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.v === v)));
+    });
+  }
+
+  document.querySelectorAll(".chips").forEach((g) => g.addEventListener("click", (e) => {
+    const c = e.target.closest(".chip"); if (!c) return;
+    ui[g.dataset.group] = c.dataset.v;
+    if (g.dataset.group === "dock") hint.textContent = c.dataset.v === "top" ? "把鼠标移到岛上试试展开" : "把鼠标移到岛上，从侧边展开";
+    syncChips(); applyPalette(); setTargets(); save();
+  }));
+  for (const id of ["thick", "length"]) {
+    const input = document.getElementById(id);
+    input.value = ui[id];
+    input.addEventListener("input", () => { ui[id] = +input.value; setTargets(); save(); });
+  }
+
+  // 悬停展开：进来停 100 ms 才展开，离开 120 ms 后收起（和原生版一样）
+  let inT = 0, outT = 0;
+  island.addEventListener("pointerenter", () => { clearTimeout(outT); inT = setTimeout(() => { if (!ui.hover) { ui.hover = true; setTargets(); } }, 100); });
+  island.addEventListener("pointerleave", () => { clearTimeout(inT); outT = setTimeout(() => { if (ui.hover) { ui.hover = false; setTargets(); } }, 120); });
+  // 手机上点一下切换
+  island.addEventListener("click", (e) => { if (e.pointerType === "touch") { ui.hover = !ui.hover; setTargets(); } });
+
+  // 时间每分钟刷新一次
+  setInterval(() => { if (!ui.hover && ui.state === "clock") showLayer("clock"); }, 30000);
+
+  syncChips(); applyPalette(); setTargets();
+  // 一开始直接放在目标位置，不从别处飞进来
+  for (const s of Object.values(sp)) { s.v = s.t; s.vel = 0; }
+  requestAnimationFrame(frame);
+})();
+</script>
