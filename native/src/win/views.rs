@@ -19,7 +19,7 @@ use island::text::{clock, format_duration, speed, weekday_zh};
 use island::todo::Todo;
 
 use super::gfx::{Align, FieldDraw, FieldGeometry, Painter, TextStyle, color};
-use super::media::Snapshot;
+use super::media::{Art, Snapshot};
 use super::system::Sample;
 use super::translator::{Status, TranslateUi};
 use island::translate::{self as tr, Format, PRESETS};
@@ -382,18 +382,32 @@ pub fn draw_notification(
     palette: &Palette,
     accent: Rgb,
     glyph: char,
+    icon: Option<&Art>,
     title: &str,
     body: &str,
 ) -> Result<()> {
     let fg = palette.foreground;
     let h = NOTIFICATION.height;
-    p.fill_circle(34.0, h / 2.0, 20.0, color(accent, 1.0))?;
-    p.icon(
-        glyph,
-        Rect::new(14.0, h / 2.0 - 20.0, 40.0, 40.0),
-        17.0,
-        color(on(accent), 1.0),
-    )?;
+    match icon {
+        // 软件自己的图标
+        Some(a) => p.image(
+            a.id,
+            &a.pixels,
+            a.width,
+            a.height,
+            Rect::new(14.0, h / 2.0 - 20.0, 40.0, 40.0),
+            9.0,
+        )?,
+        None => {
+            p.fill_circle(34.0, h / 2.0, 20.0, color(accent, 1.0))?;
+            p.icon(
+                glyph,
+                Rect::new(14.0, h / 2.0 - 20.0, 40.0, 40.0),
+                17.0,
+                color(on(accent), 1.0),
+            )?;
+        }
+    }
     let family = p.gfx.text_font.clone();
     p.text(
         title,

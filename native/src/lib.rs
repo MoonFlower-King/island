@@ -12,5 +12,6 @@ pub mod settings;
 pub mod shelf;
 pub mod state;
 pub mod text;
+pub mod toast;
 pub mod todo;
 pub mod translate;

@@ -38,7 +38,8 @@ pub struct Gfx {
     /// 共用的纯色画刷，每次填充前改颜色。D2D 资源属于设备，可以跨多次绘制复用。
     brush: RefCell<Option<ID2D1SolidColorBrush>>,
     /// 最近一张封面的位图（按封面编号），播放中每秒重画进度时不用重新上传像素。
-    image: RefCell<Option<(u64, ID2D1Bitmap1)>>,
+    /// 最近用过的几张图片（封面、通知里的软件图标），按编号复用。
+    image: RefCell<Vec<(u64, ID2D1Bitmap1)>>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -224,7 +225,7 @@ impl Gfx {
             software,
             formats: RefCell::new(Vec::new()),
             brush: RefCell::new(None),
-            image: RefCell::new(None),
+            image: RefCell::new(Vec::new()),
         })
     }
 
@@ -646,8 +647,8 @@ impl Painter<'_> {
                 .gfx
                 .image
                 .borrow()
-                .as_ref()
-                .filter(|(k, _)| *k == id)
+                .iter()
+                .find(|(k, _)| *k == id)
                 .map(|(_, b)| b.clone());
             let bitmap = match cached {
                 Some(b) => b,
@@ -658,7 +659,11 @@ impl Painter<'_> {
                         width * 4,
                         &props,
                     )?;
-                    *self.gfx.image.borrow_mut() = Some((id, b.clone()));
+                    let mut cache = self.gfx.image.borrow_mut();
+                    if cache.len() >= 4 {
+                        cache.remove(0);
+                    }
+                    cache.push((id, b.clone()));
                     b
                 }
             };

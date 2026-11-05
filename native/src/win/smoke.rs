@@ -571,6 +571,21 @@ fn spawn_notify(args: &[&str], stdin: Option<&str>) -> std::io::Result<std::proc
     Ok(child)
 }
 
+/// 用 Windows PowerShell 的 AppUserModelID 弹一条真的系统通知（任何程序都可以借用已注册的 ID）。
+fn show_real_toast() -> windows::core::Result<()> {
+    use windows::Data::Xml::Dom::XmlDocument;
+    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+    const POWERSHELL: &str =
+        r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe";
+    let xml = XmlDocument::new()?;
+    xml.LoadXml(&HSTRING::from(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>冒烟测试的系统通知</text>\
+         <text>来自 Windows 通知中心 &amp; 数据库</text></binding></visual></toast>",
+    ))?;
+    let toast = ToastNotification::CreateToastNotification(&xml)?;
+    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(POWERSHELL))?.Show(&toast)
+}
+
 /// 试一下 UserNotificationListener：拿不拿得到、权限状态、能不能读到通知。在单独的线程里跑，最多等 8 秒。
 fn probe_listener() -> String {
     use windows::UI::Notifications::Management::UserNotificationListener;
@@ -1308,6 +1323,40 @@ pub fn step(app: &mut App) {
             // 读系统通知：没有打包的 exe 能不能用（只记录，真机上还要再看）
             smoke.note(&format!("系统通知接口：{}", probe_listener()));
             smoke.note(&format!("通知数据库：{}", probe_database()));
+            app.dismiss_notification();
+            next = 400;
+        }
+        // 其他软件的系统通知：用 PowerShell 的身份真的弹一条 Windows 通知，岛应该从通知数据库里读到
+        86 => {
+            smoke.note(&format!("读取系统通知：{}", super::toasts::status()));
+            match show_real_toast() {
+                Ok(()) => {}
+                Err(e) => smoke.check(false, &format!("弹出一条 Windows 通知（{e}）")),
+            }
+            next = 5000;
+        }
+        87 => {
+            let title = app.notification.as_ref().map(|(_, t, _)| t.clone());
+            smoke.check(
+                title
+                    .as_deref()
+                    .is_some_and(|t| t.contains("冒烟测试的系统通知")),
+                &format!(
+                    "其他软件的通知显示在岛上（{:?}，{}）",
+                    app.notification.as_ref().map(|(_, t, b)| (t, b)),
+                    super::toasts::status()
+                ),
+            );
+            smoke.note(&format!(
+                "通知里用了软件自己的图标：{}",
+                app.notification_icon
+                    .as_ref()
+                    .map_or("没有".to_string(), |a| format!(
+                        "{}×{}",
+                        a.width, a.height
+                    ))
+            ));
+            snapshot(app, &mut smoke, "29-system-notification", None);
             app.dismiss_notification();
             smoke.step = 15;
             next = 35;
