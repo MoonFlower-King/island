@@ -170,15 +170,16 @@ jobs:
             /^## / { if (found) exit; if (index($0, "[" v "]")) { found = 1; next } }
             found { print }
           ' native/CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then echo "Island 原生版 $version（预览）" > notes.md; fi
+          if [ ! -s notes.md ]; then echo "Island 原生版 $version" > notes.md; fi
           cat notes.md
 
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
           target_commitish: ${{ github.sha }}
-          name: Island 原生版 ${{ env.TAG }}（预览）
+          # 标签带 "-"（如 v2.0.0-alpha.4）是预览版；不带的是正式版，设为仓库的最新版本
+          name: Island 原生版 ${{ env.TAG }}${{ contains(env.TAG, '-') && '（预览）' || '' }}
           body_path: notes.md
           files: packages/*
-          prerelease: true
-          make_latest: false
+          prerelease: ${{ contains(env.TAG, '-') }}
+          make_latest: ${{ !contains(env.TAG, '-') }}
