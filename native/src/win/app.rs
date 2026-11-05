@@ -255,7 +255,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         let software = gfx.software;
         let palette = resolve_palette(&settings);
         let mut scene = Scene::new(&compositor, &gfx, scale, &palette)?;
-        scene.set_edge(settings.dock)?;
+        scene.set_edge(&gfx, settings.dock)?;
         target.SetRoot(&scene.root)?;
         scene.jump_to(IslandState::Idle.metrics_with(settings.dock, settings.idle_as_line))?;
         let _ = scene.set_palette(&palette);
@@ -574,6 +574,7 @@ impl App {
                     t.wHour,
                     t.wMinute,
                     self.ai_unread().then_some(self.accent),
+                    self.edge().is_side(),
                 )
             });
         if let Err(e) = r {
@@ -589,7 +590,18 @@ impl App {
         let r = self
             .gfx
             .draw(&self.scene.notification.surface, self.scene.scale(), |p| {
-                views::draw_notification(p, &self.palette, self.accent, *glyph, icon, title, body)
+                views::draw_notification(
+                    p,
+                    &self.palette,
+                    self.accent,
+                    views::NoteIcon {
+                        glyph: *glyph,
+                        image: icon,
+                    },
+                    title,
+                    body,
+                    self.edge().is_side(),
+                )
             });
         if let Err(e) = r {
             log::warn(&format!("绘制通知失败：{e}"));
@@ -724,7 +736,15 @@ impl App {
         let r = self
             .gfx
             .draw(&self.scene.level.surface, self.scene.scale(), |p| {
-                views::draw_level(p, &self.palette, self.accent, *glyph, *value, text)
+                views::draw_level(
+                    p,
+                    &self.palette,
+                    self.accent,
+                    *glyph,
+                    *value,
+                    text,
+                    self.edge().is_side(),
+                )
             });
         if let Err(e) = r {
             log::warn(&format!("绘制音量提示失败：{e}"));
@@ -886,9 +906,12 @@ impl App {
     /// 换停靠边：窗口挪过去，形状直接跳到新位置。
     pub fn set_dock(&mut self, edge: Edge) {
         self.settings.dock = edge;
-        let _ = self.scene.set_edge(edge);
+        let _ = self.scene.set_edge(&self.gfx, edge);
         let _ = self.scene.jump_to(self.metrics(self.state));
         self.relayout();
+        // 左右两侧的收起状态是竖胶囊：内容按新尺寸重画
+        self.redraw_all();
+        self.update_equalizer();
         log::info(&format!("停靠位置：{}", edge.name()));
     }
 

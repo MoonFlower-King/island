@@ -12,7 +12,10 @@ use island::clip::Entry;
 use island::color::{self, ACCENT_PRESETS, BACKGROUND_PRESETS, FOREGROUND_PRESETS, Palette, Rgb};
 use island::edit::TextEdit;
 use island::level;
-use island::metrics::{COMPACT, EXPANDED, Edge, IDLE_CLOCK, LEVEL, NOTIFICATION, Rect};
+use island::metrics::{
+    COMPACT, EXPANDED, Edge, IDLE_CLOCK, LEVEL, NOTIFICATION, Rect, SIDE_CLOCK, SIDE_COMPACT,
+    SIDE_LEVEL, SIDE_NOTIFICATION,
+};
 use island::settings::{Settings, ThemeMode};
 use island::shelf::Item as ShelfEntry;
 use island::text::{clock, format_duration, speed, weekday_zh};
@@ -339,9 +342,73 @@ fn on(c: Rgb) -> Rgb {
 
 // ───────────────────────────── 音乐胶囊 ─────────────────────────────
 
+/// 竖排文字：一个字一格，从上往下（中文是正的，和设计预览一样）；放不下的用"…"收尾。
+/// `column` 是 (中心横坐标, 顶, 底)，`font` 是 (字号, 字重)。
+fn vertical_text(
+    p: &Painter,
+    text: &str,
+    (center_x, top, bottom): (f32, f32, f32),
+    (size, weight): (f32, DWRITE_FONT_WEIGHT),
+    c: windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F,
+) -> Result<()> {
+    let family = p.gfx.text_font.clone();
+    let st = style(&family, size, weight, Align::Center);
+    let step = size * 1.18;
+    let chars: Vec<char> = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .collect();
+    let fit = ((bottom - top) / step).floor().max(0.0) as usize;
+    let shown: Vec<char> = if chars.len() > fit {
+        chars[..fit.saturating_sub(1)]
+            .iter()
+            .copied()
+            .chain(['…'])
+            .collect()
+    } else {
+        chars
+    };
+    for (i, ch) in shown.iter().enumerate() {
+        if ch.is_whitespace() {
+            continue;
+        }
+        let y = top + i as f32 * step;
+        p.text(
+            &ch.to_string(),
+            Rect::new(center_x - step / 2.0 - 2.0, y, step + 4.0, step),
+            &st,
+            c,
+        )?;
+    }
+    Ok(())
+}
+
 pub fn draw_compact(p: &Painter, v: &ViewState) -> Result<()> {
     let fg = v.palette.foreground;
     let Some(m) = v.media else { return Ok(()) };
+    if v.settings.dock.is_side() {
+        // 竖胶囊：上面封面，中间竖排歌名，底部是律动条（合成器画）
+        let w = SIDE_COMPACT.width;
+        draw_art(p, m, Rect::new((w - 26.0) / 2.0, 7.0, 26.0, 26.0), 7.0, v)?;
+        if v.ai.iter().any(|m| !m.read) {
+            p.fill_circle(w / 2.0 + 13.0, 8.0, 4.5, color(v.palette.background, 1.0))?;
+            p.fill_circle(w / 2.0 + 13.0, 8.0, 3.5, color(v.accent, 1.0))?;
+        }
+        let title = if m.title.is_empty() {
+            "正在播放"
+        } else {
+            &m.title
+        };
+        return vertical_text(
+            p,
+            title,
+            (w / 2.0, 42.0, SIDE_COMPACT.height - 44.0),
+            (12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD),
+            color(fg, 0.95),
+        );
+    }
     draw_art(p, m, Rect::new(7.0, 6.0, 26.0, 26.0), 7.0, v)?;
     // 有没看过的 AI 消息：封面右上角一个小点
     if v.ai.iter().any(|m| !m.read) {
@@ -371,8 +438,30 @@ pub fn draw_clock(
     hour: u16,
     minute: u16,
     unread: Option<Rgb>,
+    vertical: bool,
 ) -> Result<()> {
     let family = p.gfx.text_font.clone();
+    if vertical {
+        // 竖胶囊：时和分上下叠着
+        let (w, h) = (SIDE_CLOCK.width, SIDE_CLOCK.height);
+        let st = style(&family, 16.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center);
+        p.text(
+            &format!("{hour:02}"),
+            Rect::new(0.0, h / 2.0 - 22.0, w, 22.0),
+            &st,
+            color(palette.foreground, 1.0),
+        )?;
+        p.text(
+            &format!("{minute:02}"),
+            Rect::new(0.0, h / 2.0, w, 22.0),
+            &st,
+            color(palette.foreground, 0.62),
+        )?;
+        if let Some(c) = unread {
+            p.fill_circle(w / 2.0, h - 11.0, 3.5, color(c, 1.0))?;
+        }
+        return Ok(());
+    }
     p.text(
         &clock(hour, minute),
         Rect::new(0.0, 0.0, IDLE_CLOCK.width, IDLE_CLOCK.height),
@@ -399,8 +488,33 @@ pub fn draw_level(
     glyph: char,
     value: f64,
     text: &str,
+    vertical: bool,
 ) -> Result<()> {
     let fg = palette.foreground;
+    let family = p.gfx.text_font.clone();
+    if vertical {
+        // 竖胶囊：上面图标，中间竖着的音量条（从下往上涨），底部是数字
+        let (w, h) = (SIDE_LEVEL.width, SIDE_LEVEL.height);
+        p.icon(glyph, Rect::new(0.0, 8.0, w, 30.0), 15.0, color(fg, 1.0))?;
+        let track = Rect::new(w / 2.0 - 3.0, 44.0, 6.0, h - 44.0 - 40.0);
+        p.fill_round(track, 3.0, color(fg, 0.18))?;
+        let filled =
+            (track.h * value.clamp(0.0, 1.0) as f32).max(if value > 0.0 { 6.0 } else { 0.0 });
+        if filled > 0.0 {
+            p.fill_round(
+                Rect::new(track.x, track.bottom() - filled, track.w, filled),
+                3.0,
+                color(accent, 1.0),
+            )?;
+        }
+        let number = text.trim_end_matches('%');
+        return p.text(
+            number,
+            Rect::new(0.0, h - 34.0, w, 24.0),
+            &style(&family, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center),
+            color(fg, 0.9),
+        );
+    }
     let h = LEVEL.height;
     p.icon(glyph, Rect::new(10.0, 0.0, 34.0, h), 15.0, color(fg, 1.0))?;
     let track = Rect::new(50.0, h / 2.0 - 2.0, 190.0, 4.0);
@@ -413,7 +527,6 @@ pub fn draw_level(
             color(accent, 1.0),
         )?;
     }
-    let family = p.gfx.text_font.clone();
     p.text(
         text,
         Rect::new(244.0, 0.0, 46.0, h),
@@ -424,16 +537,49 @@ pub fn draw_level(
 
 // ───────────────────────────── 通知 ─────────────────────────────
 
+/// 通知的图标：软件自己的图标；没有就画一个字形。
+pub struct NoteIcon<'a> {
+    pub glyph: char,
+    pub image: Option<&'a Art>,
+}
+
 pub fn draw_notification(
     p: &Painter,
     palette: &Palette,
     accent: Rgb,
-    glyph: char,
-    icon: Option<&Art>,
+    NoteIcon { glyph, image: icon }: NoteIcon,
     title: &str,
     body: &str,
+    vertical: bool,
 ) -> Result<()> {
     let fg = palette.foreground;
+    if vertical {
+        // 竖胶囊：上面图标，下面两列竖排文字，右边一列是标题、左边一列是正文（中文竖排从右往左读）
+        let (w, h) = (SIDE_NOTIFICATION.width, SIDE_NOTIFICATION.height);
+        let r = Rect::new(w / 2.0 - 17.0, 14.0, 34.0, 34.0);
+        match icon {
+            Some(a) => p.image(a.id, &a.pixels, a.width, a.height, r, 8.0)?,
+            None => {
+                p.fill_circle(w / 2.0, r.y + 17.0, 17.0, color(accent, 1.0))?;
+                p.icon(glyph, r, 15.0, color(on(accent), 1.0))?;
+            }
+        }
+        let (top, bottom) = (r.bottom() + 10.0, h - 16.0);
+        vertical_text(
+            p,
+            title,
+            (w / 2.0 + 9.0, top, bottom),
+            (12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD),
+            color(fg, 1.0),
+        )?;
+        return vertical_text(
+            p,
+            body,
+            (w / 2.0 - 9.0, top, bottom),
+            (11.5, DWRITE_FONT_WEIGHT_NORMAL),
+            color(fg, 0.62),
+        );
+    }
     let h = NOTIFICATION.height;
     match icon {
         // 软件自己的图标

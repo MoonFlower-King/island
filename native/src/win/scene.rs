@@ -25,7 +25,7 @@ use windows::core::{HSTRING, Interface, Result};
 use windows_numerics::{Vector2, Vector3};
 
 use island::color::{Palette, Rgb};
-use island::metrics::{self, Edge, Metrics, Rect, WINDOW_HEIGHT, WINDOW_WIDTH};
+use island::metrics::{self, Edge, IslandState, Metrics, Rect, WINDOW_HEIGHT, WINDOW_WIDTH};
 
 use super::gfx::Gfx;
 
@@ -190,28 +190,13 @@ impl Scene {
         content.Children()?.InsertAtTop(&notification.visual)?;
         content.Children()?.InsertAtTop(&expanded.visual)?;
 
-        // 律动条：4 根，挂在音乐胶囊右侧，动画全在合成器里跑
+        // 律动条：4 根，动画全在合成器里跑
         let bar_brush = c.CreateColorBrushWithColor(ui_color(palette.accent, 255))?;
         let mut bars = Vec::new();
-        for i in 0..4 {
+        for _ in 0..4 {
             let bar = c.CreateSpriteVisual()?;
             bar.SetBrush(&bar_brush)?;
-            bar.SetSize(Vector2 { X: 3.0, Y: 14.0 })?;
-            bar.SetOffset(Vector3 {
-                X: 222.0 + i as f32 * 6.0,
-                Y: 12.0,
-                Z: 0.0,
-            })?;
-            bar.SetCenterPoint(Vector3 {
-                X: 1.5,
-                Y: 14.0,
-                Z: 0.0,
-            })?;
-            bar.SetScale(Vector3 {
-                X: 1.0,
-                Y: 0.3,
-                Z: 1.0,
-            })?;
+            // 大小、位置由 place_bars 按停靠边设置
             compact.visual.Children()?.InsertAtTop(&bar)?;
             bars.push(bar);
         }
@@ -246,13 +231,25 @@ impl Scene {
             line_state: Cell::new(None),
             equalizer: Cell::new(None),
         };
-        scene.set_edge(Edge::Top)?;
+        scene.set_edge(gfx, Edge::Top)?;
         Ok(scene)
     }
 
-    /// 换停靠边：胶囊和各块内容的对齐方式、阴影方向都跟着变。调用后再 `jump_to` 到新形状。
-    pub fn set_edge(&mut self, edge: Edge) -> Result<()> {
+    /// 换停靠边：胶囊和各块内容的对齐方式都跟着变；左右两侧的收起状态是竖胶囊，
+    /// 内容表面按新尺寸重建（调用方随后重画）。调用后再 `jump_to` 到新形状。
+    pub fn set_edge(&mut self, gfx: &Gfx, edge: Edge) -> Result<()> {
         self.edge = edge;
+        let scale = self.scale;
+        for (layer, state) in [
+            (&mut self.compact, IslandState::Compact),
+            (&mut self.level, IslandState::Level),
+            (&mut self.notification, IslandState::Notification),
+        ] {
+            resize_layer(&self.compositor, gfx, layer, state.metrics(edge), scale)?;
+        }
+        let clock = IslandState::Idle.metrics_with(edge, false);
+        resize_layer(&self.compositor, gfx, &mut self.clock, clock, scale)?;
+        self.place_bars()?;
         let c = &self.compositor;
         let offset = match edge {
             Edge::Top => "Vector3((WW - p.W) / 2, p.Top, 0)",
@@ -424,10 +421,50 @@ impl Scene {
     }
 
     /// 律动条：播放时随机高度来回跳，暂停时缩成短条。
+    /// 律动条：顶部是竖着的 4 根，挂在音乐胶囊右侧；左右两侧是横着的 4 根，在竖胶囊底部。
+    fn place_bars(&self) -> Result<()> {
+        let side = self.edge.is_side();
+        let h = self.compact.height;
+        for (i, bar) in self.bars.iter().enumerate() {
+            let i = i as f32;
+            bar.StopAnimation(&HSTRING::from("Scale"))?;
+            if side {
+                bar.SetSize(Vector2 { X: 14.0, Y: 3.0 })?;
+                bar.SetOffset(Vector3 {
+                    X: 13.0,
+                    Y: h - 36.0 + i * 6.0,
+                    Z: 0.0,
+                })?;
+                bar.SetCenterPoint(Vector3 {
+                    X: 0.0,
+                    Y: 1.5,
+                    Z: 0.0,
+                })?;
+            } else {
+                bar.SetSize(Vector2 { X: 3.0, Y: 14.0 })?;
+                bar.SetOffset(Vector3 {
+                    X: 222.0 + i * 6.0,
+                    Y: 12.0,
+                    Z: 0.0,
+                })?;
+                bar.SetCenterPoint(Vector3 {
+                    X: 1.5,
+                    Y: 14.0,
+                    Z: 0.0,
+                })?;
+            }
+            bar.SetScale(bar_scale(side, 0.3))?;
+        }
+        // 下次 set_equalizer 重新开始动画
+        self.equalizer.set(None);
+        Ok(())
+    }
+
     pub fn set_equalizer(&self, playing: bool) -> Result<()> {
         if self.equalizer.replace(Some(playing)) == Some(playing) {
             return Ok(());
         }
+        let side = self.edge.is_side();
         const PATTERNS: [[f32; 5]; 4] = [
             [0.35, 1.0, 0.55, 0.85, 0.35],
             [0.8, 0.4, 1.0, 0.5, 0.8],
@@ -439,25 +476,14 @@ impl Scene {
             if playing {
                 let a = self.compositor.CreateVector3KeyFrameAnimation()?;
                 for (k, y) in PATTERNS[i].iter().enumerate() {
-                    a.InsertKeyFrame(
-                        k as f32 / 4.0,
-                        Vector3 {
-                            X: 1.0,
-                            Y: *y,
-                            Z: 1.0,
-                        },
-                    )?;
+                    a.InsertKeyFrame(k as f32 / 4.0, bar_scale(side, *y))?;
                 }
                 a.SetDuration(ms(DURATIONS[i]))?;
                 a.SetIterationBehavior(AnimationIterationBehavior::Forever)?;
                 bar.StartAnimation(&HSTRING::from("Scale"), &a)?;
             } else {
                 bar.StopAnimation(&HSTRING::from("Scale"))?;
-                bar.SetScale(Vector3 {
-                    X: 1.0,
-                    Y: 0.3,
-                    Z: 1.0,
-                })?;
+                bar.SetScale(bar_scale(side, 0.3))?;
             }
         }
         Ok(())
@@ -490,6 +516,49 @@ impl Scene {
         }
         Ok(())
     }
+}
+
+/// 律动条的缩放：顶部的竖条改变高度，侧边的横条改变长度。
+fn bar_scale(side: bool, amount: f32) -> Vector3 {
+    if side {
+        Vector3 {
+            X: amount,
+            Y: 1.0,
+            Z: 1.0,
+        }
+    } else {
+        Vector3 {
+            X: 1.0,
+            Y: amount,
+            Z: 1.0,
+        }
+    }
+}
+
+/// 内容块换尺寸：表面按新的像素尺寸重建。尺寸没变就什么都不做。
+fn resize_layer(
+    c: &Compositor,
+    gfx: &Gfx,
+    layer: &mut Layer,
+    m: Metrics,
+    scale: f32,
+) -> Result<()> {
+    if layer.width == m.width && layer.height == m.height {
+        return Ok(());
+    }
+    layer.width = m.width;
+    layer.height = m.height;
+    layer.surface = gfx.surface(
+        (m.width * scale).ceil() as u32,
+        (m.height * scale).ceil() as u32,
+    )?;
+    let brush = c.CreateSurfaceBrushWithSurface(&layer.surface)?;
+    brush.SetStretch(CompositionStretch::Fill)?;
+    layer.visual.SetBrush(&brush)?;
+    layer.visual.SetSize(Vector2 {
+        X: m.width,
+        Y: m.height,
+    })
 }
 
 /// 描边宽度（DIP）。

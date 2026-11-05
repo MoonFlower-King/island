@@ -373,7 +373,12 @@ fn bright_pixels(app: &App, m: Metrics) -> usize {
     };
     let s = app.scene.scale();
     let f = m.frame(app.settings.dock);
-    let r = island::metrics::Rect::new(f.x + m.radius, f.y + 3.0, f.w - 2.0 * m.radius, f.h - 6.0);
+    // 避开圆角：横胶囊左右各让出半径，竖胶囊上下各让出半径
+    let r = if m.height > m.width {
+        island::metrics::Rect::new(f.x + 3.0, f.y + m.radius, f.w - 6.0, f.h - 2.0 * m.radius)
+    } else {
+        island::metrics::Rect::new(f.x + m.radius, f.y + 3.0, f.w - 2.0 * m.radius, f.h - 6.0)
+    };
     let bg = app.palette.background;
     let bg_l = (bg.r as i32 + bg.g as i32 + bg.b as i32) / 3;
     let (x0, y0) = ((r.x.max(0.0) * s) as u32, (r.y.max(0.0) * s) as u32);
@@ -737,10 +742,37 @@ pub fn step(app: &mut App) {
             );
             app.activate(Hit::MediaStyle(false));
             app.set_dock(Edge::Left);
+            // 浅色主题：和 CI 近乎黑色的桌面区分开，好检查胶囊的形状
+            app.set_palette(LIGHT);
         }
         10 => {
             smoke.check(placed_at(app, Edge::Left), "停靠左侧：窗口贴着屏幕左边居中");
+            // 左侧的音乐胶囊是竖着的：竖条两侧是背景色，横着放时才会占到的地方不是
+            let side = IslandState::Compact.metrics(Edge::Left);
+            let inside = sample_points(app, side, &[(6.0, 100.0), (34.0, 100.0), (6.0, 140.0)]);
+            let outside = sample_points(app, side, &[(150.0, 90.0)]);
+            smoke.check(
+                app.state == IslandState::Compact
+                    && inside.len() == 3
+                    && inside.iter().all(|c| near(*c, LIGHT.background, 16))
+                    && outside.iter().all(|c| !near(*c, LIGHT.background, 16)),
+                &format!(
+                    "左侧的音乐胶囊是竖着的（{:?}，竖条内 {:?}，旁边 {:?}）",
+                    app.state,
+                    inside
+                        .iter()
+                        .map(|c| island::color::to_hex(*c))
+                        .collect::<Vec<_>>(),
+                    outside
+                        .iter()
+                        .map(|c| island::color::to_hex(*c))
+                        .collect::<Vec<_>>()
+                ),
+            );
+            let lit = bright_pixels(app, side);
+            smoke.check(lit > 40, &format!("竖胶囊里画出了封面和竖排歌名（{lit}）"));
             snapshot(app, &mut smoke, "11-dock-left", None);
+            app.set_palette(DARK);
             app.set_pinned(true);
         }
         11 => {
