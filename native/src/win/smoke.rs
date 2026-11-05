@@ -592,62 +592,6 @@ fn show_real_toast() -> windows::core::Result<()> {
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(POWERSHELL))?.Show(&toast)
 }
 
-/// 试一下 UserNotificationListener：拿不拿得到、权限状态、能不能读到通知。在单独的线程里跑，最多等 8 秒。
-fn probe_listener() -> String {
-    use windows::UI::Notifications::Management::UserNotificationListener;
-    use windows::UI::Notifications::NotificationKinds;
-    use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let r = (|| -> std::result::Result<String, String> {
-            unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
-                .map_err(|e| format!("RoInitialize {e}"))?;
-            let l = UserNotificationListener::Current().map_err(|e| format!("Current 失败 {e}"))?;
-            let status = l
-                .GetAccessStatus()
-                .map(|s| format!("{}", s.0))
-                .unwrap_or_else(|e| format!("失败 {e}"));
-            let request = l
-                .RequestAccessAsync()
-                .and_then(|op| op.join())
-                .map(|s| format!("{}", s.0))
-                .unwrap_or_else(|e| format!("失败 {e}"));
-            let list = l
-                .GetNotificationsAsync(NotificationKinds::Toast)
-                .and_then(|op| op.join())
-                .and_then(|v| v.Size())
-                .map(|n| format!("{n} 条"))
-                .unwrap_or_else(|e| format!("失败 {e}"));
-            Ok(format!(
-                "权限状态 {status}，请求权限 {request}（0 未指定 1 允许 2 拒绝），读取通知 {list}"
-            ))
-        })();
-        let _ = tx.send(r.unwrap_or_else(|e| e));
-    });
-    rx.recv_timeout(std::time::Duration::from_secs(8))
-        .unwrap_or_else(|_| "超时".into())
-}
-
-/// Windows 把通知存在 %LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db（SQLite）。看看读不读得到。
-fn probe_database() -> String {
-    use std::io::Read;
-    let Some(base) = std::env::var_os("LOCALAPPDATA") else {
-        return "没有 LOCALAPPDATA".into();
-    };
-    let path = std::path::Path::new(&base).join(r"Microsoft\Windows\Notifications\wpndatabase.db");
-    let size = std::fs::metadata(&path).map(|m| m.len());
-    let head = std::fs::File::open(&path).and_then(|mut f| {
-        let mut b = [0u8; 16];
-        f.read_exact(&mut b)?;
-        Ok(b)
-    });
-    match (size, head) {
-        (Err(e), _) => format!("不存在或读不到（{e}）"),
-        (Ok(n), Ok(b)) => format!("{n} 字节，文件头 {:?}", String::from_utf8_lossy(&b[..15])),
-        (Ok(n), Err(e)) => format!("{n} 字节，但打不开（{e}）"),
-    }
-}
-
 /// 每次定时器触发执行一步，返回后按需要的等待时间重新定时。
 pub fn step(app: &mut App) {
     let Some(mut smoke) = app.smoke.take() else {
@@ -1326,9 +1270,6 @@ pub fn step(app: &mut App) {
                 codes.iter().all(|c| *c == Some(0)),
                 &format!("--notify 送完就退出（退出码 {codes:?}）"),
             );
-            // 读系统通知：没有打包的 exe 能不能用（只记录，真机上还要再看）
-            smoke.note(&format!("系统通知接口：{}", probe_listener()));
-            smoke.note(&format!("通知数据库：{}", probe_database()));
             app.dismiss_notification();
             next = 400;
         }

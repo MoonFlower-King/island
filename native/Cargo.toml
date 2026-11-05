@@ -33,7 +33,6 @@ features = [
     "UI_Composition",
     "UI_Composition_Desktop",
     "UI_Notifications",
-    "UI_Notifications_Management",
     "Win32_Foundation",
     "Win32_System_DataExchange",
     "Win32_Graphics_Direct2D",
