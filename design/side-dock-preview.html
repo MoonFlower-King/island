@@ -1,4 +1,4 @@
-<title>灵动岛预览</title>
+<title>灵动岛 2.0 预览</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
@@ -37,6 +37,15 @@ body {
 .wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 16px; }
 header h1 { font-size: 22px; margin: 0; font-weight: 700; text-wrap: balance; }
 header p { margin: 4px 0 0; color: var(--muted); max-width: 70ch; }
+header a { color: var(--accent); }
+.how { margin: 6px 0 0; padding-left: 1.2em; color: var(--muted); display: grid; gap: 2px; max-width: 80ch; }
+/* 右键菜单（模仿 Windows 的弹出菜单） */
+.menu { position: absolute; z-index: 5; min-width: 260px; padding: 4px; border-radius: 8px; background: #2b2b2b; color: #f2f2f2;
+  box-shadow: 0 8px 24px rgba(0,0,0,.35); font-size: 13px; }
+.menu button { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; padding: 6px 10px; border-radius: 4px; cursor: pointer; }
+.menu button:hover, .menu button:focus-visible { background: rgba(255,255,255,.1); outline: none; }
+.menu .tick { width: 1em; text-align: center; }
+.menu hr { border: 0; border-top: 1px solid rgba(255,255,255,.12); margin: 4px 2px; }
 
 /* 模拟屏幕：代表 1440 × 900 DIP 的桌面 */
 .screen {
@@ -83,7 +92,7 @@ header p { margin: 4px 0 0; color: var(--muted); max-width: 70ch; }
 .t { color: var(--i-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .s { color: var(--i-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .f { color: var(--i-faint); white-space: nowrap; }
-.vtext { writing-mode: vertical-rl; text-orientation: mixed; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vtext { writing-mode: vertical-rl; text-orientation: upright; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cover { border-radius: 6px; flex: none; background: var(--cover); }
 .ico { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 .ico.solid { fill: currentColor; stroke: none; }
@@ -94,7 +103,6 @@ header p { margin: 4px 0 0; color: var(--muted); max-width: 70ch; }
 .eq.v i { height: 3px; animation-name: eqv; }
 .eq.paused i { animation-play-state: paused; }
 @keyframes eq { 0%,100% { height: 30%; } 50% { height: 100%; } }
-@keyframes breathe { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
 @keyframes eqv { 0%,100% { width: 30%; } 50% { width: 100%; } }
 .track { border-radius: 99px; background: var(--i-track); position: absolute; overflow: hidden; }
 .track b { position: absolute; border-radius: 99px; background: var(--i-fg); }
@@ -165,8 +173,15 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
 
 <div class="wrap">
   <header>
-    <h1>灵动岛预览</h1>
-    <p>模拟桌面上的岛可以直接操作：鼠标移上去展开，展开后每个标签都能用；在岛上滚动滚轮调音量；把电脑里的文件拖到岛上会放进中转站；在这页上复制的文字会出现在剪贴板标签里；微信、QQ 等所有软件的通知都会显示在岛上；Claude、Codex 等 AI 完成任务时会弹出提醒，没看过的会在收起的胶囊上留一个小点。停在左侧或右侧时，收起的胶囊都是竖着的。</p>
+    <h1>灵动岛 2.0 预览</h1>
+    <p>和 <a href="https://github.com/MoonFlower-King/island/releases/tag/v2.0.0">2.0.0 正式版</a>一样的尺寸、动画和功能，模拟桌面上的岛可以直接操作：</p>
+    <ul class="how">
+      <li>鼠标移上去展开，展开后每个标签都能用；右键岛打开菜单</li>
+      <li>在岛上滚动滚轮调音量；按住展开面板的空白处拖到屏幕另一边，松手就停过去</li>
+      <li>把电脑里的文件拖到岛上会放进中转站；在这页上复制的文字会出现在剪贴板标签里</li>
+      <li>微信、QQ 等所有软件的通知都会显示在岛上；Claude、Codex 等 AI 完成任务会弹出提醒，没看过的在收起的胶囊上留一个小点</li>
+      <li>停在左侧或右侧时，收起的胶囊都是竖着的</li>
+    </ul>
   </header>
 
   <div class="screen" id="screen">
@@ -229,15 +244,11 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       </div>
       <span class="note">岛的颜色在展开面板的“外观”标签里改，和真的一样。</span>
     </div>
-    <div class="crow"><span class="label">竖胶囊</span>
-      <label class="slider"><span>粗细</span><input id="thick" type="range" min="0.7" max="1.4" step="0.05" value="1"><output id="thickOut"></output></label>
-      <label class="slider"><span>长度</span><input id="length" type="range" min="0.6" max="1.5" step="0.05" value="1"><output id="lengthOut"></output></label>
-    </div>
   </section>
 
   <section class="spec">
     <h2>尺寸（DIP，100% 缩放下等于像素）</h2>
-    <p>侧边一栏是竖胶囊的宽 × 高，跟着上面的滑块变；顶部一栏是现在原生版的尺寸，作为对照。定下来以后告诉我滑块的数值，或者直接说某一行要多大。</p>
+    <p>2.0.0 里各状态的尺寸（native/src/metrics.rs）。停在左侧或右侧时用侧边一栏，展开面板两边一样。</p>
     <div class="table-scroll"><table>
       <thead><tr><th>状态</th><th>顶部（宽 × 高）</th><th>侧边（宽 × 高）</th><th>侧边里放什么</th></tr></thead>
       <tbody id="specBody"></tbody>
@@ -323,7 +334,8 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   const PRESET_AC = ["#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#64D2FF"];
 
   const S = {
-    dock: "left", wall: "dark", thick: 1, length: 1,
+    dock: "left", wall: "dark", showApps: true, showLevel: true, persistClips: true, autostart: false,
+    menuOpen: false,
     theme: "dark", custom: { bg: "#1C1C1E", fg: "#FFFFFF", ac: "#0A84FF" },
     idleLine: false, mediaLine: false,
     playing: true, song: 0, pos: 48, lingerUntil: 0, volume: 0.42, muted: false,
@@ -356,7 +368,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     ],
   };
   // 记住页面上的选择（只是方便，失败也没关系）
-  const KEEP = ["dock", "wall", "thick", "length", "theme", "custom", "idleLine", "mediaLine", "tab"];
+  const KEEP = ["dock", "wall", "showApps", "showLevel", "persistClips", "autostart", "theme", "custom", "idleLine", "mediaLine", "tab"];
   try { const saved = JSON.parse(localStorage.getItem("island-preview-v2") || "{}"); for (const k of KEEP) if (k in saved) S[k] = saved[k]; } catch (e) {}
   function save() { try { const o = {}; for (const k of KEEP) o[k] = S[k]; localStorage.setItem("island-preview-v2", JSON.stringify(o)); } catch (e) {} }
 
@@ -388,8 +400,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   function shapeOf(st) {
     if (!side() || st === "expanded") return Object.assign({}, TOP[st]);
     const s = SIDE[st];
-    const t = st === "line" ? s.t : Math.round(s.t * S.thick);
-    return { w: t, h: Math.round(s.l * S.length), r: t / 2, off: st === "line" ? -LINE_VIS : MARGIN };
+    return { w: s.t, h: s.l, r: s.t / 2, off: st === "line" ? -LINE_VIS : MARGIN };
   }
 
   // ───────── 弹簧（和 WPF 版 CapsuleAnimator 同一个公式）─────────
@@ -435,7 +446,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       return vert
         ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;padding:${(W - 28) / 2}px 0 12px">
              <div class="cover" style="width:28px;height:28px"></div>
-             <div class="t vtext" style="font-size:12.5px;flex:1;min-height:0;margin:8px 0">${esc(song.title)} · ${esc(song.artist)}</div>${eq}</div>`
+             <div class="t vtext" style="font-size:12px;font-weight:600;flex:1;min-height:0;margin:8px 0">${esc(song.title)}</div>${eq}</div>`
         : `<div class="abs" style="inset:0;display:flex;align-items:center;gap:10px;padding:0 14px 0 5px">
              <div class="cover" style="width:28px;height:28px;border-radius:50%"></div>
              <span class="t" style="font-size:13px;flex:1">${esc(song.title)} · ${esc(song.artist)}</span>${eq}</div>`;
@@ -483,7 +494,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   function withUnread(st, html, W, H) {
     const u = firstUnread(); if (!u || st === "note" || st === "level") return html;
     const c = AI_APPS[u.app].color;
-    if (st === "line") return html + `<div class="abs" style="inset:0;background:${c};animation:breathe 1.6s ease-in-out infinite"></div>`;
+    if (st === "line") return html + `<div class="abs" style="inset:0;background:${c}"></div>`;
     const vert = side();
     const pos = vert ? `left:50%;bottom:${st === "music" ? 34 : 8}px;transform:translateX(-50%)` : `right:${st === "music" ? 34 : 9}px;top:50%;transform:translateY(-50%)`;
     return html + `<span class="abs" style="${pos};width:7px;height:7px;border-radius:50%;background:${c};box-shadow:0 0 0 2px var(--i-bg)"></span>`;
@@ -657,6 +668,11 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   function update(forceRender) {
     const st = resolve();
     const s = shapeOf(st);
+    // 和原生版一样：看着 AI 动态收起，就算都看过了
+    if (current === "expanded" && st !== "expanded" && S.tab === "ai" && unread()) {
+      S.ai.forEach((a) => (a.read = true));
+      rerenderAll();
+    }
     if (st !== current) {
       growing = s.w * s.h > sp.w.t * sp.h.t;
       for (const k of Object.keys(layers)) if (k !== st) layers[k].classList.remove("on");
@@ -683,6 +699,9 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     screen.classList.toggle("light-wall", S.wall === "light");
   }
 
+  // 拖动中窗口跟着光标走的偏移（屏幕像素）
+  const drag = { dx: 0, dy: 0, from: null, active: false };
+
   // 逐帧：弹簧 → 位置和大小；内容按最终尺寸画好，对齐贴边的一侧，只裁出可见部分（和原生版一样）
   let last = performance.now();
   function frame(t) {
@@ -696,7 +715,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     else if (S.dock === "left") { x = off; y = (usableH - h) / 2; }
     else { x = SCREEN_W - w - off; y = (usableH - h) / 2; }
     const st = island.style;
-    st.left = x * k + "px"; st.top = y * k + "px"; st.width = w * k + "px"; st.height = h * k + "px";
+    st.left = x * k + drag.dx + "px"; st.top = y * k + drag.dy + "px"; st.width = w * k + "px"; st.height = h * k + "px";
     st.borderRadius = Math.min(sp.r.v, w / 2, h / 2) * k + "px";
     for (const el of island.querySelectorAll(".layer.on .content, .layer .content")) {
       const cw = +el.dataset.w || 0, ch = +el.dataset.h || 0;
@@ -710,21 +729,26 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   }
 
   // ───────── 页面控件 ─────────
+  let hintUntil = 0;
+  function flashHint(text) {
+    hintUntil = Date.now() + 2200;
+    hint.textContent = text;
+    setTimeout(() => { if (Date.now() >= hintUntil) syncControls(current); }, 2300);
+  }
   function syncControls(st) {
     document.querySelectorAll(".chips[data-group]").forEach((g) => {
       const v = S[g.dataset.group];
       g.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.v === v)));
     });
     document.querySelectorAll("#stateChips .chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.v === st)));
-    document.getElementById("thickOut").textContent = "× " + S.thick.toFixed(2);
-    document.getElementById("lengthOut").textContent = "× " + S.length.toFixed(2);
     document.getElementById("specBody").innerHTML = Object.keys(NAMES).map((k) => {
       const top = TOP[k], s = SIDE[k];
-      const sideTxt = k === "expanded" ? "440 × 260" : `${k === "line" ? s.t : Math.round(s.t * S.thick)} × ${Math.round(s.l * S.length)}`;
+      const sideTxt = `${s.t} × ${s.l}`;
       return `<tr class="${k === st ? "current" : ""}"><td>${NAMES[k]}</td><td class="num">${top.w} × ${top.h}</td><td class="num">${sideTxt}</td><td>${s.what}</td></tr>`;
     }).join("");
+    if (hintUntil > Date.now()) return;
     hint.textContent = st === "expanded"
-      ? (S.pinned ? "已置顶：鼠标移开也不收起，点图钉取消" : "鼠标移开就收起")
+      ? (S.pinned ? "已置顶：鼠标移开也不收起，点图钉取消" : "鼠标移开就收起；按住空白处可以拖到屏幕另一边")
       : side() ? "鼠标移到岛上，从侧边展开；在岛上滚动可以调音量" : "鼠标移到岛上展开；在岛上滚动可以调音量";
   }
   document.querySelectorAll(".chips[data-group]").forEach((g) => g.addEventListener("click", (e) => {
@@ -744,11 +768,6 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     if (v === "expanded") S.pinned = true;
     save(); update(true); rerenderAll();
   });
-  for (const id of ["thick", "length"]) {
-    const input = document.getElementById(id);
-    input.value = S[id];
-    input.addEventListener("input", () => { S[id] = +input.value; save(); update(true); rerenderAll(); });
-  }
   function rerenderAll() { for (const k of Object.keys(layers)) if (k !== current) renderLayer(k, false); }
 
   // 通知、音量提示（和原生版一样：通知 3.5 秒、音量提示 1.5 秒后自动收回）
@@ -769,7 +788,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     noteTimer = setTimeout(() => { S.note = null; update(true); }, 6000);
   }
   function showLevel() {
-    if (S.hover || S.pinned) return;
+    if (!S.showLevel || S.hover || S.pinned) return;
     clearTimeout(levelTimer);
     S.level = 1; update(true);
     levelTimer = setTimeout(() => { S.level = 0; update(); }, 1500);
@@ -794,6 +813,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   const appIdx = {};
   document.getElementById("appDemos").addEventListener("click", (e) => {
     const b = e.target.closest(".chip"); if (!b) return;
+    if (!S.showApps) { flashHint("右键菜单里关掉了「显示其他软件的通知」"); return; }
     const app = b.dataset.app, list = APP_SAMPLES[app];
     appIdx[app] = ((appIdx[app] ?? -1) + 1) % list.length;
     const [title, body] = list[appIdx[app]];
@@ -832,7 +852,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   function tryCollapse() {
     // 正在输入时不收起（和原生版一样）
     const a = document.activeElement;
-    if (pointerInside || (a && island.contains(a) && a.classList.contains("field"))) return;
+    if (pointerInside || S.menuOpen || (a && island.contains(a) && a.classList.contains("field"))) return;
     if (S.hover) { S.hover = false; update(); }
   }
   island.addEventListener("focusout", () => setTimeout(tryCollapse, 150));
@@ -998,6 +1018,83 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       S.clips = S.clips.slice(0, 50);
       if (current === "expanded" && S.tab === "clipboard") update(true);
     }, 0);
+  });
+
+  // ───────── 右键菜单（和原生版一样的几项）─────────
+  let menu = null;
+  function closeMenu() {
+    if (!menu) return;
+    menu.remove(); menu = null; S.menuOpen = false;
+    setTimeout(tryCollapse, 150);
+  }
+  island.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    closeMenu();
+    S.menuOpen = true;
+    const items = [
+      ["pinned", "置顶（鼠标移开也保持展开）"],
+      ["showLevel", "显示音量和亮度提示"],
+      ["showApps", "显示其他软件的通知（微信、QQ、AI 工具等）"],
+      ["persistClips", "保存剪贴板历史到磁盘"],
+      ["autostart", "开机自动启动"],
+      null,
+      ["demo", "演示：弹出一条通知"],
+      ["data", "打开数据文件夹"],
+      null,
+      ["exit", "退出"],
+    ];
+    menu = document.createElement("div");
+    menu.className = "menu";
+    menu.setAttribute("role", "menu");
+    menu.innerHTML = items.map((it) => it ? `<button role="menuitem" data-m="${it[0]}"><span class="tick">${typeof S[it[0]] === "boolean" && S[it[0]] ? "✓" : ""}</span>${it[1]}</button>` : "<hr>").join("");
+    screen.appendChild(menu);
+    const r = screen.getBoundingClientRect();
+    const x = Math.min(e.clientX - r.left, r.width - menu.offsetWidth - 4);
+    const y = Math.min(e.clientY - r.top, r.height - menu.offsetHeight - 4);
+    menu.style.left = Math.max(4, x) + "px"; menu.style.top = Math.max(4, y) + "px";
+    menu.querySelector("button").focus({ preventScroll: true });
+    menu.addEventListener("click", (ev) => {
+      const b = ev.target.closest("button"); if (!b) return;
+      const m = b.dataset.m;
+      if (m === "demo") { S.hover = false; notify("mail", "新消息", "这是一条来自灵动岛的演示通知"); }
+      else if (m === "data") flashHint("真机上会打开 %LOCALAPPDATA% 里的灵动岛数据文件夹");
+      else if (m === "exit") flashHint("预览里不会真的退出");
+      else {
+        S[m] = !S[m]; save();
+        if (m === "showLevel" && !S.showLevel) S.level = 0;
+        update(true);
+      }
+      closeMenu();
+    });
+  });
+  document.addEventListener("pointerdown", (e) => { if (menu && !menu.contains(e.target)) closeMenu(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+
+  // ───────── 拖动换停靠边：按住展开面板的空白处拖，松手停到最近的一边 ─────────
+  island.addEventListener("pointerdown", (e) => {
+    if (current !== "expanded" || e.button !== 0 || e.pointerType === "touch") return;
+    if (e.target.closest("button, input, textarea, .row, [data-act], #trOut")) return;
+    drag.from = { x: e.clientX, y: e.clientY }; drag.active = false;
+    island.setPointerCapture(e.pointerId);
+  });
+  island.addEventListener("pointermove", (e) => {
+    if (!drag.from) return;
+    const dx = e.clientX - drag.from.x, dy = e.clientY - drag.from.y;
+    if (!drag.active && Math.hypot(dx, dy) < 5) return;
+    drag.active = true; drag.dx = dx; drag.dy = dy;
+  });
+  island.addEventListener("pointerup", (e) => {
+    if (!drag.from) return;
+    const was = drag.active;
+    drag.from = null; drag.active = false; drag.dx = 0; drag.dy = 0;
+    if (!was) return;
+    // 光标离屏幕的上、左、右哪条边最近（一样近时优先顶部，和原生版 nearest_edge 一样）
+    const r = screen.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    const top = Math.max(0, y), left = Math.max(0, x), right = Math.max(0, r.width - x);
+    const edge = top <= left && top <= right ? "top" : left <= right ? "left" : "right";
+    if (edge !== S.dock) { S.dock = edge; save(); }
+    update(true); rerenderAll();
   });
 
   // ───────── 定时：播放进度、系统监控、时钟 ─────────
