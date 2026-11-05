@@ -51,7 +51,7 @@ use super::translator::{Draft, Status, TranslateUi};
 use super::views::{
     self, CLIP_ROWS, Editing, Field, Hit, SHELF_ROWS, TODO_ROWS, Tab, Targets, ViewState,
 };
-use super::{forward, log, smoke};
+use super::{appinfo, forward, log, smoke, toasts};
 
 const TIMER_POLL: usize = 1;
 const TIMER_TOPMOST: usize = 2;
@@ -72,8 +72,8 @@ const LEVEL_HUD_MS: u32 = 1600;
 const NOTIFICATION_MS: u32 = 3500;
 /// AI 完成任务的提醒多停一会儿。
 const AI_NOTIFICATION_MS: u32 = 6000;
-/// AI 消息的图标（Segoe Fluent Icons：机器人）。
-const GLYPH_AI: char = '\u{E99A}';
+/// 查不到软件图标时用的铃铛。
+const GLYPH_BELL: char = '\u{EA8F}';
 /// 系统音量多久看一次。
 const VOLUME_POLL_MS: u64 = 110;
 
@@ -137,8 +137,12 @@ pub struct App {
     pub level_hud: Option<(char, f64, String)>,
     /// 正在显示的通知：(图标, 标题, 内容)。
     pub notification: Option<(char, String, String)>,
-    /// 收到过的 AI 消息，新的在前。
-    pub ai: Vec<island::ai::Event>,
+    /// AI 动态：收到过的 AI 消息，新的在前。
+    pub ai: Vec<views::AiItem>,
+    /// 当前通知用的软件图标（其他软件的系统通知才有）。
+    pub notification_icon: Option<std::sync::Arc<super::media::Art>>,
+    /// 软件名和图标，查过的记住。
+    apps: appinfo::Cache,
     poll_ms: u32,
     last_volume_poll: u64,
     targets: Targets,
@@ -251,7 +255,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         let software = gfx.software;
         let palette = resolve_palette(&settings);
         let mut scene = Scene::new(&compositor, &gfx, scale, &palette)?;
-        scene.set_edge(settings.dock)?;
+        scene.set_edge(&gfx, settings.dock)?;
         target.SetRoot(&scene.root)?;
         scene.jump_to(IslandState::Idle.metrics_with(settings.dock, settings.idle_as_line))?;
         let _ = scene.set_palette(&palette);
@@ -325,6 +329,8 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             level_hud: None,
             notification: None,
             ai: Vec::new(),
+            notification_icon: None,
+            apps: appinfo::Cache::default(),
             poll_ms: POLL_MS,
             last_volume_poll: 0,
             targets: Targets::default(),
@@ -340,6 +346,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         app.redraw_all();
         app.shelf_fill_info();
         let smoking = app.testing;
+        let read_notifications = app.settings.show_system_notifications;
         APP.with(|cell| *cell.borrow_mut() = Some(app));
         // 接收拖进来的文件
         let drop_target = drag::DropTarget::create(hwnd);
@@ -351,6 +358,9 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         SetTimer(Some(hwnd), TIMER_POLL, POLL_MS, None);
         SetTimer(Some(hwnd), TIMER_TOPMOST, 1500, None);
         SetTimer(Some(hwnd), TIMER_TICK, 1000, None);
+        if read_notifications {
+            toasts::start(hwnd);
+        }
         if smoking {
             SetTimer(Some(hwnd), TIMER_SMOKE, 1200, None);
         } else {
@@ -471,6 +481,14 @@ impl App {
             self.state = target;
             let (a, b) = (self.metrics(previous), self.metrics(target));
             let growing = b.width * b.height > a.width * a.height;
+            // 展开时有没看过的 AI 消息：直接打开 AI 动态（拖文件进来时除外）
+            if target == IslandState::Expanded && self.ai_unread() && !self.drag_over {
+                self.tab = Tab::Ai;
+            }
+            // 看着 AI 动态收起：算都看过了
+            if previous == IslandState::Expanded && self.tab == Tab::Ai {
+                self.mark_ai_read();
+            }
             if target == IslandState::Expanded {
                 if self.tab == Tab::Monitor {
                     self.monitor.sample(tick());
@@ -503,7 +521,9 @@ impl App {
     /// 放音乐时也收成细线：播放中的细线染成封面主题色。
     fn update_line_tint(&self) {
         let playing = self.media.as_ref().is_some_and(|m| m.playing);
-        let tint = (self.settings.media_as_line && playing).then_some(self.accent);
+        // 放音乐时也收成细线：染成封面主题色；有没看过的 AI 消息：染成强调色
+        let tint =
+            ((self.settings.media_as_line && playing) || self.ai_unread()).then_some(self.accent);
         let _ = self
             .scene
             .set_line_tint(tint, self.state == IslandState::Idle);
@@ -548,7 +568,14 @@ impl App {
         let r = self
             .gfx
             .draw(&self.scene.clock.surface, self.scene.scale(), |p| {
-                views::draw_clock(p, &self.palette, t.wHour, t.wMinute)
+                views::draw_clock(
+                    p,
+                    &self.palette,
+                    t.wHour,
+                    t.wMinute,
+                    self.ai_unread().then_some(self.accent),
+                    self.edge().is_side(),
+                )
             });
         if let Err(e) = r {
             log::warn(&format!("绘制时钟失败：{e}"));
@@ -559,10 +586,22 @@ impl App {
         let Some((glyph, title, body)) = &self.notification else {
             return;
         };
+        let icon = self.notification_icon.as_deref();
         let r = self
             .gfx
             .draw(&self.scene.notification.surface, self.scene.scale(), |p| {
-                views::draw_notification(p, &self.palette, self.accent, *glyph, title, body)
+                views::draw_notification(
+                    p,
+                    &self.palette,
+                    self.accent,
+                    views::NoteIcon {
+                        glyph: *glyph,
+                        image: icon,
+                    },
+                    title,
+                    body,
+                    self.edge().is_side(),
+                )
             });
         if let Err(e) = r {
             log::warn(&format!("绘制通知失败：{e}"));
@@ -576,9 +615,22 @@ impl App {
 
     /// 弹出通知，`ms` 毫秒后自动缩回。
     pub fn show_notification_for(&mut self, glyph: char, title: &str, body: &str, ms: u32) {
+        self.show_notification_with(glyph, None, title, body, ms);
+    }
+
+    /// 弹出通知；`icon` 是软件自己的图标，没有就画 `glyph`。
+    pub fn show_notification_with(
+        &mut self,
+        glyph: char,
+        icon: Option<std::sync::Arc<super::media::Art>>,
+        title: &str,
+        body: &str,
+        ms: u32,
+    ) {
         if self.hidden {
             return;
         }
+        self.notification_icon = icon;
         self.notification = Some((glyph, title.into(), body.into()));
         self.redraw_notification();
         unsafe {
@@ -595,10 +647,77 @@ impl App {
             };
             log::info(&format!("AI 消息：{}（{}）", event.title(), event.project));
             let (title, body) = (event.title(), event.body());
-            self.ai.insert(0, event);
-            self.ai.truncate(50);
-            self.show_notification_for(GLYPH_AI, &title, &body, AI_NOTIFICATION_MS);
+            self.add_ai(&title, &body, None);
+            self.show_notification_for(views::GLYPH_AI, &title, &body, AI_NOTIFICATION_MS);
         }
+    }
+
+    /// 记一条 AI 消息（没看过），刷新所有显示"有新消息"的地方。
+    fn add_ai(&mut self, title: &str, body: &str, icon: Option<std::sync::Arc<super::media::Art>>) {
+        let t = unsafe { GetLocalTime() };
+        self.ai.insert(
+            0,
+            views::AiItem {
+                title: title.into(),
+                body: body.into(),
+                at: format!("{:02}:{:02}", t.wHour, t.wMinute),
+                read: false,
+                icon,
+            },
+        );
+        self.ai.truncate(50);
+        self.ai_changed();
+    }
+
+    pub fn ai_unread(&self) -> bool {
+        self.ai.iter().any(|m| !m.read)
+    }
+
+    fn ai_changed(&mut self) {
+        self.redraw_clock();
+        self.redraw_compact();
+        self.update_line_tint();
+        if self.state == IslandState::Expanded {
+            self.redraw_expanded();
+        }
+    }
+
+    fn mark_ai_read(&mut self) {
+        if self.ai_unread() {
+            self.ai.iter_mut().for_each(|m| m.read = true);
+            self.ai_changed();
+        }
+    }
+
+    /// 其他软件的系统通知：认出是哪个软件、取它的图标，弹成岛上的通知。AI 工具的多停一会儿。
+    pub fn on_system_notifications(&mut self) {
+        let raw = toasts::take();
+        if !self.settings.show_system_notifications {
+            return;
+        }
+        // 一下子来很多时只弹最后一条
+        let latest = raw
+            .into_iter()
+            .rev()
+            .find_map(|(aumid, xml)| island::toast::content(&xml).map(|c| (aumid, c)));
+        let Some((aumid, content)) = latest else {
+            return;
+        };
+        let info = self.apps.get(&aumid);
+        let title = island::toast::island_title(&info.name, &content);
+        let body = island::ai::summarize(&content.body);
+        let is_ai =
+            island::ai::App::parse(&format!("{aumid} {}", info.name)) != island::ai::App::Other;
+        let ms = if is_ai {
+            AI_NOTIFICATION_MS
+        } else {
+            NOTIFICATION_MS
+        };
+        log::info(&format!("系统通知：{}（{aumid}）", info.name));
+        if is_ai {
+            self.add_ai(&title, &body, info.icon.clone());
+        }
+        self.show_notification_with(GLYPH_BELL, info.icon, &title, &body, ms);
     }
 
     pub fn dismiss_notification(&mut self) {
@@ -617,7 +736,15 @@ impl App {
         let r = self
             .gfx
             .draw(&self.scene.level.surface, self.scene.scale(), |p| {
-                views::draw_level(p, &self.palette, self.accent, *glyph, *value, text)
+                views::draw_level(
+                    p,
+                    &self.palette,
+                    self.accent,
+                    *glyph,
+                    *value,
+                    text,
+                    self.edge().is_side(),
+                )
             });
         if let Err(e) = r {
             log::warn(&format!("绘制音量提示失败：{e}"));
@@ -685,6 +812,7 @@ impl App {
             weekday: t.wDayOfWeek,
             pinned: self.pinned,
             hovered: self.hovered,
+            ai: &self.ai,
             pressed: self.pressed,
         }
     }
@@ -778,9 +906,12 @@ impl App {
     /// 换停靠边：窗口挪过去，形状直接跳到新位置。
     pub fn set_dock(&mut self, edge: Edge) {
         self.settings.dock = edge;
-        let _ = self.scene.set_edge(edge);
+        let _ = self.scene.set_edge(&self.gfx, edge);
         let _ = self.scene.jump_to(self.metrics(self.state));
         self.relayout();
+        // 左右两侧的收起状态是竖胶囊：内容按新尺寸重画
+        self.redraw_all();
+        self.update_equalizer();
         log::info(&format!("停靠位置：{}", edge.name()));
     }
 
@@ -1324,6 +1455,19 @@ impl App {
                     .min(self.clips.items.len().saturating_sub(CLIP_ROWS));
                 self.save_clips();
                 self.hovered = None;
+            }
+            Hit::AiItem(i) => {
+                if let Some(m) = self.ai.get_mut(i)
+                    && !m.read
+                {
+                    m.read = true;
+                    self.ai_changed();
+                }
+            }
+            Hit::AiReadAll => self.mark_ai_read(),
+            Hit::AiClear => {
+                self.ai.clear();
+                self.ai_changed();
             }
             Hit::ClipClear => {
                 self.clips.items.clear();
@@ -2138,11 +2282,13 @@ const MENU_LEVEL: usize = 3;
 const MENU_STARTUP: usize = 4;
 const MENU_CLIPBOARD: usize = 5;
 const MENU_DEMO: usize = 6;
+const MENU_TOASTS: usize = 7;
 const MENU_EXIT: usize = 9;
 
 struct MenuState {
     pinned: bool,
     level: bool,
+    toasts: bool,
     persist_clipboard: bool,
 }
 
@@ -2166,6 +2312,12 @@ fn show_menu(hwnd: HWND, s: &MenuState) -> usize {
             w!("置顶（鼠标移开也保持展开）"),
         );
         let _ = AppendMenuW(menu, check(s.level), MENU_LEVEL, w!("显示音量和亮度提示"));
+        let _ = AppendMenuW(
+            menu,
+            check(s.toasts),
+            MENU_TOASTS,
+            w!("显示其他软件的通知（微信、QQ、AI 工具等）"),
+        );
         let _ = AppendMenuW(
             menu,
             check(s.persist_clipboard),
@@ -2213,6 +2365,15 @@ fn on_menu_command(a: &mut App, cmd: usize) {
             a.settings.show_level_hud = !a.settings.show_level_hud;
             if !a.settings.show_level_hud {
                 a.hide_level();
+            }
+            a.save_settings();
+        }
+        MENU_TOASTS => {
+            a.settings.show_system_notifications = !a.settings.show_system_notifications;
+            if a.settings.show_system_notifications {
+                toasts::start(a.hwnd);
+            } else {
+                toasts::stop();
             }
             a.save_settings();
         }
@@ -2368,6 +2529,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_app(|a| a.on_ai_messages());
             LRESULT(0)
         }
+        toasts::WM_TOAST => {
+            with_app(|a| a.on_system_notifications());
+            LRESULT(0)
+        }
         WM_LBUTTONDOWN => {
             with_app(|a| {
                 let (x, y) = lparam_point(lparam, a.scene.scale());
@@ -2393,6 +2558,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 MenuState {
                     pinned: a.pinned,
                     level: a.settings.show_level_hud,
+                    toasts: a.settings.show_system_notifications,
                     persist_clipboard: a.settings.persist_clipboard,
                 }
             }) else {

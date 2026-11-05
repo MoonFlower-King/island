@@ -373,7 +373,12 @@ fn bright_pixels(app: &App, m: Metrics) -> usize {
     };
     let s = app.scene.scale();
     let f = m.frame(app.settings.dock);
-    let r = island::metrics::Rect::new(f.x + m.radius, f.y + 3.0, f.w - 2.0 * m.radius, f.h - 6.0);
+    // 避开圆角：横胶囊左右各让出半径，竖胶囊上下各让出半径
+    let r = if m.height > m.width {
+        island::metrics::Rect::new(f.x + 3.0, f.y + m.radius, f.w - 6.0, f.h - 2.0 * m.radius)
+    } else {
+        island::metrics::Rect::new(f.x + m.radius, f.y + 3.0, f.w - 2.0 * m.radius, f.h - 6.0)
+    };
     let bg = app.palette.background;
     let bg_l = (bg.r as i32 + bg.g as i32 + bg.b as i32) / 3;
     let (x0, y0) = ((r.x.max(0.0) * s) as u32, (r.y.max(0.0) * s) as u32);
@@ -571,60 +576,25 @@ fn spawn_notify(args: &[&str], stdin: Option<&str>) -> std::io::Result<std::proc
     Ok(child)
 }
 
-/// 试一下 UserNotificationListener：拿不拿得到、权限状态、能不能读到通知。在单独的线程里跑，最多等 8 秒。
-fn probe_listener() -> String {
-    use windows::UI::Notifications::Management::UserNotificationListener;
-    use windows::UI::Notifications::NotificationKinds;
-    use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let r = (|| -> std::result::Result<String, String> {
-            unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
-                .map_err(|e| format!("RoInitialize {e}"))?;
-            let l = UserNotificationListener::Current().map_err(|e| format!("Current 失败 {e}"))?;
-            let status = l
-                .GetAccessStatus()
-                .map(|s| format!("{}", s.0))
-                .unwrap_or_else(|e| format!("失败 {e}"));
-            let request = l
-                .RequestAccessAsync()
-                .and_then(|op| op.join())
-                .map(|s| format!("{}", s.0))
-                .unwrap_or_else(|e| format!("失败 {e}"));
-            let list = l
-                .GetNotificationsAsync(NotificationKinds::Toast)
-                .and_then(|op| op.join())
-                .and_then(|v| v.Size())
-                .map(|n| format!("{n} 条"))
-                .unwrap_or_else(|e| format!("失败 {e}"));
-            Ok(format!(
-                "权限状态 {status}，请求权限 {request}（0 未指定 1 允许 2 拒绝），读取通知 {list}"
-            ))
-        })();
-        let _ = tx.send(r.unwrap_or_else(|e| e));
-    });
-    rx.recv_timeout(std::time::Duration::from_secs(8))
-        .unwrap_or_else(|_| "超时".into())
+fn system_toast_shown(app: &App) -> bool {
+    app.notification
+        .as_ref()
+        .is_some_and(|(_, t, _)| t.contains("冒烟测试的系统通知"))
 }
 
-/// Windows 把通知存在 %LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db（SQLite）。看看读不读得到。
-fn probe_database() -> String {
-    use std::io::Read;
-    let Some(base) = std::env::var_os("LOCALAPPDATA") else {
-        return "没有 LOCALAPPDATA".into();
-    };
-    let path = std::path::Path::new(&base).join(r"Microsoft\Windows\Notifications\wpndatabase.db");
-    let size = std::fs::metadata(&path).map(|m| m.len());
-    let head = std::fs::File::open(&path).and_then(|mut f| {
-        let mut b = [0u8; 16];
-        f.read_exact(&mut b)?;
-        Ok(b)
-    });
-    match (size, head) {
-        (Err(e), _) => format!("不存在或读不到（{e}）"),
-        (Ok(n), Ok(b)) => format!("{n} 字节，文件头 {:?}", String::from_utf8_lossy(&b[..15])),
-        (Ok(n), Err(e)) => format!("{n} 字节，但打不开（{e}）"),
-    }
+/// 用 Windows PowerShell 的 AppUserModelID 弹一条真的系统通知（任何程序都可以借用已注册的 ID）。
+fn show_real_toast() -> windows::core::Result<()> {
+    use windows::Data::Xml::Dom::XmlDocument;
+    use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
+    const POWERSHELL: &str =
+        r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe";
+    let xml = XmlDocument::new()?;
+    xml.LoadXml(&HSTRING::from(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>冒烟测试的系统通知</text>\
+         <text>来自 Windows 通知中心 &amp; 数据库</text></binding></visual></toast>",
+    ))?;
+    let toast = ToastNotification::CreateToastNotification(&xml)?;
+    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(POWERSHELL))?.Show(&toast)
 }
 
 /// 每次定时器触发执行一步，返回后按需要的等待时间重新定时。
@@ -772,10 +742,37 @@ pub fn step(app: &mut App) {
             );
             app.activate(Hit::MediaStyle(false));
             app.set_dock(Edge::Left);
+            // 浅色主题：和 CI 近乎黑色的桌面区分开，好检查胶囊的形状
+            app.set_palette(LIGHT);
         }
         10 => {
             smoke.check(placed_at(app, Edge::Left), "停靠左侧：窗口贴着屏幕左边居中");
+            // 左侧的音乐胶囊是竖着的：竖条两侧是背景色，横着放时才会占到的地方不是
+            let side = IslandState::Compact.metrics(Edge::Left);
+            let inside = sample_points(app, side, &[(6.0, 100.0), (34.0, 100.0), (6.0, 140.0)]);
+            let outside = sample_points(app, side, &[(150.0, 90.0)]);
+            smoke.check(
+                app.state == IslandState::Compact
+                    && inside.len() == 3
+                    && inside.iter().all(|c| near(*c, LIGHT.background, 16))
+                    && outside.iter().all(|c| !near(*c, LIGHT.background, 16)),
+                &format!(
+                    "左侧的音乐胶囊是竖着的（{:?}，竖条内 {:?}，旁边 {:?}）",
+                    app.state,
+                    inside
+                        .iter()
+                        .map(|c| island::color::to_hex(*c))
+                        .collect::<Vec<_>>(),
+                    outside
+                        .iter()
+                        .map(|c| island::color::to_hex(*c))
+                        .collect::<Vec<_>>()
+                ),
+            );
+            let lit = bright_pixels(app, side);
+            smoke.check(lit > 40, &format!("竖胶囊里画出了封面和竖排歌名（{lit}）"));
             snapshot(app, &mut smoke, "11-dock-left", None);
+            app.set_palette(DARK);
             app.set_pinned(true);
         }
         11 => {
@@ -1264,11 +1261,11 @@ pub fn step(app: &mut App) {
             let first = app.ai.first();
             smoke.check(
                 first.is_some_and(|e| {
-                    e.title() == "Claude 完成了任务" && e.body() == "island · 完成 侧边胶囊做好了"
+                    e.title == "Claude 完成了任务" && e.body == "island · 完成 侧边胶囊做好了"
                 }),
                 &format!(
                     "Claude Code 的钩子消息弹出提醒（{:?}）",
-                    first.map(|e| (e.title(), e.body()))
+                    first.map(|e| (e.title.clone(), e.body.clone()))
                 ),
             );
             smoke.check(
@@ -1289,11 +1286,11 @@ pub fn step(app: &mut App) {
             smoke.check(
                 app.ai.len() == 2
                     && first.is_some_and(|e| {
-                        e.title() == "Codex 完成了任务" && e.body() == "shop · 购物车已修好"
+                        e.title == "Codex 完成了任务" && e.body == "shop · 购物车已修好"
                     }),
                 &format!(
                     "Codex 的 notify 消息弹出提醒（{:?}）",
-                    first.map(|e| (e.title(), e.body()))
+                    first.map(|e| (e.title.clone(), e.body.clone()))
                 ),
             );
             let codes: Vec<Option<i32>> = smoke
@@ -1305,10 +1302,68 @@ pub fn step(app: &mut App) {
                 codes.iter().all(|c| *c == Some(0)),
                 &format!("--notify 送完就退出（退出码 {codes:?}）"),
             );
-            // 读系统通知：没有打包的 exe 能不能用（只记录，真机上还要再看）
-            smoke.note(&format!("系统通知接口：{}", probe_listener()));
-            smoke.note(&format!("通知数据库：{}", probe_database()));
             app.dismiss_notification();
+            next = 400;
+        }
+        // 其他软件的系统通知：用 PowerShell 的身份真的弹一条 Windows 通知，岛应该从通知数据库里读到
+        86 => {
+            smoke.note(&format!("读取系统通知：{}", super::toasts::status()));
+            match show_real_toast() {
+                Ok(()) => {}
+                Err(e) => smoke.check(false, &format!("弹出一条 Windows 通知（{e}）")),
+            }
+            smoke.waits = 0;
+            next = 1000;
+        }
+        // 通知数据库隔一会儿才看一次：勤看着等它出现（最多约 8 秒）；它只停 3.5 秒
+        87 if !system_toast_shown(app) && smoke.waits < 25 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
+        }
+        87 => {
+            let title = app.notification.as_ref().map(|(_, t, _)| t.clone());
+            smoke.check(
+                title
+                    .as_deref()
+                    .is_some_and(|t| t.contains("冒烟测试的系统通知")),
+                &format!(
+                    "其他软件的通知显示在岛上（{:?}，{}）",
+                    app.notification.as_ref().map(|(_, t, b)| (t, b)),
+                    super::toasts::status()
+                ),
+            );
+            smoke.note(&format!(
+                "通知里用了软件自己的图标：{}",
+                app.notification_icon
+                    .as_ref()
+                    .map_or("没有".to_string(), |a| format!(
+                        "{}×{}",
+                        a.width, a.height
+                    ))
+            ));
+            snapshot(app, &mut smoke, "29-system-notification", None);
+            app.dismiss_notification();
+            next = 400;
+        }
+        // AI 动态：有没看过的消息时，收起的细线染成强调色；展开直接打开 AI 动态，收起后算看过
+        88 => {
+            smoke.check(app.ai_unread(), "有没看过的 AI 消息");
+            app.set_tab(Tab::Music);
+            app.set_pinned(true);
+            next = 700;
+        }
+        89 => {
+            smoke.check(
+                app.tab == Tab::Ai && has_target(app, |h| matches!(h, Hit::AiItem(_))),
+                &format!("展开时直接打开 AI 动态，列出消息（{:?}）", app.tab),
+            );
+            snapshot(app, &mut smoke, "30-ai-tab", None);
+            app.set_pinned(false);
+        }
+        90 => {
+            smoke.check(!app.ai_unread(), "看过 AI 动态再收起，消息都算已读");
+            app.set_tab(Tab::Music);
             smoke.step = 15;
             next = 35;
         }

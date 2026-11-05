@@ -166,7 +166,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
 <div class="wrap">
   <header>
     <h1>灵动岛预览</h1>
-    <p>模拟桌面上的岛可以直接操作：鼠标移上去展开，展开后每个标签都能用；在岛上滚动滚轮调音量；把电脑里的文件拖到岛上会放进中转站；在这页上复制的文字会出现在剪贴板标签里；Claude、Codex 等 AI 完成任务时，岛上会弹出提醒，没看过的会留一个小点。停在左侧或右侧时，收起的胶囊都是竖着的。</p>
+    <p>模拟桌面上的岛可以直接操作：鼠标移上去展开，展开后每个标签都能用；在岛上滚动滚轮调音量；把电脑里的文件拖到岛上会放进中转站；在这页上复制的文字会出现在剪贴板标签里；微信、QQ 等所有软件的通知都会显示在岛上；Claude、Codex 等 AI 完成任务时会弹出提醒，没看过的会在收起的胶囊上留一个小点。停在左侧或右侧时，收起的胶囊都是竖着的。</p>
   </header>
 
   <div class="screen" id="screen">
@@ -212,6 +212,15 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
         <button class="chip action" data-app="dsh" data-kind="done">dsh 完成任务</button>
         <button class="chip action" data-app="claude" data-kind="ask">Claude 等你确认</button>
       </div>
+    </div>
+    <div class="crow"><span class="label">其他软件</span>
+      <div class="chips" id="appDemos">
+        <button class="chip action" data-app="wechat">微信消息</button>
+        <button class="chip action" data-app="qq">QQ 消息</button>
+        <button class="chip action" data-app="telegram">Telegram 消息</button>
+        <button class="chip action" data-app="x">X 通知</button>
+      </div>
+      <span class="note">所有软件的 Windows 通知都会显示在岛上（右键菜单可以关掉）；真机上用的是软件自己的图标。</span>
     </div>
     <div class="crow"><span class="label">壁纸</span>
       <div class="chips" data-group="wall">
@@ -284,6 +293,8 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     img: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 17l-5-5-9 8"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7.5" stroke-width="2.4"/>',
+    chat: '<path d="M4 5h16v11H9l-5 4z"/>',
+    send: '<path d="M21 3L3 11l7 3 3 7z"/><path d="M10 14l11-11"/>',
     spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>',
   };
   const ico = (n, size, extra) => `<svg class="ico${n === "play" ? " solid" : ""}" viewBox="0 0 24 24" style="font-size:${size}px;${extra || ""}" aria-hidden="true">${P[n]}</svg>`;
@@ -294,14 +305,19 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     { title: "夜曲", artist: "周杰伦", album: "十一月的萧邦", len: 226, a: "#1c3d6e", b: "#6fa8dc", accent: "#6fa8dc" },
     { title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", len: 200, a: "#5b1a1a", b: "#e8453c", accent: "#ff6b5c" },
   ];
-  // 各家 AI 工具：用字母徽标和颜色区分（不用官方图标）
+  // 发通知的软件。真机上显示的是从电脑里取出的软件自己的图标；
+  // 预览页拿不到那些图标，用同样大小、同样圆角的色块代替
   const AI_APPS = {
-    claude:    { name: "Claude",    letter: "C", color: "#D97757" },
-    codex:     { name: "Codex",     letter: "X", color: "#10A37F" },
-    workbuddy: { name: "WorkBuddy", letter: "W", color: "#3B82F6" },
-    dsh:       { name: "dsh",       letter: "D", color: "#8B5CF6" },
+    claude:    { name: "Claude",           color: "#D97757", glyph: "spark" },
+    codex:     { name: "Codex",            color: "#10A37F", glyph: "spark" },
+    workbuddy: { name: "WorkBuddy",        color: "#3B82F6", glyph: "spark" },
+    dsh:       { name: "DeepSeek Harness", color: "#4D6BFE", glyph: "spark" },
+    wechat:    { name: "微信",             color: "#07C160", glyph: "chat" },
+    qq:        { name: "QQ",               color: "#12B7F5", glyph: "chat" },
+    telegram:  { name: "Telegram",         color: "#2AABEE", glyph: "send" },
+    x:         { name: "X",                color: "#111111", glyph: "chat" },
   };
-  const badge = (app, size) => { const a = AI_APPS[app]; return `<span style="width:${size}px;height:${size}px;border-radius:50%;background:${a.color};color:#fff;display:grid;place-items:center;font-weight:700;font-size:${Math.round(size * 0.5)}px;flex:none;font-family:var(--font-ui)">${a.letter}</span>`; };
+  const badge = (app, size) => { const a = AI_APPS[app]; return `<span title="真机上是 ${a.name} 自己的图标" style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.24)}px;background:${a.color};color:#fff;display:grid;place-items:center;flex:none;box-shadow:inset 0 0 0 1px rgba(255,255,255,.18)">${ico(a.glyph, Math.round(size * 0.55))}</span>`; };
   const PRESET_BG = ["#000000", "#1C1C1E", "#0B1F3A", "#2A1B47", "#F7F7F8", "#FFF4DE"];
   const PRESET_FG = ["#FFFFFF", "#E5E5EA", "#FFD60A", "#1C1C1E", "#3A2E1F", "#0B1F3A"];
   const PRESET_AC = ["#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#64D2FF"];
@@ -768,6 +784,23 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     dsh: [["数据清洗", "表格里重复的 312 行已去掉，结果另存为新文件。"]],
   };
   const ASK = { claude: ["island", "想运行 npm install，需要你同意。"] };
+  // 其他软件的通知：岛上标题是"软件名 · 通知标题"，停 3.5 秒，不进 AI 动态
+  const APP_SAMPLES = {
+    wechat: [["张三", "晚上一起吃饭吗？"], ["家庭群", "妈妈：周末回来吗"]],
+    qq: [["李四", "文件我发你邮箱了"]],
+    telegram: [["Alice", "See you at 8 🙂"]],
+    x: [["@nasa", "liked your post"]],
+  };
+  const appIdx = {};
+  document.getElementById("appDemos").addEventListener("click", (e) => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    const app = b.dataset.app, list = APP_SAMPLES[app];
+    appIdx[app] = ((appIdx[app] ?? -1) + 1) % list.length;
+    const [title, body] = list[appIdx[app]];
+    clearTimeout(noteTimer);
+    S.note = { app, title: `${AI_APPS[app].name} · ${title}`, body }; update(true);
+    noteTimer = setTimeout(() => { S.note = null; update(true); }, 3500);
+  });
   const sampleIdx = {};
   document.getElementById("aiDemos").addEventListener("click", (e) => {
     const b = e.target.closest(".chip"); if (!b) return;

@@ -28,6 +28,11 @@ pub enum Edge {
 }
 
 impl Edge {
+    /// 贴在左边或右边（收起的胶囊是竖着的）。
+    pub fn is_side(self) -> bool {
+        self != Edge::Top
+    }
+
     pub fn parse(s: &str) -> Edge {
         match s {
             "Left" => Edge::Left,
@@ -103,6 +108,31 @@ pub const LEVEL: Metrics = Metrics {
     radius: 20.0,
     top: TOP_MARGIN,
 };
+/// 停在左右两侧时的竖胶囊（尺寸和 design/side-dock-preview.html 一致）。
+pub const SIDE_CLOCK: Metrics = Metrics {
+    width: 40.0,
+    height: 92.0,
+    radius: 20.0,
+    top: TOP_MARGIN,
+};
+pub const SIDE_COMPACT: Metrics = Metrics {
+    width: 40.0,
+    height: 188.0,
+    radius: 20.0,
+    top: TOP_MARGIN,
+};
+pub const SIDE_LEVEL: Metrics = Metrics {
+    width: 42.0,
+    height: 200.0,
+    radius: 21.0,
+    top: TOP_MARGIN,
+};
+pub const SIDE_NOTIFICATION: Metrics = Metrics {
+    width: 64.0,
+    height: 236.0,
+    radius: 32.0,
+    top: TOP_MARGIN,
+};
 pub const EXPANDED: Metrics = Metrics {
     width: 440.0,
     height: 260.0,
@@ -145,17 +175,26 @@ impl IslandState {
     /// `idle_as_line` 为 false 时，待机是显示时间的小胶囊。
     pub fn metrics_with(self, edge: Edge, idle_as_line: bool) -> Metrics {
         if self == IslandState::Idle && !idle_as_line {
-            return IDLE_CLOCK;
+            return if edge.is_side() {
+                SIDE_CLOCK
+            } else {
+                IDLE_CLOCK
+            };
         }
         self.metrics(edge)
     }
 
+    /// 停在左右两侧时，收起的状态都是竖着的胶囊；展开面板不变。
     pub fn metrics(self, edge: Edge) -> Metrics {
+        let side = edge.is_side();
         match self {
-            IslandState::Idle if edge == Edge::Top => LINE,
-            IslandState::Idle => VERTICAL_LINE,
+            IslandState::Idle if side => VERTICAL_LINE,
+            IslandState::Idle => LINE,
+            IslandState::Compact if side => SIDE_COMPACT,
             IslandState::Compact => COMPACT,
+            IslandState::Notification if side => SIDE_NOTIFICATION,
             IslandState::Notification => NOTIFICATION,
+            IslandState::Level if side => SIDE_LEVEL,
             IslandState::Level => LEVEL,
             IslandState::Expanded => EXPANDED,
         }
@@ -284,6 +323,25 @@ mod tests {
     use super::*;
 
     #[test]
+    fn side_capsules_are_vertical() {
+        for edge in [Edge::Left, Edge::Right] {
+            for s in [
+                IslandState::Compact,
+                IslandState::Level,
+                IslandState::Notification,
+            ] {
+                let m = s.metrics(edge);
+                assert!(m.height > m.width * 2.0, "{s:?} {edge:?}");
+            }
+            let clock = IslandState::Idle.metrics_with(edge, false);
+            assert_eq!(clock, SIDE_CLOCK);
+            assert_eq!(IslandState::Expanded.metrics(edge), EXPANDED);
+        }
+        assert_eq!(IslandState::Compact.metrics(Edge::Top), COMPACT);
+        assert_eq!(IslandState::Idle.metrics_with(Edge::Top, false), IDLE_CLOCK);
+    }
+
+    #[test]
     fn drops_on_the_nearest_edge() {
         assert_eq!(nearest_edge(960, 20, 1920), Edge::Top);
         assert_eq!(nearest_edge(30, 500, 1920), Edge::Left);
@@ -308,8 +366,9 @@ mod tests {
     fn idle_clock_style() {
         assert_eq!(
             IslandState::Idle.metrics_with(Edge::Left, false),
-            IDLE_CLOCK
+            SIDE_CLOCK
         );
+        assert_eq!(IslandState::Idle.metrics_with(Edge::Top, false), IDLE_CLOCK);
         assert_eq!(
             IslandState::Idle.metrics_with(Edge::Left, true),
             VERTICAL_LINE
