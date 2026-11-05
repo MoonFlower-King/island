@@ -1,9 +1,9 @@
-<title>灵动岛侧边停靠</title>
+<title>灵动岛预览</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
 <style>
-/* 布局：上方是一块模拟屏幕（岛在里面按真实尺寸比例显示），下方是控制条和尺寸表 */
+/* 布局：上方一块模拟屏幕（岛按真实尺寸比例显示、可以直接操作），下方控制条、演示按钮和尺寸表 */
 :root {
   --bg: #eef0f3;
   --panel: #ffffff;
@@ -34,14 +34,14 @@ body {
   padding-right: max(16px, env(safe-area-inset-right, 0px));
   padding-block: 20px 40px;
 }
-.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 18px; }
+.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 16px; }
 header h1 { font-size: 22px; margin: 0; font-weight: 700; text-wrap: balance; }
-header p { margin: 4px 0 0; color: var(--muted); max-width: 68ch; }
+header p { margin: 4px 0 0; color: var(--muted); max-width: 70ch; }
 
 /* 模拟屏幕：代表 1440 × 900 DIP 的桌面 */
 .screen {
   position: relative; width: 100%; aspect-ratio: 16 / 10; max-width: 100%;
-  border-radius: 14px; overflow: hidden; border: 1px solid var(--line);
+  border-radius: 14px; overflow: hidden; border: 1px solid var(--line); user-select: none;
   background:
     radial-gradient(120% 90% at 15% 20%, #4a6fa5 0%, transparent 60%),
     radial-gradient(90% 80% at 85% 80%, #c9846b 0%, transparent 55%),
@@ -54,66 +54,107 @@ header p { margin: 4px 0 0; color: var(--muted); max-width: 68ch; }
     linear-gradient(160deg, #eef2f8, #f5ece6);
 }
 .win {
-  position: absolute; left: 22%; top: 24%; width: 56%; height: 52%;
+  position: absolute; left: 24%; top: 26%; width: 52%; height: 50%;
   border-radius: 8px; background: rgba(255,255,255,.86); box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  color: #333; font-size: clamp(9px, 1.2vw, 13px); padding: 3% 4%; display: grid; align-content: start; gap: .6em;
 }
-.win::before { content: ""; display: block; height: 9%; background: rgba(0,0,0,.06); border-radius: 8px 8px 0 0; }
+.win::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 9%; background: rgba(0,0,0,.06); border-radius: 8px 8px 0 0; }
+.win p { margin: 0; user-select: text; }
+.win p:first-of-type { margin-top: 6%; }
 .taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 5.3%; background: rgba(20,22,28,.72); }
 .hint {
   position: absolute; right: 10px; bottom: calc(5.3% + 8px); font-size: 12px; color: #fff;
-  background: rgba(0,0,0,.45); padding: 2px 8px; border-radius: 6px; pointer-events: none;
+  background: rgba(0,0,0,.45); padding: 2px 8px; border-radius: 6px; pointer-events: none; max-width: 70%;
 }
 
 /* 岛：尺寸、位置由脚本按弹簧动画逐帧设置 */
-.island { position: absolute; overflow: hidden; cursor: default; will-change: width, height, left, top; }
+.island { position: absolute; overflow: hidden; cursor: default; touch-action: none; }
 .island .bg { position: absolute; inset: 0; border-radius: inherit; }
-.layer { position: absolute; inset: 0; display: flex; opacity: 0; transition: opacity 90ms ease-out; pointer-events: none; }
+.layer { position: absolute; inset: 0; opacity: 0; transition: opacity 90ms ease-out; pointer-events: none; }
 .layer.on { opacity: 1; transition: opacity 200ms ease-out 90ms; }
+.layer.on.interactive { pointer-events: auto; }
 .layer.on .inner { animation: zoom 320ms cubic-bezier(.2,.9,.3,1) 60ms both; }
 @keyframes zoom { from { transform: scale(.94); } to { transform: scale(1); } }
-.content { position: absolute; }
+.content { position: absolute; transform-origin: 0 0; }
 .inner { position: absolute; inset: 0; transform-origin: center; }
+.abs { position: absolute; }
 
-/* 岛里面的内容，单位是 DIP，外面整体按屏幕比例缩放 */
-.dip { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-.cover { border-radius: 6px; background: linear-gradient(135deg, #c83454, #f0a35e); flex: none; }
+/* 岛里面的元素（单位都是 DIP） */
+.t { color: var(--i-fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.s { color: var(--i-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.f { color: var(--i-faint); white-space: nowrap; }
+.vtext { writing-mode: vertical-rl; text-orientation: mixed; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cover { border-radius: 6px; flex: none; background: var(--cover); }
+.ico { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.ico.solid { fill: currentColor; stroke: none; }
 .eq { display: flex; gap: 2px; align-items: flex-end; height: 14px; }
-.eq i { display: block; width: 3px; border-radius: 2px; background: var(--isl-accent); animation: eq 0.9s ease-in-out infinite; }
+.eq i { display: block; width: 3px; border-radius: 2px; background: var(--i-accent); animation: eq 0.9s ease-in-out infinite; }
 .eq i:nth-child(2) { animation-delay: -.3s; } .eq i:nth-child(3) { animation-delay: -.6s; } .eq i:nth-child(4) { animation-delay: -.15s; }
 .eq.v { flex-direction: column; height: auto; width: 14px; align-items: flex-start; }
 .eq.v i { height: 3px; animation-name: eqv; }
+.eq.paused i { animation-play-state: paused; }
 @keyframes eq { 0%,100% { height: 30%; } 50% { height: 100%; } }
 @keyframes eqv { 0%,100% { width: 30%; } 50% { width: 100%; } }
-.isl-text { color: var(--isl-fg); font-family: var(--font-ui); white-space: nowrap; }
-.isl-sub { color: var(--isl-sub); font-family: var(--font-ui); white-space: nowrap; }
-.vtext { writing-mode: vertical-rl; text-orientation: mixed; overflow: hidden; text-overflow: ellipsis; }
-.glyph { color: var(--isl-fg); font-family: var(--font-ui); }
-.bar { border-radius: 99px; background: var(--isl-track); position: relative; overflow: hidden; }
-.bar b { position: absolute; border-radius: 99px; background: var(--isl-fg); }
+.track { border-radius: 99px; background: var(--i-track); position: absolute; overflow: hidden; }
+.track b { position: absolute; border-radius: 99px; background: var(--i-fg); }
+.track b.acc { background: var(--i-accent); }
 
-/* 控制区 */
-.controls { display: grid; gap: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
-.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
-.row > .label { width: 4.5em; color: var(--muted); font-size: 13px; flex: none; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; }
-.chip {
-  border: 0; border-radius: 99px; padding: 5px 12px; font: inherit; font-size: 13px;
-  background: var(--chip); color: var(--fg); cursor: pointer;
+/* 展开面板 */
+.p-btn { position: absolute; display: grid; place-items: center; border: 0; padding: 0; background: transparent; color: var(--i-fg); border-radius: 99px; cursor: pointer; font: inherit; }
+.p-btn:hover { background: var(--i-hover); }
+.p-btn.sel { background: var(--i-track); }
+.p-btn.dim { color: var(--i-sub); }
+.p-btn:focus-visible { outline: 2px solid var(--i-accent); outline-offset: 1px; }
+.field {
+  position: absolute; border: 0; outline: 0; border-radius: 10px; background: var(--i-field); color: var(--i-fg);
+  font: inherit; font-size: 13px; padding: 0 10px; resize: none; user-select: text;
 }
-.chip[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-fg); }
-.chip:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.slider { display: flex; align-items: center; gap: 10px; flex: 1 1 260px; min-width: 0; }
-.slider input { flex: 1; min-width: 0; accent-color: var(--accent); }
-.slider output { font-family: var(--font-mono); font-size: 13px; width: 5.5em; text-align: right; font-variant-numeric: tabular-nums; }
+.field::placeholder { color: var(--i-faint); }
+.field:focus { box-shadow: 0 0 0 1.5px var(--i-accent); }
+textarea.field { padding: 8px 10px; line-height: 1.45; }
+.seg { position: absolute; display: flex; gap: 4px; }
+.seg button { border: 0; border-radius: 99px; height: 22px; padding: 0 10px; font: inherit; font-size: 11.5px; background: var(--i-field); color: var(--i-sub); cursor: pointer; }
+.seg button.sel { background: var(--i-fg); color: var(--i-bg); }
+.seg button:hover:not(.sel) { background: var(--i-hover); }
+.row { position: absolute; left: 8px; right: 8px; height: 30px; border-radius: 9px; display: flex; align-items: center; gap: 8px; padding: 0 8px; cursor: pointer; }
+.row:hover { background: var(--i-hover); }
+.row .x { visibility: hidden; margin-left: auto; color: var(--i-sub); border: 0; background: transparent; cursor: pointer; padding: 2px; display: grid; }
+.row:hover .x { visibility: visible; }
+.check { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--i-sub); flex: none; display: grid; place-items: center; }
+.check.on { background: var(--i-accent); border-color: var(--i-accent); color: var(--i-bg); }
+.done { text-decoration: line-through; color: var(--i-faint) !important; }
+.drop { position: absolute; inset: 52px 16px 14px; border: 1.5px dashed var(--i-sub); border-radius: 14px; display: grid; place-items: center; }
+.toast { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); background: var(--i-fg); color: var(--i-bg); font-size: 11.5px; padding: 3px 10px; border-radius: 99px; white-space: nowrap; }
+.sw { position: absolute; width: 22px; height: 22px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; box-shadow: 0 0 0 2px var(--i-track); }
+.sw.sel { box-shadow: 0 0 0 2px var(--i-fg); }
+input[type=range].vol { position: absolute; margin: 0; height: 18px; appearance: none; background: transparent; cursor: pointer; }
+input[type=range].vol::-webkit-slider-runnable-track { height: 4px; border-radius: 99px; background: linear-gradient(var(--i-fg), var(--i-fg)) 0/var(--v) 100% no-repeat, var(--i-track); }
+input[type=range].vol::-webkit-slider-thumb { appearance: none; width: 12px; height: 12px; border-radius: 50%; background: var(--i-fg); margin-top: -4px; }
+input[type=range].vol::-moz-range-track { height: 4px; border-radius: 99px; background: var(--i-track); }
+input[type=range].vol::-moz-range-progress { height: 4px; border-radius: 99px; background: var(--i-fg); }
+input[type=range].vol::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: var(--i-fg); }
 
-.spec { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 8px; }
+/* 页面控制区 */
+.controls, .spec { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; display: grid; gap: 12px; }
+.crow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; }
+.crow > .label { width: 4.5em; color: var(--muted); font-size: 13px; flex: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 0; border-radius: 99px; padding: 5px 12px; font: inherit; font-size: 13px; background: var(--chip); color: var(--fg); cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--chip-on); color: var(--chip-on-fg); }
+.chip.action { background: transparent; box-shadow: inset 0 0 0 1px var(--line); }
+.chip.action:hover { box-shadow: inset 0 0 0 1px var(--accent); }
+.chip:focus-visible, .controls input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.slider { display: flex; align-items: center; gap: 10px; flex: 1 1 240px; min-width: 0; }
+.slider input { flex: 1; min-width: 0; accent-color: var(--accent); }
+.slider output { font-family: var(--font-mono); font-size: 13px; width: 4.5em; text-align: right; font-variant-numeric: tabular-nums; }
+.note { color: var(--muted); font-size: 12.5px; }
 .spec h2 { font-size: 15px; margin: 0; }
-.spec p { margin: 0; color: var(--muted); font-size: 13px; max-width: 70ch; }
+.spec p { margin: 0; color: var(--muted); font-size: 13px; max-width: 72ch; }
 .table-scroll { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; min-width: 520px; font-size: 13px; }
 th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); }
 th { color: var(--muted); font-weight: 500; }
-td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
 tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 @media (prefers-reduced-motion: reduce) {
   .layer, .layer.on { transition: none; }
@@ -123,46 +164,53 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
 
 <div class="wrap">
   <header>
-    <h1>灵动岛侧边停靠预览</h1>
-    <p>停在左侧或右侧时，收起状态都变成贴着屏幕边、竖着的胶囊；鼠标移到岛上会从侧边展开。动画和原生版用的是同一组弹簧参数。</p>
+    <h1>灵动岛预览</h1>
+    <p>模拟桌面上的岛可以直接操作：鼠标移上去展开，展开后每个标签都能用；在岛上滚动滚轮调音量；把电脑里的文件拖到岛上会放进中转站；在这页上复制的文字会出现在剪贴板标签里。停在左侧或右侧时，收起的胶囊都是竖着的。</p>
   </header>
 
   <div class="screen" id="screen">
-    <div class="win"></div>
+    <div class="win">
+      <p>这是一个普通窗口。选中这段文字按 Ctrl+C，然后打开岛上的剪贴板标签看看。</p>
+      <p>晴天 —— 故事的小黄花，从出生那年就飘着。</p>
+    </div>
     <div class="taskbar"></div>
     <div class="island" id="island"><div class="bg" id="islandBg"></div></div>
-    <div class="hint" id="hint">把鼠标移到岛上试试展开</div>
+    <div class="hint" id="hint"></div>
   </div>
 
   <section class="controls" aria-label="预览设置">
-    <div class="row"><span class="label">停靠</span>
+    <div class="crow"><span class="label">停靠</span>
       <div class="chips" data-group="dock">
         <button class="chip" data-v="left">左侧</button>
         <button class="chip" data-v="top">顶部</button>
         <button class="chip" data-v="right">右侧</button>
       </div>
     </div>
-    <div class="row"><span class="label">状态</span>
-      <div class="chips" data-group="state">
+    <div class="crow"><span class="label">直接看</span>
+      <div class="chips" id="stateChips">
         <button class="chip" data-v="line">待机细线</button>
         <button class="chip" data-v="clock">待机时间</button>
-        <button class="chip" data-v="music">音乐</button>
+        <button class="chip" data-v="music">音乐胶囊</button>
         <button class="chip" data-v="level">音量提示</button>
         <button class="chip" data-v="note">通知</button>
-        <button class="chip" data-v="expanded">展开</button>
+        <button class="chip" data-v="expanded">展开（置顶）</button>
       </div>
     </div>
-    <div class="row"><span class="label">主题</span>
-      <div class="chips" data-group="theme">
-        <button class="chip" data-v="dark">黑色岛</button>
-        <button class="chip" data-v="light">白色岛</button>
+    <div class="crow"><span class="label">演示</span>
+      <div class="chips">
+        <button class="chip action" id="demoNote">弹出一条通知</button>
+        <button class="chip action" id="demoDevice">切换到耳机</button>
+        <button class="chip action" id="demoPlay">播放 / 暂停</button>
       </div>
+    </div>
+    <div class="crow"><span class="label">壁纸</span>
       <div class="chips" data-group="wall">
-        <button class="chip" data-v="dark">深色壁纸</button>
-        <button class="chip" data-v="light">浅色壁纸</button>
+        <button class="chip" data-v="dark">深色</button>
+        <button class="chip" data-v="light">浅色</button>
       </div>
+      <span class="note">岛的颜色在展开面板的“外观”标签里改，和真的一样。</span>
     </div>
-    <div class="row"><span class="label">竖胶囊</span>
+    <div class="crow"><span class="label">竖胶囊</span>
       <label class="slider"><span>粗细</span><input id="thick" type="range" min="0.7" max="1.4" step="0.05" value="1"><output id="thickOut"></output></label>
       <label class="slider"><span>长度</span><input id="length" type="range" min="0.6" max="1.5" step="0.05" value="1"><output id="lengthOut"></output></label>
     </div>
@@ -170,7 +218,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
 
   <section class="spec">
     <h2>尺寸（DIP，100% 缩放下等于像素）</h2>
-    <p>侧边一栏是竖胶囊的宽 × 高，会跟着上面的滑块变；顶部一栏是现在原生版的尺寸，作为对照。定下来以后告诉我滑块的数值（或者直接说某一行要多大），我按这个改原生版。</p>
+    <p>侧边一栏是竖胶囊的宽 × 高，跟着上面的滑块变；顶部一栏是现在原生版的尺寸，作为对照。定下来以后告诉我滑块的数值，或者直接说某一行要多大。</p>
     <div class="table-scroll"><table>
       <thead><tr><th>状态</th><th>顶部（宽 × 高）</th><th>侧边（宽 × 高）</th><th>侧边里放什么</th></tr></thead>
       <tbody id="specBody"></tbody>
@@ -181,10 +229,8 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
 <script>
 (function () {
   "use strict";
-  // 屏幕代表 1440 × 900 DIP
+  // ───────── 尺寸（和 native/src/metrics.rs 一致）─────────
   const SCREEN_W = 1440, SCREEN_H = 900, TASKBAR = 48, MARGIN = 6, LINE_VIS = 5;
-
-  // 顶部尺寸：和 native/src/metrics.rs 一致
   const TOP = {
     line:     { w: 120, h: 10, r: 5, off: -LINE_VIS },
     clock:    { w: 140, h: 34, r: 17, off: MARGIN },
@@ -193,234 +239,671 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     note:     { w: 340, h: 64, r: 32, off: MARGIN },
     expanded: { w: 440, h: 260, r: 32, off: MARGIN },
   };
-  // 侧边竖胶囊的基础尺寸（粗细 × 长度），滑块在此基础上缩放
   const SIDE = {
     line:     { t: 10, l: 120, what: "竖着的细线，一半藏在屏幕外" },
     clock:    { t: 40, l: 92,  what: "时和分上下叠着" },
     music:    { t: 40, l: 188, what: "封面、竖排歌名、律动条" },
-    level:    { t: 42, l: 200, what: "图标、竖着的音量条、百分比" },
+    level:    { t: 42, l: 200, what: "图标、竖着的音量条、数字" },
     note:     { t: 64, l: 236, what: "图标、竖排的标题和正文" },
-    expanded: { t: 440, l: 260, what: "和顶部同样的面板，从侧边滑出（不缩放）" },
+    expanded: { t: 440, l: 260, what: "和顶部同样的面板，从侧边滑出" },
   };
-  const NAMES = { line: "待机细线", clock: "待机时间", music: "音乐", level: "音量提示", note: "通知", expanded: "展开" };
+  const NAMES = { line: "待机细线", clock: "待机时间", music: "音乐胶囊", level: "音量提示", note: "通知", expanded: "展开" };
 
-  const PALETTE = {
-    dark:  { bg: "#000000", fg: "#ffffff", sub: "rgba(255,255,255,.6)", track: "rgba(255,255,255,.22)", accent: "#f0a35e", edge: "rgba(255,255,255,.11)" },
-    light: { bg: "#f7f7f8", fg: "#111111", sub: "rgba(0,0,0,.55)", track: "rgba(0,0,0,.14)", accent: "#c83454", edge: "rgba(0,0,0,.14)" },
+  // ───────── 图标（线条 SVG，代替原生版的系统图标字体）─────────
+  const P = {
+    music: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+    todo: '<path d="M9 6h11M9 12h11M9 18h11"/><path d="M3.5 6l1.5 1.5L7.5 5M3.5 12l1.5 1.5 2.5-2.5M3.5 18l1.5 1.5 2.5-2.5"/>',
+    clip: '<rect x="6" y="4" width="12" height="17" rx="2"/><path d="M9 4V3h6v1"/>',
+    shelf: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    tr: '<path d="M4 5h9M8.5 3v2c0 4-2 7-5 9M6 9c1 2.5 3 4 6 5"/><path d="M13 21l4-9 4 9M14.5 18h5"/>',
+    mon: '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
+    pal: '<circle cx="12" cy="12" r="9"/><circle cx="8" cy="10" r="1.2"/><circle cx="12" cy="7.5" r="1.2"/><circle cx="16" cy="10" r="1.2"/><path d="M12 21a3 3 0 0 1 0-6h2"/>',
+    pin: '<path d="M9 4h6l-1 6 3 3H7l3-3zM12 13v7"/>',
+    play: '<path class="solid" d="M8 5v14l11-7z"/>',
+    pause: '<path d="M8 5v14M16 5v14" stroke-width="3"/>',
+    prev: '<path d="M18 6v12L9 12zM6 6v12" />',
+    next: '<path d="M6 6v12l9-6zM18 6v12" />',
+    vol: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16 9a4 4 0 0 1 0 6M18.5 6.5a7.5 7.5 0 0 1 0 11"/>',
+    mute: '<path d="M4 9v6h4l5 4V5L8 9z"/><path d="M17 9l5 6M22 9l-5 6"/>',
+    x: '<path d="M6 6l12 12M18 6L6 18"/>',
+    trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+    head: '<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
+    file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    img: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 17l-5-5-9 8"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
+    check: '<path d="M5 12.5l4.5 4.5L19 7.5" stroke-width="2.4"/>',
   };
+  const ico = (n, size, extra) => `<svg class="ico${n === "play" ? " solid" : ""}" viewBox="0 0 24 24" style="font-size:${size}px;${extra || ""}" aria-hidden="true">${P[n]}</svg>`;
 
-  const ui = { dock: "left", state: "music", theme: "dark", wall: "dark", thick: 1, length: 1, hover: false };
-  try { const s = JSON.parse(localStorage.getItem("island-side-preview") || "{}"); Object.assign(ui, s, { hover: false }); } catch (e) {}
-  function save() { try { localStorage.setItem("island-side-preview", JSON.stringify({ dock: ui.dock, state: ui.state, theme: ui.theme, wall: ui.wall, thick: ui.thick, length: ui.length })); } catch (e) {} }
+  // ───────── 数据（预览用的示例内容）─────────
+  const SONGS = [
+    { title: "晴天", artist: "周杰伦", album: "叶惠美", len: 269, a: "#c83454", b: "#f0a35e", accent: "#f0a35e" },
+    { title: "夜曲", artist: "周杰伦", album: "十一月的萧邦", len: 226, a: "#1c3d6e", b: "#6fa8dc", accent: "#6fa8dc" },
+    { title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", len: 200, a: "#5b1a1a", b: "#e8453c", accent: "#ff6b5c" },
+  ];
+  const PRESET_BG = ["#000000", "#1C1C1E", "#0B1F3A", "#2A1B47", "#F7F7F8", "#FFF4DE"];
+  const PRESET_FG = ["#FFFFFF", "#E5E5EA", "#FFD60A", "#1C1C1E", "#3A2E1F", "#0B1F3A"];
+  const PRESET_AC = ["#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#64D2FF"];
 
+  const S = {
+    dock: "left", wall: "dark", thick: 1, length: 1,
+    theme: "dark", custom: { bg: "#1C1C1E", fg: "#FFFFFF", ac: "#0A84FF" },
+    idleLine: false, mediaLine: false,
+    playing: true, song: 0, pos: 48, lingerUntil: 0, volume: 0.42, muted: false,
+    hover: false, pinned: false, editing: false,
+    level: 0, levelSticky: false, note: null, noteSticky: false,
+    tab: "music",
+    todos: [
+      { text: "给妈妈打电话", done: false },
+      { text: "下午三点开周会", done: false },
+      { text: "交水电费", done: true },
+    ],
+    todoDraft: "",
+    clips: [
+      { text: "https://github.com/MoonFlower-King/island", at: "09:12" },
+      { text: "会议室 B 304，下午 3 点", at: "08:47" },
+      { text: "npm install --save-dev typescript", at: "昨天" },
+    ],
+    shelf: [
+      { name: "季度报告.pdf", detail: "2.4 MB", kind: "file" },
+      { name: "截图 2026-11-05.png", detail: "812 KB", kind: "img" },
+    ],
+    dragOver: false,
+    tr: { input: "今天天气很好，适合出去走走。", output: "", status: "idle", settings: false, provider: "anthropic", url: "", model: "", key: "" },
+    mon: { cpu: 18, mem: 0.52, up: 12, down: 340 },
+    toast: "",
+  };
+  // 记住页面上的选择（只是方便，失败也没关系）
+  const KEEP = ["dock", "wall", "thick", "length", "theme", "custom", "idleLine", "mediaLine", "tab"];
+  try { const saved = JSON.parse(localStorage.getItem("island-preview-v2") || "{}"); for (const k of KEEP) if (k in saved) S[k] = saved[k]; } catch (e) {}
+  function save() { try { const o = {}; for (const k of KEEP) o[k] = S[k]; localStorage.setItem("island-preview-v2", JSON.stringify(o)); } catch (e) {} }
+
+  // ───────── 颜色 ─────────
+  function rgba(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  }
+  function palette() {
+    let mode = S.theme;
+    if (mode === "system") mode = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    if (mode === "schedule") { const h = new Date().getHours(); mode = h >= 7 && h < 19 ? "light" : "dark"; }
+    const song = SONGS[S.song];
+    if (mode === "custom") return { bg: S.custom.bg, fg: S.custom.fg, ac: S.custom.ac };
+    if (mode === "light") return { bg: "#F7F7F8", fg: "#111111", ac: S.playing ? song.a : "#0A84FF" };
+    return { bg: "#000000", fg: "#FFFFFF", ac: S.playing ? song.accent : "#0A84FF" };
+  }
+
+  // ───────── 状态（和原生版 state.rs 的优先级一样）─────────
+  function mediaActive() { return S.playing || Date.now() < S.lingerUntil; }
+  function resolve() {
+    if (S.hover || S.pinned || S.dragOver) return "expanded";
+    if (S.level) return "level";
+    if (S.note) return "note";
+    if (mediaActive() && !S.mediaLine) return "music";
+    return S.idleLine ? "line" : "clock";
+  }
+  function side() { return S.dock !== "top"; }
+  function shapeOf(st) {
+    if (!side() || st === "expanded") return Object.assign({}, TOP[st]);
+    const s = SIDE[st];
+    const t = st === "line" ? s.t : Math.round(s.t * S.thick);
+    return { w: t, h: Math.round(s.l * S.length), r: t / 2, off: st === "line" ? -LINE_VIS : MARGIN };
+  }
+
+  // ───────── 弹簧（和 WPF 版 CapsuleAnimator 同一个公式）─────────
+  function Spring(v) { this.v = v; this.vel = 0; this.t = v; }
+  Spring.prototype.step = function (dt, R, Z) {
+    const k = Math.pow(2 * Math.PI / R, 2), c = 4 * Math.PI * Z / R;
+    const n = Math.max(1, Math.ceil(dt * 480)), h = dt / n;
+    for (let i = 0; i < n; i++) { const a = -k * (this.v - this.t) - c * this.vel; this.vel += a * h; this.v += this.vel * h; }
+  };
+  const sp = { w: new Spring(0), h: new Spring(0), r: new Spring(0), off: new Spring(0) };
+  let growing = true, current = null;
+
+  // ───────── DOM ─────────
   const screen = document.getElementById("screen");
   const island = document.getElementById("island");
   const bg = document.getElementById("islandBg");
   const hint = document.getElementById("hint");
-
-  // 当前状态的目标形状（DIP）。w/h 是屏幕上的宽高，off 是离贴着的那条边的距离
-  function target() {
-    const st = ui.hover ? "expanded" : ui.state;
-    if (ui.dock === "top") return Object.assign({ st }, TOP[st]);
-    if (st === "expanded") return { st, w: 440, h: 260, r: 32, off: MARGIN };
-    const s = SIDE[st];
-    const t = st === "line" ? s.t : Math.round(s.t * ui.thick);
-    const l = Math.round(s.l * ui.length);
-    const off = st === "line" ? -LINE_VIS : MARGIN;
-    return { st, w: t, h: l, r: t / 2, off };
-  }
-
-  // 一维阻尼弹簧（和 WPF 版 CapsuleAnimator 相同的公式）
-  function Spring(v) { this.v = v; this.vel = 0; this.t = v; }
-  Spring.prototype.step = function (dt, R, Z) {
-    const k = Math.pow(2 * Math.PI / R, 2), c = 4 * Math.PI * Z / R;
-    const n = Math.max(1, Math.ceil(dt / (1 / 480))), h = dt / n;
-    for (let i = 0; i < n; i++) { const a = -k * (this.v - this.t) - c * this.vel; this.vel += a * h; this.v += this.vel * h; }
-  };
-  const t0 = target();
-  const sp = { w: new Spring(t0.w), h: new Spring(t0.h), r: new Spring(t0.r), off: new Spring(t0.off) };
-  let growing = true;
-
-  function setTargets() {
-    const t = target();
-    const area = sp.w.t * sp.h.t;
-    growing = t.w * t.h > area;
-    sp.w.t = t.w; sp.h.t = t.h; sp.r.t = t.r; sp.off.t = t.off;
-    showLayer(t.st);
-    renderSpec(t.st);
-  }
-
-  // 每个状态一层内容，切换时旧的淡出、新的稍后淡入
   const layers = {};
-  function vertical() { return ui.dock !== "top"; }
-  function now() { const d = new Date(); return [String(d.getHours()).padStart(2, "0"), String(d.getMinutes()).padStart(2, "0")]; }
+  for (const k of Object.keys(NAMES)) {
+    const el = document.createElement("div");
+    el.className = "layer" + (k === "expanded" ? " interactive" : "");
+    el.innerHTML = '<div class="content"><div class="inner"></div></div>';
+    island.appendChild(el);
+    layers[k] = el;
+  }
 
-  function build(st) {
-    const vert = vertical() && st !== "expanded";
-    const shape = ui.dock === "top" || st === "expanded" ? TOP[st] : null;
-    const s = SIDE[st];
-    const W = vert ? (st === "line" ? s.t : Math.round(s.t * ui.thick)) : shape.w;
-    const H = vert ? Math.round(s.l * ui.length) : shape.h;
-    const [hh, mm] = now();
-    let html = "";
-    const box = (style, inner) => `<div style="position:absolute;${style}">${inner}</div>`;
-    if (st === "line") {
-      html = "";
-    } else if (st === "clock") {
-      html = vert
-        ? box(`inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px`,
-            `<span class="isl-text" style="font-size:16px;font-weight:600;line-height:1.05">${hh}</span><span class="isl-sub" style="font-size:16px;font-weight:600;line-height:1.05">${mm}</span>`)
-        : box(`inset:0;display:flex;align-items:center;justify-content:center`, `<span class="isl-text" style="font-size:15px;font-weight:600">${hh}:${mm}</span>`);
-    } else if (st === "music") {
-      const eq = (v) => `<div class="eq${v ? " v" : ""}"><i></i><i></i><i></i><i></i></div>`;
-      html = vert
-        ? box(`inset:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:${Math.max(6, (W - 28) / 2)}px 0`,
-            `<div class="cover" style="width:28px;height:28px"></div>
-             <div class="isl-text vtext" style="font-size:12.5px;flex:1;margin:8px 0;max-height:100%">晴天 · 周杰伦</div>
-             ${eq(true)}`)
-        : box(`inset:0;display:flex;align-items:center;gap:10px;padding:0 14px 0 6px`,
-            `<div class="cover" style="width:28px;height:28px;border-radius:50%"></div>
-             <span class="isl-text" style="font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis">晴天 · 周杰伦</span>${eq(false)}`);
-    } else if (st === "level") {
-      const pct = 42;
-      html = vert
-        ? box(`inset:0;display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:12px 0`,
-            `<span class="glyph" style="font-size:15px">🔊</span>
-             <div class="bar" style="width:6px;flex:1;margin:10px 0"><b style="left:0;right:0;bottom:0;height:${pct}%"></b></div>
-             <span class="isl-text" style="font-size:12px;font-variant-numeric:tabular-nums">${pct}</span>`)
-        : box(`inset:0;display:flex;align-items:center;gap:12px;padding:0 16px`,
-            `<span class="glyph" style="font-size:15px">🔊</span>
-             <div class="bar" style="height:6px;flex:1"><b style="left:0;top:0;bottom:0;width:${pct}%"></b></div>
-             <span class="isl-text" style="font-size:12px;width:30px;text-align:right">${pct}%</span>`);
-    } else if (st === "note") {
-      html = vert
-        ? box(`inset:0;display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:10px`,
-            `<span style="width:32px;height:32px;border-radius:50%;background:var(--isl-track);display:grid;place-items:center" class="glyph">✉</span>
+  function fmt(sec) { sec = Math.max(0, Math.round(sec)); return Math.floor(sec / 60) + ":" + String(sec % 60).padStart(2, "0"); }
+  function hm() { const d = new Date(); return [String(d.getHours()).padStart(2, "0"), String(d.getMinutes()).padStart(2, "0")]; }
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const WEEK = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+
+  // ───────── 收起状态的内容 ─────────
+  function collapsedHTML(st, W, H) {
+    const vert = side();
+    const song = SONGS[S.song];
+    const [hh, mm] = hm();
+    if (st === "line") return "";
+    if (st === "clock") return vert
+      ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-weight:600;font-size:16px;line-height:1.05"><span class="t">${hh}</span><span class="s">${mm}</span></div>`
+      : `<div class="abs t" style="inset:0;display:grid;place-items:center;font-size:15px;font-weight:600">${hh}:${mm}</div>`;
+    if (st === "music") {
+      const eq = `<div class="eq${vert ? " v" : ""}${S.playing ? "" : " paused"}"><i></i><i></i><i></i><i></i></div>`;
+      return vert
+        ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;padding:${(W - 28) / 2}px 0 12px">
+             <div class="cover" style="width:28px;height:28px"></div>
+             <div class="t vtext" style="font-size:12.5px;flex:1;min-height:0;margin:8px 0">${esc(song.title)} · ${esc(song.artist)}</div>${eq}</div>`
+        : `<div class="abs" style="inset:0;display:flex;align-items:center;gap:10px;padding:0 14px 0 5px">
+             <div class="cover" style="width:28px;height:28px;border-radius:50%"></div>
+             <span class="t" style="font-size:13px;flex:1">${esc(song.title)} · ${esc(song.artist)}</span>${eq}</div>`;
+    }
+    if (st === "level") {
+      const v = S.muted ? 0 : S.volume, pct = Math.round(v * 100), icon = S.muted || pct === 0 ? "mute" : "vol";
+      return vert
+        ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;padding:12px 0">
+             <span class="t">${ico(icon, 16)}</span>
+             <div style="position:relative;flex:1;width:6px;margin:10px 0"><div class="track" style="inset:0"><b style="left:0;right:0;bottom:0;height:${pct}%"></b></div></div>
+             <span class="t" style="font-size:12px;font-variant-numeric:tabular-nums">${pct}</span></div>`
+        : `<div class="abs" style="inset:0;display:flex;align-items:center;gap:12px;padding:0 16px">
+             <span class="t">${ico(icon, 16)}</span>
+             <div style="position:relative;flex:1;height:6px"><div class="track" style="inset:0"><b style="left:0;top:0;bottom:0;width:${pct}%"></b></div></div>
+             <span class="t" style="font-size:12px;width:32px;text-align:right;font-variant-numeric:tabular-nums">${pct}%</span></div>`;
+    }
+    if (st === "note") {
+      const n = S.note || { icon: "mail", title: "新消息", body: "这是一条来自灵动岛的演示通知" };
+      return vert
+        ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:10px">
+             <span class="t" style="width:32px;height:32px;border-radius:50%;background:var(--i-track);display:grid;place-items:center;flex:none">${ico(n.icon, 16)}</span>
              <div style="flex:1;display:flex;flex-direction:row-reverse;gap:6px;min-height:0">
-               <span class="isl-text vtext" style="font-size:13px;font-weight:600;max-height:100%">新消息</span>
-               <span class="isl-sub vtext" style="font-size:12px;max-height:100%">这是一条来自灵动岛的演示通知</span>
-             </div>`)
-        : box(`inset:0;display:flex;align-items:center;gap:12px;padding:0 18px 0 14px`,
-            `<span style="width:36px;height:36px;border-radius:50%;background:var(--isl-track);display:grid;place-items:center;flex:none" class="glyph">✉</span>
-             <div style="min-width:0"><div class="isl-text" style="font-size:13.5px;font-weight:600">新消息</div>
-             <div class="isl-sub" style="font-size:12.5px;overflow:hidden;text-overflow:ellipsis">这是一条来自灵动岛的演示通知</div></div>`);
-    } else if (st === "expanded") {
-      const tabs = ["音乐", "待办", "剪贴板", "中转站", "翻译", "监控", "外观"].map((n, i) =>
-        `<span class="${i ? "isl-sub" : "isl-text"}" style="font-size:12px;padding:3px 9px;border-radius:99px;${i ? "" : "background:var(--isl-track)"}">${n}</span>`).join("");
-      html = box(`inset:0;padding:12px 18px;display:flex;flex-direction:column;gap:14px`,
-        `<div style="display:flex;gap:2px;overflow:hidden">${tabs}</div>
-         <div style="display:flex;gap:16px;align-items:center">
-           <div class="cover" style="width:96px;height:96px;border-radius:14px"></div>
-           <div style="min-width:0;display:grid;gap:4px">
-             <span class="isl-text" style="font-size:17px;font-weight:700">晴天</span>
-             <span class="isl-sub" style="font-size:13px">周杰伦 · 叶惠美</span>
-             <span class="isl-sub" style="font-size:12px">网易云音乐</span>
-           </div>
-         </div>
-         <div class="bar" style="height:4px"><b style="left:0;top:0;bottom:0;width:38%"></b></div>
-         <div style="display:flex;justify-content:center;gap:34px" class="glyph"><span style="font-size:18px">⏮</span><span style="font-size:22px">⏸</span><span style="font-size:18px">⏭</span></div>`);
+               <span class="t vtext" style="font-size:13px;font-weight:600;max-height:100%">${esc(n.title)}</span>
+               <span class="s vtext" style="font-size:12px;max-height:100%">${esc(n.body)}</span></div></div>`
+        : `<div class="abs" style="inset:0;display:flex;align-items:center;gap:12px;padding:0 20px 0 14px">
+             <span class="t" style="width:36px;height:36px;border-radius:50%;background:var(--i-track);display:grid;place-items:center;flex:none">${ico(n.icon, 18)}</span>
+             <div style="min-width:0;flex:1"><div class="t" style="font-size:13.5px;font-weight:600">${esc(n.title)}</div>
+             <div class="s" style="font-size:12.5px">${esc(n.body)}</div></div></div>`;
     }
-    return { html, W, H };
+    return "";
   }
 
-  function showLayer(st) {
-    for (const k of Object.keys(NAMES)) {
-      let el = layers[k];
-      if (!el) { el = layers[k] = document.createElement("div"); el.className = "layer"; island.appendChild(el); }
-      if (k === st) {
-        const b = build(k);
-        el.innerHTML = `<div class="content dip" data-w="${b.W}" data-h="${b.H}" style="width:${b.W}px;height:${b.H}px"><div class="inner">${b.html}</div></div>`;
-        el.classList.remove("on"); void el.offsetWidth; el.classList.add("on");
-      } else {
-        el.classList.remove("on");
-      }
+  // ───────── 展开面板：440 × 260，坐标和 views.rs 一致 ─────────
+  const TABS = [["music", "music", "音乐"], ["todo", "todo", "待办"], ["clipboard", "clip", "剪贴板"], ["shelf", "shelf", "中转站"], ["translate", "tr", "翻译"], ["monitor", "mon", "系统监控"], ["appearance", "pal", "外观"]];
+  function header() {
+    const d = new Date(), [hh, mm] = hm();
+    const tabs = TABS.map(([id, ic, name], i) =>
+      `<button class="p-btn ${S.tab === id ? "sel" : "dim"}" data-act="tab" data-v="${id}" title="${name}" aria-label="${name}" style="left:${16 + i * 40}px;top:12px;width:36px;height:28px">${ico(ic, 15)}</button>`).join("");
+    return tabs +
+      `<button class="p-btn ${S.pinned ? "" : "dim"}" data-act="pin" title="${S.pinned ? "取消置顶" : "置顶（鼠标移开也不收起）"}" aria-label="置顶" style="left:304px;top:13px;width:26px;height:26px;${S.pinned ? "color:var(--i-accent)" : ""}">${ico("pin", 13)}</button>
+       <span class="abs f" style="left:334px;top:12px;width:36px;height:28px;line-height:28px;text-align:right;font-size:11px">${WEEK[d.getDay()]}</span>
+       <span class="abs t" style="left:372px;top:12px;width:52px;height:28px;line-height:28px;text-align:right;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums">${hh}:${mm}</span>`;
+  }
+  function seg(x, y, items, value, act) {
+    return `<div class="seg" style="left:${x}px;top:${y}px">${items.map(([v, l]) => `<button class="${v === value ? "sel" : ""}" data-act="${act}" data-v="${v}">${l}</button>`).join("")}</div>`;
+  }
+  function label(x, y, text) { return `<span class="abs s" style="left:${x}px;top:${y}px;height:22px;line-height:22px;font-size:11.5px">${text}</span>`; }
+
+  function tabMusic() {
+    if (!mediaActive() && !S.playing && Date.now() >= S.lingerUntil && S.pos === 0) {
+      return `<div class="abs s" style="left:0;right:0;top:120px;text-align:center;font-size:13px">没有正在播放的音乐</div>`;
     }
+    const s = SONGS[S.song], v = S.muted ? 0 : S.volume;
+    return `<div class="cover abs" style="left:16px;top:56px;width:112px;height:112px;border-radius:14px"></div>
+      <span class="abs t" style="left:144px;top:58px;width:280px;height:26px;font-size:17px;font-weight:700">${esc(s.title)}</span>
+      <span class="abs s" style="left:144px;top:84px;width:280px;height:20px;font-size:13px">${esc(s.artist)} · ${esc(s.album)}</span>
+      <span class="abs f" style="left:144px;top:104px;width:280px;height:16px;font-size:11.5px">网易云音乐</span>
+      <button class="p-btn" data-act="prev" aria-label="上一首" style="left:144px;top:128px;width:40px;height:40px">${ico("prev", 18)}</button>
+      <button class="p-btn" data-act="play" aria-label="${S.playing ? "暂停" : "播放"}" style="left:192px;top:124px;width:48px;height:48px">${ico(S.playing ? "pause" : "play", 22)}</button>
+      <button class="p-btn" data-act="next" aria-label="下一首" style="left:248px;top:128px;width:40px;height:40px">${ico("next", 18)}</button>
+      <div class="track" style="left:16px;top:186px;width:408px;height:4px"><b id="progBar" style="left:0;top:0;bottom:0;width:${(S.pos / s.len) * 100}%"></b></div>
+      <span class="abs f" id="progPos" style="left:16px;top:192px;width:120px;font-size:11px;font-variant-numeric:tabular-nums">${fmt(S.pos)}</span>
+      <span class="abs f" style="left:344px;top:192px;width:80px;text-align:right;font-size:11px;font-variant-numeric:tabular-nums">${fmt(s.len)}</span>
+      <button class="p-btn dim" data-act="mute" aria-label="静音" style="left:14px;top:220px;width:24px;height:22px">${ico(S.muted || v === 0 ? "mute" : "vol", 14)}</button>
+      <input class="vol" id="volRange" type="range" min="0" max="100" value="${Math.round(v * 100)}" aria-label="音量" style="left:44px;top:222px;width:330px;--v:${v * 100}%">
+      <span class="abs s" id="volPct" style="left:380px;top:222px;width:44px;height:18px;line-height:18px;text-align:right;font-size:11.5px;font-variant-numeric:tabular-nums">${Math.round(v * 100)}%</span>`;
+  }
+  function tabTodo() {
+    const pending = S.todos.filter((t) => !t.done).length;
+    const rows = S.todos.slice(0, 5).map((t, i) =>
+      `<div class="row" data-act="todo-toggle" data-i="${i}" style="top:${88 + i * 31}px">
+         <span class="check${t.done ? " on" : ""}">${t.done ? ico("check", 10) : ""}</span>
+         <span class="t${t.done ? " done" : ""}" style="font-size:13px;flex:1">${esc(t.text)}</span>
+         <button class="x" data-act="todo-del" data-i="${i}" aria-label="删除">${ico("x", 12)}</button></div>`).join("");
+    const empty = S.todos.length ? "" : `<div class="abs s" style="left:0;right:0;top:130px;text-align:center;font-size:13px">今天还没有待办</div>`;
+    const foot = S.todos.length ? `<span class="abs f" style="left:16px;top:238px;font-size:11px">${pending ? `还有 ${pending} 项未完成` : "全部完成"}</span>` : "";
+    return `<input class="field" id="todoInput" maxlength="500" placeholder="添加待办，回车确认" value="${esc(S.todoDraft)}" style="left:16px;top:50px;width:372px;height:30px">
+      <button class="p-btn dim" data-act="todo-clear" title="清除已完成" aria-label="清除已完成" style="left:396px;top:52px;width:26px;height:26px">${ico("trash", 13)}</button>
+      ${rows}${empty}${foot}`;
+  }
+  function tabClipboard() {
+    if (!S.clips.length) return `<div class="abs s" style="left:0;right:0;top:120px;text-align:center;font-size:13px">还没有复制过文字</div>`;
+    const rows = S.clips.slice(0, 5).map((c, i) =>
+      `<div class="row" data-act="clip-copy" data-i="${i}" title="点一下复制" style="top:${80 + i * 32}px">
+         <span class="t" style="font-size:12.5px;flex:1">${esc(c.text.replace(/\s+/g, " "))}</span>
+         <span class="f" style="font-size:11px">${esc(c.at)}</span>
+         <button class="x" data-act="clip-del" data-i="${i}" aria-label="删除">${ico("x", 12)}</button></div>`).join("");
+    return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${S.clips.length} 条记录，点一下复制</span>
+      <button class="p-btn dim" data-act="clip-clear" title="清空" aria-label="清空" style="left:396px;top:48px;width:26px;height:26px">${ico("trash", 13)}</button>${rows}`;
+  }
+  function tabShelf() {
+    if (S.dragOver) return `<div class="drop"><span class="t" style="font-size:14px">松开就放进中转站</span></div>`;
+    if (!S.shelf.length) return `<div class="drop" style="border-color:var(--i-track)"><div style="text-align:center"><div class="s" style="font-size:13px">把文件拖到灵动岛上</div><div class="f" style="font-size:11px;margin-top:4px">只记住位置，不复制文件</div></div></div>`;
+    const rows = S.shelf.slice(0, 5).map((f, i) =>
+      `<div class="row" style="top:${80 + i * 32}px" title="预览里不能真的打开或拖出">
+         <span class="s">${ico(f.kind, 15)}</span>
+         <span class="t" style="font-size:12.5px;flex:1">${esc(f.name)}</span>
+         <span class="f" style="font-size:11px">${esc(f.detail)}</span>
+         <button class="x" data-act="shelf-del" data-i="${i}" aria-label="移出">${ico("x", 12)}</button></div>`).join("");
+    return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${S.shelf.length} 个文件 · 拖进来更多</span>
+      <button class="p-btn dim" data-act="shelf-clear" title="清空" aria-label="清空" style="left:396px;top:48px;width:26px;height:26px">${ico("trash", 13)}</button>${rows}`;
+  }
+  function tabTranslate() {
+    const t = S.tr;
+    if (t.settings) {
+      return label(16, 50, "服务") + seg(56, 50, [["anthropic", "Anthropic"], ["openai", "OpenAI 兼容"], ["deepseek", "DeepSeek"], ["ollama", "Ollama"]], t.provider, "tr-provider") +
+        label(16, 84, "地址") + `<input class="field" id="trUrl" placeholder="留空使用默认地址" value="${esc(t.url)}" style="left:56px;top:82px;width:368px;height:26px;font-size:12px">` +
+        label(16, 116, "模型") + `<input class="field" id="trModel" placeholder="模型名称" value="${esc(t.model)}" style="left:56px;top:114px;width:368px;height:26px;font-size:12px">` +
+        label(16, 148, "Key") + `<input class="field" id="trKey" type="password" placeholder="sk-…（加密保存在本机）" value="${esc(t.key)}" style="left:56px;top:146px;width:368px;height:26px;font-size:12px">` +
+        `<span class="abs f" style="left:16px;top:186px;width:300px;font-size:11px">${t.status === "saved" ? "已保存" : t.status === "tested" ? "连接成功，可以翻译了" : "预览里不会真的连接翻译服务"}</span>
+         <div class="seg" style="left:256px;top:214px"><button data-act="tr-test">测试</button><button data-act="tr-back">返回</button><button class="sel" data-act="tr-save">保存</button></div>`;
+    }
+    const status = t.status === "busy" ? "正在翻译…" : t.status === "done" ? "译文（预览里是示例）" : "Enter 翻译，Shift+Enter 换行";
+    return `<textarea class="field" id="trInput" placeholder="输入要翻译的文字" style="left:16px;top:50px;width:408px;height:78px">${esc(t.input)}</textarea>
+      <span class="abs f" style="left:16px;top:136px;height:24px;line-height:24px;font-size:11.5px">${status}</span>
+      <button class="p-btn dim" data-act="tr-settings" title="翻译服务设置" aria-label="翻译服务设置" style="left:300px;top:134px;width:28px;height:28px">${ico("gear", 14)}</button>
+      <div class="seg" style="left:${t.status === "busy" ? 368 : 368}px;top:136px"><button class="sel" data-act="${t.status === "busy" ? "tr-stop" : "tr-go"}">${t.status === "busy" ? "停止" : "翻译"}</button></div>
+      <div class="abs" id="trOut" style="left:16px;top:170px;width:408px;height:76px;border-radius:10px;background:var(--i-field);padding:8px 10px;font-size:13px;line-height:1.45;color:var(--i-fg);overflow:auto;white-space:pre-wrap;user-select:text">${esc(t.output) || '<span class="f">译文会显示在这里</span>'}</div>`;
+  }
+  function tabMonitor() {
+    const m = S.mon;
+    const meter = (y, name, text, frac, detail) =>
+      `<span class="abs s" style="left:16px;top:${y}px;font-size:12px">${name}</span>
+       <span class="abs t" style="left:224px;top:${y}px;width:200px;text-align:right;font-size:14px;font-weight:600;font-variant-numeric:tabular-nums">${text}</span>
+       ${detail ? `<span class="abs f" style="left:16px;top:${y + 14}px;font-size:10.5px">${detail}</span>` : ""}
+       <div class="track" style="left:16px;top:${y + 28}px;width:408px;height:6px"><b class="acc" style="left:0;top:0;bottom:0;width:${Math.round(frac * 100)}%;transition:width .5s"></b></div>`;
+    const kb = (v) => v >= 1024 ? (v / 1024).toFixed(1) + " MB/s" : Math.round(v) + " KB/s";
+    return meter(58, "CPU", Math.round(m.cpu) + "%", m.cpu / 100, "") +
+      meter(102, "内存", Math.round(m.mem * 100) + "%", m.mem, (m.mem * 16).toFixed(1) + " / 16.0 GB") +
+      `<span class="abs s" style="left:16px;top:166px;font-size:12px">网络</span>
+       <span class="abs t" style="left:16px;top:194px;width:200px;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums">↓ ${kb(m.down)}</span>
+       <span class="abs t" style="left:224px;top:194px;width:200px;text-align:right;font-size:15px;font-weight:600;font-variant-numeric:tabular-nums">↑ ${kb(m.up)}</span>
+       <span class="abs f" style="left:16px;top:234px;font-size:10.5px">预览里是随机数，真机上每秒采样一次</span>`;
+  }
+  function tabAppearance() {
+    let html = seg(16, 52, [["dark", "黑夜"], ["light", "白天"], ["system", "跟随系统"], ["schedule", "按时间"], ["custom", "自定义"]], S.theme, "theme");
+    let y = 86;
+    if (S.theme === "custom") {
+      [["背景", PRESET_BG, "bg"], ["文字", PRESET_FG, "fg"], ["强调色", PRESET_AC, "ac"]].forEach(([name, list, key], row) => {
+        const yy = 82 + row * 26;
+        html += label(16, yy, name) + list.map((hex, i) =>
+          `<button class="sw${S.custom[key].toUpperCase() === hex ? " sel" : ""}" data-act="swatch" data-k="${key}" data-v="${hex}" aria-label="${name} ${hex}" style="left:${64 + i * 28}px;top:${yy}px;background:${hex}"></button>`).join("");
+      });
+      y = 166;
+    } else {
+      const tip = { dark: "黑色的经典灵动岛", light: "浅色胶囊，适合浅色桌面", system: "跟着 Windows 的深色 / 浅色设置", schedule: "07:00 到 19:00 用浅色，其余时间用深色" }[S.theme];
+      html += `<span class="abs f" style="left:16px;top:84px;font-size:11px">${tip}</span>`;
+      y = 112;
+    }
+    html += label(16, y, "待机时") + seg(72, y, [["line", "收成细线"], ["clock", "显示时间"]], S.idleLine ? "line" : "clock", "idle");
+    html += label(16, y + 28, "放音乐时") + seg(72, y + 28, [["capsule", "显示音乐胶囊"], ["line", "也收成细线"]], S.mediaLine ? "line" : "capsule", "media");
+    html += label(16, y + 56, "位置") + seg(72, y + 56, [["top", "顶部"], ["left", "左侧"], ["right", "右侧"]], S.dock, "dock");
+    return html;
+  }
+  function panelHTML() {
+    const body = { music: tabMusic, todo: tabTodo, clipboard: tabClipboard, shelf: tabShelf, translate: tabTranslate, monitor: tabMonitor, appearance: tabAppearance }[S.tab]();
+    return header() + body + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : "");
   }
 
-  // 逐帧：弹簧 → 屏幕上的位置和大小
+  // ───────── 渲染 ─────────
+  function sizeOf(st) {
+    if (st === "expanded") return { W: 440, H: 260 };
+    const s = shapeOf(st); return { W: s.w, H: s.h };
+  }
+  function renderLayer(st, restart) {
+    const el = layers[st], content = el.firstChild, inner = content.firstChild;
+    const { W, H } = sizeOf(st);
+    content.dataset.w = W; content.dataset.h = H;
+    content.style.width = W + "px"; content.style.height = H + "px";
+    if (st === "expanded") {
+      // 重画时保住正在输入的框（焦点、光标位置）
+      const a = document.activeElement, id = a && island.contains(a) ? a.id : null;
+      const sel = id && "selectionStart" in a ? [a.selectionStart, a.selectionEnd] : null;
+      inner.innerHTML = panelHTML();
+      if (id) { const b = document.getElementById(id); if (b) { b.focus({ preventScroll: true }); if (sel && b.setSelectionRange) try { b.setSelectionRange(sel[0], sel[1]); } catch (e) {} } }
+    } else {
+      inner.innerHTML = collapsedHTML(st, W, H);
+    }
+    if (restart) { el.classList.remove("on"); void el.offsetWidth; el.classList.add("on"); }
+  }
+  function update(forceRender) {
+    const st = resolve();
+    const s = shapeOf(st);
+    if (st !== current) {
+      growing = s.w * s.h > sp.w.t * sp.h.t;
+      for (const k of Object.keys(layers)) if (k !== st) layers[k].classList.remove("on");
+      renderLayer(st, true);
+      current = st;
+    } else if (forceRender) {
+      renderLayer(st, false);
+    }
+    sp.w.t = s.w; sp.h.t = s.h; sp.r.t = s.r; sp.off.t = s.off;
+    applyPalette();
+    syncControls(st);
+  }
+  function applyPalette() {
+    const p = palette();
+    const v = island.style;
+    v.setProperty("--i-bg", p.bg); v.setProperty("--i-fg", p.fg); v.setProperty("--i-accent", p.ac);
+    v.setProperty("--i-sub", rgba(p.fg, 0.62)); v.setProperty("--i-faint", rgba(p.fg, 0.42));
+    v.setProperty("--i-track", rgba(p.fg, 0.2)); v.setProperty("--i-hover", rgba(p.fg, 0.1)); v.setProperty("--i-field", rgba(p.fg, 0.08));
+    const song = SONGS[S.song];
+    v.setProperty("--cover", `linear-gradient(135deg, ${song.a}, ${song.b})`);
+    bg.style.background = p.bg;
+    const light = parseInt(p.bg.slice(1, 3), 16) > 128;
+    bg.style.boxShadow = `0 0 0 1px ${light ? "rgba(0,0,0,.14)" : "rgba(255,255,255,.11)"}`;
+    screen.classList.toggle("light-wall", S.wall === "light");
+  }
+
+  // 逐帧：弹簧 → 位置和大小；内容按最终尺寸画好，对齐贴边的一侧，只裁出可见部分（和原生版一样）
   let last = performance.now();
   function frame(t) {
     const dt = Math.min(0.05, (t - last) / 1000); last = t;
     const R = growing ? 0.42 : 0.30, Z = growing ? 0.74 : 0.92, ZR = Math.max(Z, 0.85);
     sp.w.step(dt, R, Z); sp.h.step(dt, R, Z); sp.r.step(dt, R, ZR); sp.off.step(dt, R, ZR);
-    const rect = screen.getBoundingClientRect();
-    const k = rect.width / SCREEN_W;
-    const w = Math.max(0, sp.w.v), h = Math.max(0, sp.h.v), off = sp.off.v;
-    const usableH = SCREEN_H - TASKBAR;
+    const k = screen.clientWidth / SCREEN_W;
+    const w = Math.max(0, sp.w.v), h = Math.max(0, sp.h.v), off = sp.off.v, usableH = SCREEN_H - TASKBAR;
     let x, y;
-    if (ui.dock === "top") { x = (SCREEN_W - w) / 2; y = off; }
-    else if (ui.dock === "left") { x = off; y = (usableH - h) / 2; }
+    if (S.dock === "top") { x = (SCREEN_W - w) / 2; y = off; }
+    else if (S.dock === "left") { x = off; y = (usableH - h) / 2; }
     else { x = SCREEN_W - w - off; y = (usableH - h) / 2; }
-    island.style.left = (x * k) + "px"; island.style.top = (y * k) + "px";
-    island.style.width = (w * k) + "px"; island.style.height = (h * k) + "px";
-    island.style.borderRadius = (Math.min(sp.r.v, w / 2, h / 2) * k) + "px";
-    // 内容按最终尺寸画好，居中对齐贴边的一侧，整体按屏幕比例缩放（和原生版一样只裁出可见部分）
-    for (const el of island.querySelectorAll(".layer .content")) {
-      const cw = +el.dataset.w, ch = +el.dataset.h;
+    const st = island.style;
+    st.left = x * k + "px"; st.top = y * k + "px"; st.width = w * k + "px"; st.height = h * k + "px";
+    st.borderRadius = Math.min(sp.r.v, w / 2, h / 2) * k + "px";
+    for (const el of island.querySelectorAll(".layer.on .content, .layer .content")) {
+      const cw = +el.dataset.w || 0, ch = +el.dataset.h || 0;
       let cx, cy;
-      if (ui.dock === "top") { cx = (w - cw) / 2; cy = 0; }
-      else if (ui.dock === "left") { cx = 0; cy = (h - ch) / 2; }
+      if (S.dock === "top") { cx = (w - cw) / 2; cy = 0; }
+      else if (S.dock === "left") { cx = 0; cy = (h - ch) / 2; }
       else { cx = w - cw; cy = (h - ch) / 2; }
-      el.style.left = (cx * k) + "px"; el.style.top = (cy * k) + "px";
-      el.style.transform = `scale(${k})`;
-      el.style.transformOrigin = "0 0";
+      el.style.transform = `translate(${cx * k}px, ${cy * k}px) scale(${k})`;
     }
     requestAnimationFrame(frame);
   }
 
-  function applyPalette() {
-    const p = PALETTE[ui.theme];
-    island.style.setProperty("--isl-fg", p.fg);
-    island.style.setProperty("--isl-sub", p.sub);
-    island.style.setProperty("--isl-track", p.track);
-    island.style.setProperty("--isl-accent", p.accent);
-    bg.style.background = p.bg;
-    bg.style.boxShadow = `0 0 0 1px ${p.edge}`;
-    screen.classList.toggle("light-wall", ui.wall === "light");
-  }
-
-  function renderSpec(current) {
-    const body = document.getElementById("specBody");
-    body.innerHTML = Object.keys(NAMES).map((k) => {
-      const top = TOP[k], s = SIDE[k];
-      const side = k === "expanded" ? "440 × 260" : k === "line" ? `${s.t} × ${Math.round(s.l * ui.length)}` : `${Math.round(s.t * ui.thick)} × ${Math.round(s.l * ui.length)}`;
-      return `<tr class="${k === current ? "current" : ""}"><td>${NAMES[k]}</td><td class="num">${top.w} × ${top.h}</td><td class="num">${side}</td><td>${s.what}</td></tr>`;
-    }).join("");
-    document.getElementById("thickOut").textContent = "× " + ui.thick.toFixed(2);
-    document.getElementById("lengthOut").textContent = "× " + ui.length.toFixed(2);
-  }
-
-  function syncChips() {
-    document.querySelectorAll(".chips").forEach((g) => {
-      const v = ui[g.dataset.group];
+  // ───────── 页面控件 ─────────
+  function syncControls(st) {
+    document.querySelectorAll(".chips[data-group]").forEach((g) => {
+      const v = S[g.dataset.group];
       g.querySelectorAll(".chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.v === v)));
     });
+    document.querySelectorAll("#stateChips .chip").forEach((c) => c.setAttribute("aria-pressed", String(c.dataset.v === st)));
+    document.getElementById("thickOut").textContent = "× " + S.thick.toFixed(2);
+    document.getElementById("lengthOut").textContent = "× " + S.length.toFixed(2);
+    document.getElementById("specBody").innerHTML = Object.keys(NAMES).map((k) => {
+      const top = TOP[k], s = SIDE[k];
+      const sideTxt = k === "expanded" ? "440 × 260" : `${k === "line" ? s.t : Math.round(s.t * S.thick)} × ${Math.round(s.l * S.length)}`;
+      return `<tr class="${k === st ? "current" : ""}"><td>${NAMES[k]}</td><td class="num">${top.w} × ${top.h}</td><td class="num">${sideTxt}</td><td>${s.what}</td></tr>`;
+    }).join("");
+    hint.textContent = st === "expanded"
+      ? (S.pinned ? "已置顶：鼠标移开也不收起，点图钉取消" : "鼠标移开就收起")
+      : side() ? "鼠标移到岛上，从侧边展开；在岛上滚动可以调音量" : "鼠标移到岛上展开；在岛上滚动可以调音量";
   }
-
-  document.querySelectorAll(".chips").forEach((g) => g.addEventListener("click", (e) => {
+  document.querySelectorAll(".chips[data-group]").forEach((g) => g.addEventListener("click", (e) => {
     const c = e.target.closest(".chip"); if (!c) return;
-    ui[g.dataset.group] = c.dataset.v;
-    if (g.dataset.group === "dock") hint.textContent = c.dataset.v === "top" ? "把鼠标移到岛上试试展开" : "把鼠标移到岛上，从侧边展开";
-    syncChips(); applyPalette(); setTargets(); save();
+    S[g.dataset.group] = c.dataset.v; save(); update(true); rerenderAll();
   }));
+  document.getElementById("stateChips").addEventListener("click", (e) => {
+    const c = e.target.closest(".chip"); if (!c) return;
+    const v = c.dataset.v;
+    clearTimeout(levelTimer); clearTimeout(noteTimer);
+    S.level = 0; S.note = null; S.pinned = false; S.hover = false;
+    if (v === "line") { S.playing = false; S.lingerUntil = 0; S.idleLine = true; }
+    if (v === "clock") { S.playing = false; S.lingerUntil = 0; S.idleLine = false; }
+    if (v === "music") { S.playing = true; S.mediaLine = false; }
+    if (v === "level") S.level = 1;
+    if (v === "note") S.note = { icon: "mail", title: "新消息", body: "这是一条来自灵动岛的演示通知" };
+    if (v === "expanded") S.pinned = true;
+    save(); update(true); rerenderAll();
+  });
   for (const id of ["thick", "length"]) {
     const input = document.getElementById(id);
-    input.value = ui[id];
-    input.addEventListener("input", () => { ui[id] = +input.value; setTargets(); save(); });
+    input.value = S[id];
+    input.addEventListener("input", () => { S[id] = +input.value; save(); update(true); rerenderAll(); });
+  }
+  function rerenderAll() { for (const k of Object.keys(layers)) if (k !== current) renderLayer(k, false); }
+
+  // 通知、音量提示（和原生版一样：通知 3.5 秒、音量提示 1.5 秒后自动收回）
+  let noteTimer = 0, levelTimer = 0;
+  function notify(icon, title, body) {
+    clearTimeout(noteTimer);
+    S.note = { icon, title, body }; update(true);
+    noteTimer = setTimeout(() => { S.note = null; update(); }, 3500);
+  }
+  function showLevel() {
+    if (S.hover || S.pinned) return;
+    clearTimeout(levelTimer);
+    S.level = 1; update(true);
+    levelTimer = setTimeout(() => { S.level = 0; update(); }, 1500);
+  }
+  document.getElementById("demoNote").addEventListener("click", () => notify("mail", "新消息", "这是一条来自灵动岛的演示通知"));
+  document.getElementById("demoDevice").addEventListener("click", () => notify("head", "声音输出", "已切换到 AirPods Pro"));
+  document.getElementById("demoPlay").addEventListener("click", () => togglePlay());
+  function togglePlay() {
+    S.playing = !S.playing;
+    if (!S.playing) S.lingerUntil = Date.now() + 8000; // 暂停后音乐胶囊再停留 8 秒
+    if (S.playing && S.pos === 0) S.pos = 1;
+    update(true);
   }
 
-  // 悬停展开：进来停 100 ms 才展开，离开 120 ms 后收起（和原生版一样）
-  let inT = 0, outT = 0;
-  island.addEventListener("pointerenter", () => { clearTimeout(outT); inT = setTimeout(() => { if (!ui.hover) { ui.hover = true; setTargets(); } }, 100); });
-  island.addEventListener("pointerleave", () => { clearTimeout(inT); outT = setTimeout(() => { if (ui.hover) { ui.hover = false; setTargets(); } }, 120); });
-  // 手机上点一下切换
-  island.addEventListener("click", (e) => { if (e.pointerType === "touch") { ui.hover = !ui.hover; setTargets(); } });
+  // ───────── 岛上的操作 ─────────
+  let inT = 0, outT = 0, pointerInside = false;
+  island.addEventListener("pointerenter", (e) => {
+    pointerInside = true; clearTimeout(outT);
+    if (e.pointerType === "touch") return;
+    inT = setTimeout(() => { if (!S.hover) { S.hover = true; S.level = 0; update(true); } }, 100);
+  });
+  island.addEventListener("pointerleave", (e) => {
+    pointerInside = false; clearTimeout(inT);
+    if (e.pointerType === "touch") return;
+    outT = setTimeout(tryCollapse, 120);
+  });
+  function tryCollapse() {
+    // 正在输入时不收起（和原生版一样）
+    const a = document.activeElement;
+    if (pointerInside || (a && island.contains(a) && a.classList.contains("field"))) return;
+    if (S.hover) { S.hover = false; update(); }
+  }
+  island.addEventListener("focusout", () => setTimeout(tryCollapse, 150));
+  // 手机：点一下展开 / 收起
+  island.addEventListener("pointerup", (e) => {
+    if (e.pointerType !== "touch" || current === "expanded" && e.target.closest("button,input,textarea,.row")) return;
+    if (current === "note") { S.note = null; update(); return; }
+    S.hover = !S.hover; update(true);
+  });
+  // 点通知关掉
+  island.addEventListener("click", (e) => { if (current === "note" && e.pointerType !== "touch") { clearTimeout(noteTimer); S.note = null; update(); } });
+  // 滚轮调音量
+  island.addEventListener("wheel", (e) => {
+    if (current === "expanded") return;
+    e.preventDefault();
+    S.muted = false;
+    S.volume = Math.min(1, Math.max(0, Math.round((S.volume + (e.deltaY < 0 ? 0.02 : -0.02)) * 50) / 50));
+    showLevel();
+  }, { passive: false });
 
-  // 时间每分钟刷新一次
-  setInterval(() => { if (!ui.hover && ui.state === "clock") showLayer("clock"); }, 30000);
+  // 面板里的按钮
+  island.addEventListener("click", (e) => {
+    const b = e.target.closest("[data-act]"); if (!b || current !== "expanded") return;
+    const act = b.dataset.act, v = b.dataset.v, i = +b.dataset.i;
+    const song = SONGS[S.song];
+    switch (act) {
+      case "tab": S.tab = v; S.toast = ""; save(); break;
+      case "pin": S.pinned = !S.pinned; break;
+      case "play": togglePlay(); return;
+      case "prev": S.song = (S.song + SONGS.length - 1) % SONGS.length; S.pos = 0; break;
+      case "next": S.song = (S.song + 1) % SONGS.length; S.pos = 0; break;
+      case "mute": S.muted = !S.muted; break;
+      case "todo-toggle": {
+        const t = S.todos[i]; t.done = !t.done;
+        // 完成的沉到底部
+        S.todos = S.todos.filter((x) => !x.done).concat(S.todos.filter((x) => x.done));
+        break;
+      }
+      case "todo-del": e.stopPropagation(); S.todos.splice(i, 1); break;
+      case "todo-clear": S.todos = S.todos.filter((t) => !t.done); break;
+      case "clip-copy": {
+        const text = S.clips[i].text;
+        const ok = () => { flash("已复制"); };
+        try { navigator.clipboard.writeText(text).then(ok, ok); } catch (err) { ok(); }
+        const [c] = S.clips.splice(i, 1); S.clips.unshift(c);
+        break;
+      }
+      case "clip-del": e.stopPropagation(); S.clips.splice(i, 1); break;
+      case "clip-clear": S.clips = []; break;
+      case "shelf-del": S.shelf.splice(i, 1); break;
+      case "shelf-clear": S.shelf = []; break;
+      case "tr-go": translate(); return;
+      case "tr-stop": stopTranslate(); return;
+      case "tr-settings": S.tr.settings = true; S.tr.status = "idle"; break;
+      case "tr-back": S.tr.settings = false; break;
+      case "tr-save": S.tr.status = "saved"; setTimeout(() => { S.tr.settings = false; S.tr.status = "idle"; update(true); }, 700); break;
+      case "tr-test": S.tr.status = "tested"; break;
+      case "tr-provider": S.tr.provider = v; break;
+      case "theme": S.theme = v; save(); break;
+      case "swatch": S.custom[b.dataset.k] = v; save(); break;
+      case "idle": S.idleLine = v === "line"; save(); break;
+      case "media": S.mediaLine = v === "line"; save(); break;
+      case "dock": S.dock = v; save(); break;
+      default: return;
+    }
+    update(true); rerenderAll();
+  });
+  island.addEventListener("input", (e) => {
+    const t = e.target;
+    if (t.id === "todoInput") S.todoDraft = t.value;
+    if (t.id === "trInput") S.tr.input = t.value;
+    if (t.id === "trUrl") S.tr.url = t.value;
+    if (t.id === "trModel") S.tr.model = t.value;
+    if (t.id === "trKey") S.tr.key = t.value;
+    if (t.id === "volRange") {
+      S.muted = false; S.volume = +t.value / 100;
+      t.style.setProperty("--v", t.value + "%");
+      const pct = document.getElementById("volPct"); if (pct) pct.textContent = t.value + "%";
+    }
+  });
+  island.addEventListener("keydown", (e) => {
+    const t = e.target;
+    if (t.id === "todoInput" && e.key === "Enter" && !e.isComposing) {
+      const text = t.value.trim();
+      if (text) { S.todos.unshift({ text, done: false }); S.todoDraft = ""; update(true); }
+      e.preventDefault();
+    }
+    if (t.id === "trInput" && e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); translate(); }
+    if (e.key === "Escape") { t.blur(); }
+  });
 
-  syncChips(); applyPalette(); setTargets();
-  // 一开始直接放在目标位置，不从别处飞进来
+  function flash(text) {
+    S.toast = text; update(true);
+    setTimeout(() => { if (S.toast === text) { S.toast = ""; update(true); } }, 1200);
+  }
+
+  // 翻译：预览里不连服务，按固定的示例流式输出
+  let trTimer = 0;
+  const SAMPLES = [
+    [/天气/, "The weather is lovely today — a good day for a walk."],
+    [/你好|您好/, "Hello!"],
+    [/谢谢/, "Thank you!"],
+  ];
+  function translate() {
+    const input = S.tr.input.trim(); if (!input) return;
+    const hasCJK = /[一-鿿]/.test(input);
+    let out = (SAMPLES.find(([re]) => re.test(input)) || [])[1];
+    if (!out) out = hasCJK ? "(Preview) The real island sends this text to the translation service you set up and streams the result here." : "（预览）真机上会把这段文字发给你设置的翻译服务，译文像这样一段段流式出现。";
+    if (!hasCJK && SAMPLES.every(([re]) => !re.test(input)) && /hello/i.test(input)) out = "你好！";
+    S.tr.output = ""; S.tr.status = "busy"; update(true);
+    let n = 0; clearInterval(trTimer);
+    trTimer = setInterval(() => {
+      n += 2; S.tr.output = out.slice(0, n);
+      if (n >= out.length) { clearInterval(trTimer); S.tr.status = "done"; }
+      const box = document.getElementById("trOut");
+      if (box && S.tr.status === "busy") box.textContent = S.tr.output; else update(true);
+    }, 45);
+  }
+  function stopTranslate() { clearInterval(trTimer); S.tr.status = "idle"; update(true); }
+
+  // 拖文件到岛上：展开到中转站，松开后加进来（名字和大小来自真实文件）
+  function sizeText(b) {
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return +(b / 1024).toFixed(1) + " KB";
+    if (b < 1073741824) return +(b / 1048576).toFixed(1) + " MB";
+    return +(b / 1073741824).toFixed(2) + " GB";
+  }
+  let dragDepth = 0;
+  const hasFiles = (e) => e.dataTransfer && Array.from(e.dataTransfer.types || []).includes("Files");
+  island.addEventListener("dragenter", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); dragDepth++;
+    if (!S.dragOver) { S.dragOver = true; S.tab = "shelf"; S.level = 0; update(true); }
+  });
+  island.addEventListener("dragover", (e) => { if (hasFiles(e)) { e.preventDefault(); e.dataTransfer.dropEffect = "copy"; } });
+  island.addEventListener("dragleave", () => { if (--dragDepth <= 0) { dragDepth = 0; S.dragOver = false; update(true); } });
+  island.addEventListener("drop", (e) => {
+    e.preventDefault(); dragDepth = 0; S.dragOver = false;
+    const files = Array.from(e.dataTransfer.files || []);
+    for (const f of files.reverse()) {
+      if (S.shelf.some((x) => x.name.toLowerCase() === f.name.toLowerCase())) continue;
+      const kind = /^image\//.test(f.type) ? "img" : f.type === "" && f.size === 0 ? "folder" : "file";
+      S.shelf.unshift({ name: f.name, detail: kind === "folder" ? "文件夹" : sizeText(f.size), kind });
+    }
+    S.shelf = S.shelf.slice(0, 30);
+    S.hover = pointerInside; update(true);
+  });
+  // 拖文件经过屏幕时提示一下
+  screen.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+  screen.addEventListener("drop", (e) => e.preventDefault());
+
+  // 在页面上复制的文字进剪贴板历史
+  document.addEventListener("copy", () => {
+    setTimeout(() => {
+      const text = String(window.getSelection() || "").trim();
+      if (!text) return;
+      S.clips = S.clips.filter((c) => c.text !== text);
+      const [hh, mm] = hm();
+      S.clips.unshift({ text, at: `${hh}:${mm}` });
+      S.clips = S.clips.slice(0, 50);
+      if (current === "expanded" && S.tab === "clipboard") update(true);
+    }, 0);
+  });
+
+  // ───────── 定时：播放进度、系统监控、时钟 ─────────
+  setInterval(() => {
+    const song = SONGS[S.song];
+    if (S.playing) {
+      S.pos += 1;
+      if (S.pos >= song.len) { S.song = (S.song + 1) % SONGS.length; S.pos = 0; update(true); }
+    }
+    const m = S.mon;
+    m.cpu = Math.min(96, Math.max(3, m.cpu + (Math.random() - 0.5) * 14));
+    m.mem = Math.min(0.9, Math.max(0.35, m.mem + (Math.random() - 0.5) * 0.02));
+    m.down = Math.max(0, m.down + (Math.random() - 0.5) * 300);
+    m.up = Math.max(0, m.up + (Math.random() - 0.5) * 40);
+    // 暂停后停留时间到了：收回待机
+    if (!S.playing && S.lingerUntil && Date.now() >= S.lingerUntil) { S.lingerUntil = 0; update(true); }
+    if (current === "expanded") {
+      if (S.tab === "monitor") update(true);
+      else if (S.tab === "music") {
+        const bar = document.getElementById("progBar"), pos = document.getElementById("progPos");
+        if (bar) bar.style.width = (S.pos / song.len) * 100 + "%";
+        if (pos) pos.textContent = fmt(S.pos);
+      }
+    }
+  }, 1000);
+  setInterval(() => { if (current === "clock") renderLayer("clock", false); else if (current === "expanded") update(true); }, 30000);
+  matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => update(true));
+
+  // 启动：直接放在目标形状上，不从别处飞进来
+  update(true); rerenderAll();
   for (const s of Object.values(sp)) { s.v = s.t; s.vel = 0; }
   requestAnimationFrame(frame);
 })();
