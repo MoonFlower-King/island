@@ -571,6 +571,12 @@ fn spawn_notify(args: &[&str], stdin: Option<&str>) -> std::io::Result<std::proc
     Ok(child)
 }
 
+fn system_toast_shown(app: &App) -> bool {
+    app.notification
+        .as_ref()
+        .is_some_and(|(_, t, _)| t.contains("冒烟测试的系统通知"))
+}
+
 /// 用 Windows PowerShell 的 AppUserModelID 弹一条真的系统通知（任何程序都可以借用已注册的 ID）。
 fn show_real_toast() -> windows::core::Result<()> {
     use windows::Data::Xml::Dom::XmlDocument;
@@ -1333,7 +1339,14 @@ pub fn step(app: &mut App) {
                 Ok(()) => {}
                 Err(e) => smoke.check(false, &format!("弹出一条 Windows 通知（{e}）")),
             }
-            next = 5000;
+            smoke.waits = 0;
+            next = 1000;
+        }
+        // 通知数据库隔一会儿才看一次：勤看着等它出现（最多约 8 秒）；它只停 3.5 秒
+        87 if !system_toast_shown(app) && smoke.waits < 25 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
         }
         87 => {
             let title = app.notification.as_ref().map(|(_, t, _)| t.clone());
