@@ -34,10 +34,12 @@ pub enum Tab {
     Translate,
     Monitor,
     Appearance,
+    /// AI 动态：Claude、Codex 等完成任务或等你确认的消息。
+    Ai,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 7] = [
+    pub const ALL: [Tab; 8] = [
         Tab::Music,
         Tab::Todo,
         Tab::Clipboard,
@@ -45,6 +47,7 @@ impl Tab {
         Tab::Translate,
         Tab::Monitor,
         Tab::Appearance,
+        Tab::Ai,
     ];
 
     /// 和 WPF 版 settings.json 里 LastTab 的取值一致。
@@ -57,6 +60,7 @@ impl Tab {
             Tab::Translate => "Translate",
             Tab::Monitor => "Monitor",
             Tab::Appearance => "Appearance",
+            Tab::Ai => "Ai",
         }
     }
 
@@ -76,6 +80,7 @@ impl Tab {
             Tab::Translate => '\u{E8C1}',
             Tab::Monitor => '\u{E9D9}',
             Tab::Appearance => '\u{E790}',
+            Tab::Ai => '\u{E99A}',
         }
     }
 }
@@ -195,7 +200,27 @@ pub enum Hit {
     SettingsBack,
     SettingsTest,
     SettingsSave,
+    /// AI 动态：标记一条已读、全部已读、清空。
+    AiItem(usize),
+    AiReadAll,
+    AiClear,
 }
+
+/// AI 动态里的一条消息。
+#[derive(Clone)]
+pub struct AiItem {
+    pub title: String,
+    pub body: String,
+    /// 收到的时间（HH:MM）。
+    pub at: String,
+    pub read: bool,
+    /// 软件自己的图标（桌面版的系统通知才有）。
+    pub icon: Option<std::sync::Arc<Art>>,
+}
+
+pub const AI_ROWS: usize = 4;
+const AI_TOP: f32 = 78.0;
+const AI_ROW_HEIGHT: f32 = 42.0;
 
 /// 一次绘制登记下来的可点区域（相对胶囊左上角）。
 #[derive(Default, Clone)]
@@ -269,6 +294,7 @@ pub struct ViewState<'a> {
     pub pinned: bool,
     pub hovered: Option<Hit>,
     pub pressed: Option<Hit>,
+    pub ai: &'a [AiItem],
 }
 
 mod glyph {
@@ -317,6 +343,11 @@ pub fn draw_compact(p: &Painter, v: &ViewState) -> Result<()> {
     let fg = v.palette.foreground;
     let Some(m) = v.media else { return Ok(()) };
     draw_art(p, m, Rect::new(7.0, 6.0, 26.0, 26.0), 7.0, v)?;
+    // 有没看过的 AI 消息：封面右上角一个小点
+    if v.ai.iter().any(|m| !m.read) {
+        p.fill_circle(33.0, 7.0, 4.5, color(v.palette.background, 1.0))?;
+        p.fill_circle(33.0, 7.0, 3.5, color(v.accent, 1.0))?;
+    }
     let family = p.gfx.text_font.clone();
     let title = if m.title.is_empty() {
         "正在播放"
@@ -333,14 +364,30 @@ pub fn draw_compact(p: &Painter, v: &ViewState) -> Result<()> {
 
 // ───────────────────────────── 待机时钟 ─────────────────────────────
 
-pub fn draw_clock(p: &Painter, palette: &Palette, hour: u16, minute: u16) -> Result<()> {
+/// `unread`：有没看过的 AI 消息时，在右边留一个强调色的小点。
+pub fn draw_clock(
+    p: &Painter,
+    palette: &Palette,
+    hour: u16,
+    minute: u16,
+    unread: Option<Rgb>,
+) -> Result<()> {
     let family = p.gfx.text_font.clone();
     p.text(
         &clock(hour, minute),
         Rect::new(0.0, 0.0, IDLE_CLOCK.width, IDLE_CLOCK.height),
         &style(&family, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center),
         color(palette.foreground, 1.0),
-    )
+    )?;
+    if let Some(c) = unread {
+        p.fill_circle(
+            IDLE_CLOCK.width - 18.0,
+            IDLE_CLOCK.height / 2.0,
+            3.5,
+            color(c, 1.0),
+        )?;
+    }
+    Ok(())
 }
 
 // ───────────────────────────── 音量 / 亮度提示 ─────────────────────────────
@@ -440,9 +487,111 @@ pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<Targets> {
         Tab::Translate => draw_translate(p, v, &mut t)?,
         Tab::Monitor => draw_monitor(p, v)?,
         Tab::Appearance => draw_appearance(p, v, &mut t)?,
+        Tab::Ai => draw_ai(p, v, &mut t)?,
     }
     Ok(t)
 }
+
+// ───────────────────────────── AI 动态 ─────────────────────────────
+
+fn draw_ai(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let w = EXPANDED.width;
+    if v.ai.is_empty() {
+        p.icon(
+            GLYPH_AI,
+            Rect::new(0.0, 100.0, w, 32.0),
+            24.0,
+            color(fg, 0.3),
+        )?;
+        p.text(
+            "还没有 AI 消息",
+            Rect::new(0.0, 136.0, w, 22.0),
+            &style(&family, 13.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.5),
+        )?;
+        return p.text(
+            "Claude、Codex 等完成任务或等你确认时会显示在这里",
+            Rect::new(0.0, 160.0, w, 18.0),
+            &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.4),
+        );
+    }
+    let unread = v.ai.iter().filter(|m| !m.read).count();
+    let summary = if unread > 0 {
+        format!("{unread} 条没看过 · 点一条标记已读")
+    } else {
+        "都看过了".to_string()
+    };
+    p.text(
+        &summary,
+        Rect::new(16.0, 50.0, 300.0, 24.0),
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(fg, 0.5),
+    )?;
+    let (label, hit) = if unread > 0 {
+        ("全部已读", Hit::AiReadAll)
+    } else {
+        ("清空", Hit::AiClear)
+    };
+    let bw = segment_width(label);
+    let b = Rect::new(w - 16.0 - bw, 51.0, bw, 22.0);
+    let hot = v.hovered == Some(hit);
+    p.fill_round(b, 11.0, color(fg, if hot { 0.18 } else { 0.1 }))?;
+    p.text(
+        label,
+        b,
+        &style(&family, 11.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+        color(fg, 0.85),
+    )?;
+    t.add(b, hit);
+
+    let title = style(&family, 12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading);
+    let title_read = style(&family, 12.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    let body = style(&family, 11.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    let time = style(&family, 10.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing);
+    for (i, m) in v.ai.iter().take(AI_ROWS).enumerate() {
+        let y = AI_TOP + i as f32 * AI_ROW_HEIGHT;
+        let r = Rect::new(12.0, y, 416.0, AI_ROW_HEIGHT - 3.0);
+        let hovered = v.hovered == Some(Hit::AiItem(i));
+        p.fill_round(r, 10.0, color(fg, if hovered { 0.12 } else { 0.06 }))?;
+        let icon = Rect::new(22.0, y + 7.0, 25.0, 25.0);
+        match &m.icon {
+            Some(a) => p.image(a.id, &a.pixels, a.width, a.height, icon, 6.0)?,
+            None => {
+                p.fill_circle(icon.x + 12.5, icon.y + 12.5, 12.5, color(v.accent, 1.0))?;
+                p.icon(GLYPH_AI, icon, 12.0, color(on(v.accent), 1.0))?;
+            }
+        }
+        p.text(
+            &m.title,
+            Rect::new(56.0, y + 3.0, 300.0, 18.0),
+            if m.read { &title_read } else { &title },
+            color(fg, if m.read { 0.75 } else { 1.0 }),
+        )?;
+        p.text(
+            &m.body,
+            Rect::new(56.0, y + 20.0, 340.0, 16.0),
+            &body,
+            color(fg, 0.55),
+        )?;
+        p.text(
+            &m.at,
+            Rect::new(356.0, y + 3.0, 52.0, 18.0),
+            &time,
+            color(fg, 0.4),
+        )?;
+        if !m.read {
+            p.fill_circle(r.right() - 9.0, y + 27.0, 3.5, color(v.accent, 1.0))?;
+        }
+        t.add(r, Hit::AiItem(i));
+    }
+    Ok(())
+}
+
+/// AI 消息的图标（Segoe Fluent Icons：机器人）。
+pub const GLYPH_AI: char = '\u{E99A}';
 
 fn hover_bg(p: &Painter, v: &ViewState, hit: Hit, r: Rect, radius: f32) -> Result<()> {
     if v.hovered == Some(hit) {
@@ -452,11 +601,14 @@ fn hover_bg(p: &Painter, v: &ViewState, hit: Hit, r: Rect, radius: f32) -> Resul
     Ok(())
 }
 
+/// 标签按钮的间距：8 个标签放在图钉（x = 304）左边。
+const TAB_STEP: f32 = 36.0;
+
 fn draw_header(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
     let fg = v.palette.foreground;
     let family = p.gfx.text_font.clone();
     for (i, tab) in Tab::ALL.into_iter().enumerate() {
-        let r = Rect::new(16.0 + i as f32 * 40.0, 12.0, 36.0, 28.0);
+        let r = Rect::new(16.0 + i as f32 * TAB_STEP, 12.0, TAB_STEP - 4.0, 28.0);
         if v.tab == tab {
             p.fill_round(r, 14.0, color(fg, 0.20))?;
         } else {
@@ -464,6 +616,10 @@ fn draw_header(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
         }
         let a = if v.tab == tab { 1.0 } else { 0.6 };
         p.icon(tab.glyph(), r, 14.0, color(fg, a))?;
+        // 有没看过的 AI 消息：标签右上角一个小点
+        if tab == Tab::Ai && v.ai.iter().any(|m| !m.read) {
+            p.fill_circle(r.right() - 7.0, r.y + 7.0, 3.5, color(v.accent, 1.0))?;
+        }
         t.add(r, Hit::Tab(tab));
     }
 

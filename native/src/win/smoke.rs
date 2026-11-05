@@ -1229,11 +1229,11 @@ pub fn step(app: &mut App) {
             let first = app.ai.first();
             smoke.check(
                 first.is_some_and(|e| {
-                    e.title() == "Claude 完成了任务" && e.body() == "island · 完成 侧边胶囊做好了"
+                    e.title == "Claude 完成了任务" && e.body == "island · 完成 侧边胶囊做好了"
                 }),
                 &format!(
                     "Claude Code 的钩子消息弹出提醒（{:?}）",
-                    first.map(|e| (e.title(), e.body()))
+                    first.map(|e| (e.title.clone(), e.body.clone()))
                 ),
             );
             smoke.check(
@@ -1254,11 +1254,11 @@ pub fn step(app: &mut App) {
             smoke.check(
                 app.ai.len() == 2
                     && first.is_some_and(|e| {
-                        e.title() == "Codex 完成了任务" && e.body() == "shop · 购物车已修好"
+                        e.title == "Codex 完成了任务" && e.body == "shop · 购物车已修好"
                     }),
                 &format!(
                     "Codex 的 notify 消息弹出提醒（{:?}）",
-                    first.map(|e| (e.title(), e.body()))
+                    first.map(|e| (e.title.clone(), e.body.clone()))
                 ),
             );
             let codes: Vec<Option<i32>> = smoke
@@ -1312,6 +1312,26 @@ pub fn step(app: &mut App) {
             ));
             snapshot(app, &mut smoke, "29-system-notification", None);
             app.dismiss_notification();
+            next = 400;
+        }
+        // AI 动态：有没看过的消息时，收起的细线染成强调色；展开直接打开 AI 动态，收起后算看过
+        88 => {
+            smoke.check(app.ai_unread(), "有没看过的 AI 消息");
+            app.set_tab(Tab::Music);
+            app.set_pinned(true);
+            next = 700;
+        }
+        89 => {
+            smoke.check(
+                app.tab == Tab::Ai && has_target(app, |h| matches!(h, Hit::AiItem(_))),
+                &format!("展开时直接打开 AI 动态，列出消息（{:?}）", app.tab),
+            );
+            snapshot(app, &mut smoke, "30-ai-tab", None);
+            app.set_pinned(false);
+        }
+        90 => {
+            smoke.check(!app.ai_unread(), "看过 AI 动态再收起，消息都算已读");
+            app.set_tab(Tab::Music);
             smoke.step = 15;
             next = 35;
         }

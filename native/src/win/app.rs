@@ -72,8 +72,6 @@ const LEVEL_HUD_MS: u32 = 1600;
 const NOTIFICATION_MS: u32 = 3500;
 /// AI 完成任务的提醒多停一会儿。
 const AI_NOTIFICATION_MS: u32 = 6000;
-/// AI 消息的图标（Segoe Fluent Icons：机器人）。
-const GLYPH_AI: char = '\u{E99A}';
 /// 查不到软件图标时用的铃铛。
 const GLYPH_BELL: char = '\u{EA8F}';
 /// 系统音量多久看一次。
@@ -139,8 +137,8 @@ pub struct App {
     pub level_hud: Option<(char, f64, String)>,
     /// 正在显示的通知：(图标, 标题, 内容)。
     pub notification: Option<(char, String, String)>,
-    /// 收到过的 AI 消息，新的在前。
-    pub ai: Vec<island::ai::Event>,
+    /// AI 动态：收到过的 AI 消息，新的在前。
+    pub ai: Vec<views::AiItem>,
     /// 当前通知用的软件图标（其他软件的系统通知才有）。
     pub notification_icon: Option<std::sync::Arc<super::media::Art>>,
     /// 软件名和图标，查过的记住。
@@ -483,6 +481,14 @@ impl App {
             self.state = target;
             let (a, b) = (self.metrics(previous), self.metrics(target));
             let growing = b.width * b.height > a.width * a.height;
+            // 展开时有没看过的 AI 消息：直接打开 AI 动态（拖文件进来时除外）
+            if target == IslandState::Expanded && self.ai_unread() && !self.drag_over {
+                self.tab = Tab::Ai;
+            }
+            // 看着 AI 动态收起：算都看过了
+            if previous == IslandState::Expanded && self.tab == Tab::Ai {
+                self.mark_ai_read();
+            }
             if target == IslandState::Expanded {
                 if self.tab == Tab::Monitor {
                     self.monitor.sample(tick());
@@ -515,7 +521,9 @@ impl App {
     /// 放音乐时也收成细线：播放中的细线染成封面主题色。
     fn update_line_tint(&self) {
         let playing = self.media.as_ref().is_some_and(|m| m.playing);
-        let tint = (self.settings.media_as_line && playing).then_some(self.accent);
+        // 放音乐时也收成细线：染成封面主题色；有没看过的 AI 消息：染成强调色
+        let tint =
+            ((self.settings.media_as_line && playing) || self.ai_unread()).then_some(self.accent);
         let _ = self
             .scene
             .set_line_tint(tint, self.state == IslandState::Idle);
@@ -560,7 +568,13 @@ impl App {
         let r = self
             .gfx
             .draw(&self.scene.clock.surface, self.scene.scale(), |p| {
-                views::draw_clock(p, &self.palette, t.wHour, t.wMinute)
+                views::draw_clock(
+                    p,
+                    &self.palette,
+                    t.wHour,
+                    t.wMinute,
+                    self.ai_unread().then_some(self.accent),
+                )
             });
         if let Err(e) = r {
             log::warn(&format!("绘制时钟失败：{e}"));
@@ -621,9 +635,45 @@ impl App {
             };
             log::info(&format!("AI 消息：{}（{}）", event.title(), event.project));
             let (title, body) = (event.title(), event.body());
-            self.ai.insert(0, event);
-            self.ai.truncate(50);
-            self.show_notification_for(GLYPH_AI, &title, &body, AI_NOTIFICATION_MS);
+            self.add_ai(&title, &body, None);
+            self.show_notification_for(views::GLYPH_AI, &title, &body, AI_NOTIFICATION_MS);
+        }
+    }
+
+    /// 记一条 AI 消息（没看过），刷新所有显示"有新消息"的地方。
+    fn add_ai(&mut self, title: &str, body: &str, icon: Option<std::sync::Arc<super::media::Art>>) {
+        let t = unsafe { GetLocalTime() };
+        self.ai.insert(
+            0,
+            views::AiItem {
+                title: title.into(),
+                body: body.into(),
+                at: format!("{:02}:{:02}", t.wHour, t.wMinute),
+                read: false,
+                icon,
+            },
+        );
+        self.ai.truncate(50);
+        self.ai_changed();
+    }
+
+    pub fn ai_unread(&self) -> bool {
+        self.ai.iter().any(|m| !m.read)
+    }
+
+    fn ai_changed(&mut self) {
+        self.redraw_clock();
+        self.redraw_compact();
+        self.update_line_tint();
+        if self.state == IslandState::Expanded {
+            self.redraw_expanded();
+        }
+    }
+
+    fn mark_ai_read(&mut self) {
+        if self.ai_unread() {
+            self.ai.iter_mut().for_each(|m| m.read = true);
+            self.ai_changed();
         }
     }
 
@@ -652,6 +702,9 @@ impl App {
             NOTIFICATION_MS
         };
         log::info(&format!("系统通知：{}（{aumid}）", info.name));
+        if is_ai {
+            self.add_ai(&title, &body, info.icon.clone());
+        }
         self.show_notification_with(GLYPH_BELL, info.icon, &title, &body, ms);
     }
 
@@ -739,6 +792,7 @@ impl App {
             weekday: t.wDayOfWeek,
             pinned: self.pinned,
             hovered: self.hovered,
+            ai: &self.ai,
             pressed: self.pressed,
         }
     }
@@ -1378,6 +1432,19 @@ impl App {
                     .min(self.clips.items.len().saturating_sub(CLIP_ROWS));
                 self.save_clips();
                 self.hovered = None;
+            }
+            Hit::AiItem(i) => {
+                if let Some(m) = self.ai.get_mut(i)
+                    && !m.read
+                {
+                    m.read = true;
+                    self.ai_changed();
+                }
+            }
+            Hit::AiReadAll => self.mark_ai_read(),
+            Hit::AiClear => {
+                self.ai.clear();
+                self.ai_changed();
             }
             Hit::ClipClear => {
                 self.clips.items.clear();
