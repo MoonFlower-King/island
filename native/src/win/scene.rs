@@ -29,7 +29,10 @@ use island::metrics::{self, Edge, Metrics, Rect, WINDOW_HEIGHT, WINDOW_WIDTH};
 
 use super::gfx::Gfx;
 
-/// 弹簧参数：周期（秒）和阻尼比。展开时带一点回弹，收起时干脆利落。
+/// 弹簧参数：合成器的 Period（秒）和阻尼比。展开时带一点回弹，收起时干脆利落。
+///
+/// 合成器的 Period 是 1/ω（不是一次完整振荡的时间），所以和 WPF 版的 response（≈ 完成时间）
+/// 差 2π 倍：WPF 展开 0.42 秒 → 0.42 / 2π ≈ 0.067。冒烟测试会在屏幕上实际量一次用时。
 #[derive(Clone, Copy)]
 pub struct Spring {
     pub period: f32,
@@ -37,11 +40,11 @@ pub struct Spring {
 }
 
 pub const EXPAND: Spring = Spring {
-    period: 0.40,
-    damping: 0.72,
+    period: 0.42 / std::f32::consts::TAU,
+    damping: 0.74,
 };
 pub const COLLAPSE: Spring = Spring {
-    period: 0.30,
+    period: 0.30 / std::f32::consts::TAU,
     damping: 0.92,
 };
 

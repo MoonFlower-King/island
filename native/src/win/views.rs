@@ -224,6 +224,14 @@ impl Targets {
             .map(|(_, h)| *h)
     }
 
+    pub fn rect(&self, hit: Hit) -> Option<Rect> {
+        self.items
+            .iter()
+            .rev()
+            .find(|(_, h)| *h == hit)
+            .map(|(r, _)| *r)
+    }
+
     pub fn any(&self, f: impl Fn(Hit) -> bool) -> bool {
         self.items.iter().any(|(_, h)| f(*h))
     }
