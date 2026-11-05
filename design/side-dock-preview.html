@@ -94,6 +94,7 @@ header p { margin: 4px 0 0; color: var(--muted); max-width: 70ch; }
 .eq.v i { height: 3px; animation-name: eqv; }
 .eq.paused i { animation-play-state: paused; }
 @keyframes eq { 0%,100% { height: 30%; } 50% { height: 100%; } }
+@keyframes breathe { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
 @keyframes eqv { 0%,100% { width: 30%; } 50% { width: 100%; } }
 .track { border-radius: 99px; background: var(--i-track); position: absolute; overflow: hidden; }
 .track b { position: absolute; border-radius: 99px; background: var(--i-fg); }
@@ -165,7 +166,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
 <div class="wrap">
   <header>
     <h1>灵动岛预览</h1>
-    <p>模拟桌面上的岛可以直接操作：鼠标移上去展开，展开后每个标签都能用；在岛上滚动滚轮调音量；把电脑里的文件拖到岛上会放进中转站；在这页上复制的文字会出现在剪贴板标签里。停在左侧或右侧时，收起的胶囊都是竖着的。</p>
+    <p>模拟桌面上的岛可以直接操作：鼠标移上去展开，展开后每个标签都能用；在岛上滚动滚轮调音量；把电脑里的文件拖到岛上会放进中转站；在这页上复制的文字会出现在剪贴板标签里；Claude、Codex 等 AI 完成任务时，岛上会弹出提醒，没看过的会留一个小点。停在左侧或右侧时，收起的胶囊都是竖着的。</p>
   </header>
 
   <div class="screen" id="screen">
@@ -201,6 +202,15 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
         <button class="chip action" id="demoNote">弹出一条通知</button>
         <button class="chip action" id="demoDevice">切换到耳机</button>
         <button class="chip action" id="demoPlay">播放 / 暂停</button>
+      </div>
+    </div>
+    <div class="crow"><span class="label">AI 消息</span>
+      <div class="chips" id="aiDemos">
+        <button class="chip action" data-app="claude" data-kind="done">Claude 完成任务</button>
+        <button class="chip action" data-app="codex" data-kind="done">Codex 完成任务</button>
+        <button class="chip action" data-app="workbuddy" data-kind="done">WorkBuddy 完成任务</button>
+        <button class="chip action" data-app="dsh" data-kind="done">dsh 完成任务</button>
+        <button class="chip action" data-app="claude" data-kind="ask">Claude 等你确认</button>
       </div>
     </div>
     <div class="crow"><span class="label">壁纸</span>
@@ -274,6 +284,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     img: '<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 17l-5-5-9 8"/>',
     gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',
     check: '<path d="M5 12.5l4.5 4.5L19 7.5" stroke-width="2.4"/>',
+    spark: '<path d="M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z"/>',
   };
   const ico = (n, size, extra) => `<svg class="ico${n === "play" ? " solid" : ""}" viewBox="0 0 24 24" style="font-size:${size}px;${extra || ""}" aria-hidden="true">${P[n]}</svg>`;
 
@@ -283,6 +294,14 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     { title: "夜曲", artist: "周杰伦", album: "十一月的萧邦", len: 226, a: "#1c3d6e", b: "#6fa8dc", accent: "#6fa8dc" },
     { title: "Blinding Lights", artist: "The Weeknd", album: "After Hours", len: 200, a: "#5b1a1a", b: "#e8453c", accent: "#ff6b5c" },
   ];
+  // 各家 AI 工具：用字母徽标和颜色区分（不用官方图标）
+  const AI_APPS = {
+    claude:    { name: "Claude",    letter: "C", color: "#D97757" },
+    codex:     { name: "Codex",     letter: "X", color: "#10A37F" },
+    workbuddy: { name: "WorkBuddy", letter: "W", color: "#3B82F6" },
+    dsh:       { name: "dsh",       letter: "D", color: "#8B5CF6" },
+  };
+  const badge = (app, size) => { const a = AI_APPS[app]; return `<span style="width:${size}px;height:${size}px;border-radius:50%;background:${a.color};color:#fff;display:grid;place-items:center;font-weight:700;font-size:${Math.round(size * 0.5)}px;flex:none;font-family:var(--font-ui)">${a.letter}</span>`; };
   const PRESET_BG = ["#000000", "#1C1C1E", "#0B1F3A", "#2A1B47", "#F7F7F8", "#FFF4DE"];
   const PRESET_FG = ["#FFFFFF", "#E5E5EA", "#FFD60A", "#1C1C1E", "#3A2E1F", "#0B1F3A"];
   const PRESET_AC = ["#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#64D2FF"];
@@ -314,6 +333,11 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     tr: { input: "今天天气很好，适合出去走走。", output: "", status: "idle", settings: false, provider: "anthropic", url: "", model: "", key: "" },
     mon: { cpu: 18, mem: 0.52, up: 12, down: 340 },
     toast: "",
+    // AI 动态：完成任务、等你确认。没看过的会在收起的胶囊上留一个小点
+    ai: [
+      { app: "codex", kind: "done", title: "任务完成", body: "已修复登录页的表单校验，3 个测试全部通过。", project: "web-shop", at: "09:41", read: true },
+      { app: "claude", kind: "done", title: "任务完成", body: "已经把侧边停靠的竖胶囊做进预览页，并提交到分支。", project: "island", at: "09:20", read: true },
+    ],
   };
   // 记住页面上的选择（只是方便，失败也没关系）
   const KEEP = ["dock", "wall", "thick", "length", "theme", "custom", "idleLine", "mediaLine", "tab"];
@@ -414,6 +438,17 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     }
     if (st === "note") {
       const n = S.note || { icon: "mail", title: "新消息", body: "这是一条来自灵动岛的演示通知" };
+      const head = (size) => n.app ? badge(n.app, size) : `<span class="t" style="width:${size}px;height:${size}px;border-radius:50%;background:var(--i-track);display:grid;place-items:center;flex:none">${ico(n.icon, size / 2)}</span>`;
+      if (n.app) return vert
+        ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:10px">
+             ${head(32)}
+             <div style="flex:1;display:flex;flex-direction:row-reverse;gap:6px;min-height:0">
+               <span class="t vtext" style="font-size:13px;font-weight:600;max-height:100%">${esc(n.title)}</span>
+               <span class="s vtext" style="font-size:12px;max-height:100%">${esc(n.body)}</span></div></div>`
+        : `<div class="abs" style="inset:0;display:flex;align-items:center;gap:12px;padding:0 20px 0 14px">
+             ${head(36)}
+             <div style="min-width:0;flex:1"><div class="t" style="font-size:13.5px;font-weight:600">${esc(n.title)}</div>
+             <div class="s" style="font-size:12.5px">${esc(n.body)}</div></div></div>`;
       return vert
         ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:10px">
              <span class="t" style="width:32px;height:32px;border-radius:50%;background:var(--i-track);display:grid;place-items:center;flex:none">${ico(n.icon, 16)}</span>
@@ -428,12 +463,22 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     return "";
   }
 
+  // 没看过的 AI 消息：收起的胶囊上留一个小点（细线整根染色并轻轻呼吸）
+  function withUnread(st, html, W, H) {
+    const u = firstUnread(); if (!u || st === "note" || st === "level") return html;
+    const c = AI_APPS[u.app].color;
+    if (st === "line") return html + `<div class="abs" style="inset:0;background:${c};animation:breathe 1.6s ease-in-out infinite"></div>`;
+    const vert = side();
+    const pos = vert ? `left:50%;bottom:${st === "music" ? 34 : 8}px;transform:translateX(-50%)` : `right:${st === "music" ? 34 : 9}px;top:50%;transform:translateY(-50%)`;
+    return html + `<span class="abs" style="${pos};width:7px;height:7px;border-radius:50%;background:${c};box-shadow:0 0 0 2px var(--i-bg)"></span>`;
+  }
+
   // ───────── 展开面板：440 × 260，坐标和 views.rs 一致 ─────────
-  const TABS = [["music", "music", "音乐"], ["todo", "todo", "待办"], ["clipboard", "clip", "剪贴板"], ["shelf", "shelf", "中转站"], ["translate", "tr", "翻译"], ["monitor", "mon", "系统监控"], ["appearance", "pal", "外观"]];
+  const TABS = [["music", "music", "音乐"], ["todo", "todo", "待办"], ["clipboard", "clip", "剪贴板"], ["shelf", "shelf", "中转站"], ["translate", "tr", "翻译"], ["monitor", "mon", "系统监控"], ["appearance", "pal", "外观"], ["ai", "spark", "AI 动态"]];
   function header() {
     const d = new Date(), [hh, mm] = hm();
     const tabs = TABS.map(([id, ic, name], i) =>
-      `<button class="p-btn ${S.tab === id ? "sel" : "dim"}" data-act="tab" data-v="${id}" title="${name}" aria-label="${name}" style="left:${16 + i * 40}px;top:12px;width:36px;height:28px">${ico(ic, 15)}</button>`).join("");
+      `<button class="p-btn ${S.tab === id ? "sel" : "dim"}" data-act="tab" data-v="${id}" title="${name}" aria-label="${name}" style="left:${16 + i * 36}px;top:12px;width:32px;height:28px">${ico(ic, 15)}${id === "ai" && unread() ? `<span style="position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:${AI_APPS[firstUnread().app].color}"></span>` : ""}</button>`).join("");
     return tabs +
       `<button class="p-btn ${S.pinned ? "" : "dim"}" data-act="pin" title="${S.pinned ? "取消置顶" : "置顶（鼠标移开也不收起）"}" aria-label="置顶" style="left:304px;top:13px;width:26px;height:26px;${S.pinned ? "color:var(--i-accent)" : ""}">${ico("pin", 13)}</button>
        <span class="abs f" style="left:334px;top:12px;width:36px;height:28px;line-height:28px;text-align:right;font-size:11px">${WEEK[d.getDay()]}</span>
@@ -550,8 +595,25 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     html += label(16, y + 56, "位置") + seg(72, y + 56, [["top", "顶部"], ["left", "左侧"], ["right", "右侧"]], S.dock, "dock");
     return html;
   }
+  function unread() { return S.ai.some((a) => !a.read); }
+  function firstUnread() { return S.ai.find((a) => !a.read); }
+  function tabAI() {
+    if (!S.ai.length) return `<div class="abs s" style="left:0;right:0;top:110px;text-align:center;font-size:13px">还没有 AI 消息</div><div class="abs f" style="left:0;right:0;top:134px;text-align:center;font-size:11px">Claude、Codex 等完成任务或等你确认时会显示在这里</div>`;
+    const n = S.ai.filter((a) => !a.read).length;
+    const rows = S.ai.slice(0, 4).map((a, i) =>
+      `<div class="row" data-act="ai-read" data-i="${i}" style="top:${78 + i * 42}px;height:40px;align-items:center">
+         ${badge(a.app, 24)}
+         <div style="min-width:0;flex:1;display:grid">
+           <span class="t" style="font-size:12.5px;font-weight:${a.read ? 500 : 700}">${AI_APPS[a.app].name} · ${esc(a.project)} · ${a.kind === "ask" ? "等你确认" : esc(a.title)}</span>
+           <span class="s" style="font-size:11.5px">${esc(a.body)}</span>
+         </div>
+         <span class="f" style="font-size:10.5px;align-self:flex-start;margin-top:5px">${esc(a.at)}</span>
+         ${a.read ? "" : `<span style="width:7px;height:7px;border-radius:50%;background:${AI_APPS[a.app].color};flex:none"></span>`}</div>`).join("");
+    return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${n ? `${n} 条没看过` : "都看过了"} · 点一条标记已读</span>
+      <div class="seg" style="left:${n ? 344 : 368}px;top:50px">${n ? `<button data-act="ai-readall">全部已读</button>` : `<button data-act="ai-clear">清空</button>`}</div>${rows}`;
+  }
   function panelHTML() {
-    const body = { music: tabMusic, todo: tabTodo, clipboard: tabClipboard, shelf: tabShelf, translate: tabTranslate, monitor: tabMonitor, appearance: tabAppearance }[S.tab]();
+    const body = { ai: tabAI, music: tabMusic, todo: tabTodo, clipboard: tabClipboard, shelf: tabShelf, translate: tabTranslate, monitor: tabMonitor, appearance: tabAppearance }[S.tab]();
     return header() + body + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : "");
   }
 
@@ -572,7 +634,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       inner.innerHTML = panelHTML();
       if (id) { const b = document.getElementById(id); if (b) { b.focus({ preventScroll: true }); if (sel && b.setSelectionRange) try { b.setSelectionRange(sel[0], sel[1]); } catch (e) {} } }
     } else {
-      inner.innerHTML = collapsedHTML(st, W, H);
+      inner.innerHTML = withUnread(st, collapsedHTML(st, W, H), W, H);
     }
     if (restart) { el.classList.remove("on"); void el.offsetWidth; el.classList.add("on"); }
   }
@@ -680,6 +742,16 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     S.note = { icon, title, body }; update(true);
     noteTimer = setTimeout(() => { S.note = null; update(); }, 3500);
   }
+  function notifyAI(app, kind, body, project) {
+    const [hh, mm] = hm();
+    const title = `${AI_APPS[app].name} ${kind === "ask" ? "等你确认" : "完成了任务"}`;
+    S.ai.unshift({ app, kind, title: kind === "ask" ? "等你确认" : "任务完成", body, project, at: `${hh}:${mm}`, read: false });
+    S.ai = S.ai.slice(0, 50);
+    clearTimeout(noteTimer);
+    S.note = { app, title, body: `${project} · ${body}` }; update(true); rerenderAll();
+    // AI 消息多停一会儿（6 秒），之后收起的胶囊上还会留一个小点，直到你看过
+    noteTimer = setTimeout(() => { S.note = null; update(true); }, 6000);
+  }
   function showLevel() {
     if (S.hover || S.pinned) return;
     clearTimeout(levelTimer);
@@ -689,6 +761,22 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   document.getElementById("demoNote").addEventListener("click", () => notify("mail", "新消息", "这是一条来自灵动岛的演示通知"));
   document.getElementById("demoDevice").addEventListener("click", () => notify("head", "声音输出", "已切换到 AirPods Pro"));
   document.getElementById("demoPlay").addEventListener("click", () => togglePlay());
+  const AI_SAMPLES = {
+    claude: [["island", "已经把 AI 消息提醒做进预览页，等你看看效果。"], ["blog", "文章的错别字都改好了，顺便补了两张配图的说明。"]],
+    codex: [["web-shop", "购物车的金额计算已修好，新增 4 个测试并全部通过。"], ["api", "接口文档已按最新的字段更新。"]],
+    workbuddy: [["周报", "本周周报已整理好，放在桌面「周报.docx」。"], ["会议纪要", "下午的会议纪要已生成，共 6 条待办。"]],
+    dsh: [["数据清洗", "表格里重复的 312 行已去掉，结果另存为新文件。"]],
+  };
+  const ASK = { claude: ["island", "想运行 npm install，需要你同意。"] };
+  const sampleIdx = {};
+  document.getElementById("aiDemos").addEventListener("click", (e) => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    const app = b.dataset.app, kind = b.dataset.kind;
+    let pick;
+    if (kind === "ask") pick = ASK[app];
+    else { const list = AI_SAMPLES[app]; sampleIdx[app] = ((sampleIdx[app] ?? -1) + 1) % list.length; pick = list[sampleIdx[app]]; }
+    notifyAI(app, kind, pick[1], pick[0]);
+  });
   function togglePlay() {
     S.playing = !S.playing;
     if (!S.playing) S.lingerUntil = Date.now() + 8000; // 暂停后音乐胶囊再停留 8 秒
@@ -701,7 +789,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   island.addEventListener("pointerenter", (e) => {
     pointerInside = true; clearTimeout(outT);
     if (e.pointerType === "touch") return;
-    inT = setTimeout(() => { if (!S.hover) { S.hover = true; S.level = 0; update(true); } }, 100);
+    inT = setTimeout(() => { if (!S.hover) { S.hover = true; S.level = 0; if (unread()) S.tab = "ai"; update(true); } }, 100);
   });
   island.addEventListener("pointerleave", (e) => {
     pointerInside = false; clearTimeout(inT);
@@ -739,6 +827,9 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     const song = SONGS[S.song];
     switch (act) {
       case "tab": S.tab = v; S.toast = ""; save(); break;
+      case "ai-read": S.ai[i].read = true; break;
+      case "ai-readall": S.ai.forEach((a) => (a.read = true)); break;
+      case "ai-clear": S.ai = []; break;
       case "pin": S.pinned = !S.pinned; break;
       case "play": togglePlay(); return;
       case "prev": S.song = (S.song + SONGS.length - 1) % SONGS.length; S.pos = 0; break;
