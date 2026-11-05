@@ -109,6 +109,8 @@ pub struct App {
     drag_over: bool,
     /// 在中转站某一行按下的位置（窗口 DIP），移动够远就开始拖出。
     drag_start: Option<(f32, f32)>,
+    /// 正在拖音乐进度条：预览的位置（0–1）。
+    seek_preview: Option<f64>,
     /// 在面板空白处按下：拖动整个岛，松手后停靠到最近的屏幕边。
     /// (按下时的光标、按下时的窗口位置、是否已经开始拖动)，都是物理像素。
     moving: Option<(POINT, POINT, bool)>,
@@ -312,6 +314,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             shelf_scroll: 0,
             drag_over: false,
             drag_start: None,
+            seek_preview: None,
             moving: None,
             drag_out: None,
             editing: None,
@@ -780,6 +783,7 @@ impl App {
             media: self.media.as_ref(),
             progress: self.progress(),
             volume: self.last_volume,
+            seek: self.seek_preview,
             clips: &self.clips.items,
             clip_scroll: self.clip_scroll,
             todos: &self.todos.items,
@@ -1252,6 +1256,10 @@ impl App {
             self.drag_volume(lx);
             return;
         }
+        if self.pressed == Some(Hit::Seek) {
+            self.drag_seek(lx);
+            return;
+        }
         if let Some(Hit::Field(f)) = self.pressed {
             self.place_caret(f, lx, ly, true);
             return;
@@ -1283,6 +1291,31 @@ impl App {
         }
     }
 
+    /// 拖进度条：只预览，松开时才真的跳过去（拖动中不停地跳会让播放器卡顿）。
+    fn drag_seek(&mut self, lx: f32) {
+        let track = views::PROGRESS_BAR;
+        self.seek_preview = Some(((lx - track.x) / track.w).clamp(0.0, 1.0) as f64);
+        self.redraw_expanded();
+    }
+
+    fn commit_seek(&mut self) {
+        let Some(fraction) = self.seek_preview.take() else {
+            return;
+        };
+        if let Some(m) = self
+            .media
+            .as_mut()
+            .filter(|m| m.can_seek && m.duration > 0.0)
+        {
+            let seconds = fraction * m.duration;
+            media::send(Command::Seek(seconds));
+            // 先按新位置显示，播放器确认后会再发一次进度
+            m.position = seconds;
+            m.taken_at = tick();
+        }
+        self.redraw_expanded();
+    }
+
     fn drag_volume(&mut self, lx: f32) {
         let track = views::VOLUME_TRACK;
         let value = ((lx - track.x) / track.w).clamp(0.0, 1.0) as f64;
@@ -1309,6 +1342,7 @@ impl App {
             unsafe { SetCapture(self.hwnd) };
             match hit {
                 Some(Hit::Volume) => self.drag_volume(lx),
+                Some(Hit::Seek) => self.drag_seek(lx),
                 Some(Hit::ShelfItem(_)) => {
                     self.drag_start = Some((x, y));
                     self.redraw_expanded();
@@ -1427,6 +1461,10 @@ impl App {
         }
         self.drag_start = None;
         let (lx, ly) = self.local(x, y);
+        if pressed == Hit::Seek {
+            self.commit_seek();
+            return;
+        }
         if matches!(pressed, Hit::Field(_) | Hit::ShelfItem(_)) {
             if matches!(pressed, Hit::ShelfItem(_)) {
                 self.redraw_expanded();
@@ -1446,7 +1484,7 @@ impl App {
             Hit::PlayPause => media::send(Command::PlayPause),
             Hit::Next => media::send(Command::Next),
             Hit::Previous => media::send(Command::Previous),
-            Hit::Volume => {}
+            Hit::Volume | Hit::Seek => {}
             Hit::ClipItem(i) => self.copy_clip(i),
             Hit::ClipDelete(i) => {
                 self.clips.remove(i);

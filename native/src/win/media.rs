@@ -63,6 +63,8 @@ pub struct Snapshot {
     pub taken_at: u64,
     pub can_previous: bool,
     pub can_next: bool,
+    /// 播放器允许跳到任意位置（拖进度条）。
+    pub can_seek: bool,
     pub art: Option<std::sync::Arc<Art>>,
     pub accent: Option<Rgb>,
 }
@@ -78,6 +80,7 @@ impl Snapshot {
             && self.known_duration == other.known_duration
             && self.can_previous == other.can_previous
             && self.can_next == other.can_next
+            && self.can_seek == other.can_seek
             && self.accent == other.accent
             && self.art.as_ref().map(|a| a.id) == other.art.as_ref().map(|a| a.id)
             // 拖动了进度条：位置对不上，要重画
@@ -275,6 +278,7 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
         taken_at: now(),
         can_previous: controls.IsPreviousEnabled().unwrap_or(true),
         can_next: controls.IsNextEnabled().unwrap_or(true),
+        can_seek: controls.IsPlaybackPositionEnabled().unwrap_or(false),
         art,
         accent,
     })
@@ -356,6 +360,8 @@ pub enum Command {
     PlayPause,
     Next,
     Previous,
+    /// 跳到这个位置（秒）。
+    Seek(f64),
 }
 
 /// 发送播放控制，不等待结果（结果会以事件的形式回来）。
@@ -367,5 +373,9 @@ pub fn send(command: Command) {
         Command::PlayPause => session.TryTogglePlayPauseAsync().map(drop),
         Command::Next => session.TrySkipNextAsync().map(drop),
         Command::Previous => session.TrySkipPreviousAsync().map(drop),
+        // 系统媒体控制的位置单位是 100 纳秒
+        Command::Seek(seconds) => session
+            .TryChangePlaybackPositionAsync((seconds.max(0.0) * 1e7) as i64)
+            .map(drop),
     };
 }
