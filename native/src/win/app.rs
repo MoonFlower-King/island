@@ -105,6 +105,9 @@ pub struct App {
     drag_over: bool,
     /// 在中转站某一行按下的位置（窗口 DIP），移动够远就开始拖出。
     drag_start: Option<(f32, f32)>,
+    /// 在面板空白处按下：拖动整个岛，松手后停靠到最近的屏幕边。
+    /// (按下时的光标、按下时的窗口位置、是否已经开始拖动)，都是物理像素。
+    moving: Option<(POINT, POINT, bool)>,
     /// 等消息处理完再开始的拖出（拖动期间系统跑自己的消息循环，不能借着 App）。
     drag_out: Option<(usize, String)>,
     /// 正在编辑的输入框。有焦点时窗口才变成可激活的，键盘输入才会进来。
@@ -299,6 +302,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             shelf_scroll: 0,
             drag_over: false,
             drag_start: None,
+            moving: None,
             drag_out: None,
             editing: None,
             composition: (String::new(), 0),
@@ -663,6 +667,38 @@ impl App {
 
     pub fn has_target(&self, f: impl Fn(Hit) -> bool) -> bool {
         self.targets.any(f)
+    }
+
+    /// 展开面板里一处没有按钮的空白（窗口内物理像素），从下往上找。
+    pub fn blank_point(&self) -> Option<(i32, i32)> {
+        let f = self.metrics(self.state).frame(self.edge());
+        let s = self.scene.scale();
+        let mut y = f.h - 12.0;
+        while y > 12.0 {
+            let mut x = 24.0;
+            while x < f.w - 24.0 {
+                if self.targets.hit(x, y).is_none() {
+                    return Some((
+                        ((f.x + x) * s).round() as i32,
+                        ((f.y + y) * s).round() as i32,
+                    ));
+                }
+                x += 16.0;
+            }
+            y -= 16.0;
+        }
+        None
+    }
+
+    /// 某个按钮的中心，窗口内物理像素（冒烟测试用来模拟真实点击）。
+    pub fn target_point(&self, hit: Hit) -> Option<(i32, i32)> {
+        let r = self.targets.rect(hit)?;
+        let f = self.metrics(self.state).frame(self.edge());
+        let s = self.scene.scale();
+        Some((
+            ((f.x + r.x + r.w / 2.0) * s).round() as i32,
+            ((f.y + r.y + r.h / 2.0) * s).round() as i32,
+        ))
     }
 
     pub fn monitor_sample(&self) -> Option<system::Sample> {
@@ -1031,8 +1067,11 @@ impl App {
         let busy = near || self.pressed.is_some() || self.state == IslandState::Expanded;
         self.set_poll_interval(if busy { POLL_MS } else { POLL_FAR_MS });
         self.set_interactive(inside || self.pressed.is_some());
-        let hold =
-            self.menu_open || self.pressed.is_some() || self.editing.is_some() || self.drag_over;
+        let hold = self.menu_open
+            || self.pressed.is_some()
+            || self.moving.is_some()
+            || self.editing.is_some()
+            || self.drag_over;
         // 刚用滚轮调过音量：先不展开
         let wants_inside = inside && tick() >= self.wheel_until;
         if self.hover.update(wants_inside, hold, tick()) {
@@ -1044,6 +1083,10 @@ impl App {
     }
 
     fn on_mouse_move(&mut self, x: f32, y: f32) {
+        if self.moving.is_some() {
+            self.drag_window();
+            return;
+        }
         if self.state != IslandState::Expanded {
             return;
         }
@@ -1128,11 +1171,97 @@ impl App {
                 _ => self.redraw_expanded(),
             }
         } else {
+            // 空白处：按住拖动可以把岛挪到别的边（或别的屏幕）
+            let mut pt = POINT::default();
+            unsafe {
+                let _ = GetCursorPos(&mut pt);
+                SetCapture(self.hwnd);
+            }
+            self.moving = Some((pt, self.origin, false));
             self.redraw_expanded();
         }
     }
 
+    /// 拖动中：窗口跟着光标走。移动不到系统拖动阈值时不算拖动（只是点了一下）。
+    fn drag_window(&mut self) {
+        let Some((start, origin, active)) = self.moving else {
+            return;
+        };
+        let mut pt = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut pt);
+        }
+        let (dx, dy) = (pt.x - start.x, pt.y - start.y);
+        let far = unsafe {
+            dx.abs() >= GetSystemMetrics(SM_CXDRAG) || dy.abs() >= GetSystemMetrics(SM_CYDRAG)
+        };
+        if !active && !far {
+            return;
+        }
+        self.moving = Some((start, origin, true));
+        let (x, y) = (origin.x + dx, origin.y + dy);
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOPMOST),
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+        self.origin = POINT { x, y };
+    }
+
+    /// 拖动松手：停靠到光标所在屏幕离得最近的那条边。
+    fn finish_move(&mut self) {
+        let mut pt = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut pt);
+        }
+        self.drop_at(pt);
+    }
+
+    /// 停靠到某一点（物理像素）所在屏幕离它最近的那条边。
+    pub fn drop_at(&mut self, pt: POINT) {
+        let monitor = unsafe { MonitorFromPoint(pt, MONITOR_DEFAULTTONEAREST) };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        let _ = unsafe { GetMonitorInfoW(monitor, &mut info) };
+        let work = info.rcWork;
+        let edge = island::metrics::nearest_edge(
+            pt.x - work.left,
+            pt.y - work.top,
+            work.right - work.left,
+        );
+        let monitors = system::monitors();
+        if let Some(i) = monitors.iter().position(|(m, _)| *m == monitor) {
+            // 主屏幕不单独记名字，拔掉别的屏幕后也能回到主屏幕
+            self.settings.monitor = if i == 0 {
+                String::new()
+            } else {
+                monitors[i].1.clone()
+            };
+        }
+        self.set_dock(edge);
+        self.save_settings();
+        self.update_state();
+        self.redraw_expanded();
+    }
+
     fn on_mouse_up(&mut self, x: f32, y: f32) {
+        if let Some((_, _, active)) = self.moving.take() {
+            unsafe {
+                let _ = ReleaseCapture();
+            }
+            if active {
+                self.finish_move();
+            }
+            return;
+        }
         let Some(pressed) = self.pressed.take() else {
             return;
         };

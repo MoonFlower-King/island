@@ -42,6 +42,10 @@ pub struct Smoke {
     failures: u32,
     started: u64,
     waits: u32,
+    /// 正在测量的动画：(开始时刻, 采样 (毫秒, 宽度 DIP))。开始时刻为 0 表示刚跳到起点、还没开始动画。
+    measure: Option<(u64, Vec<(u64, f32)>)>,
+    /// 各次测量到 95% 的用时（毫秒）。
+    timings: Vec<u64>,
 }
 
 impl Smoke {
@@ -54,6 +58,8 @@ impl Smoke {
             failures: 0,
             started: tick(),
             waits: 0,
+            measure: None,
+            timings: Vec::new(),
         }
     }
 
@@ -440,6 +446,106 @@ fn placed_at(app: &App, edge: Edge) -> bool {
             Edge::Left => r.left == work.left && center_y.abs() <= 1,
             Edge::Right => r.right == work.right && center_y.abs() <= 1,
         }
+    }
+}
+
+/// 截屏数一行里有多少像素是某个颜色（DIP）。
+fn row_width(app: &App, y: f32, color: Rgb) -> f32 {
+    let Some((w, h, pixels)) = capture(app) else {
+        return 0.0;
+    };
+    let s = app.scene.scale();
+    let row = (y * s) as u32;
+    if row >= h {
+        return 0.0;
+    }
+    let count = (0..w)
+        .filter(|x| {
+            let i = ((row * w + x) * 4) as usize;
+            near(Rgb::new(pixels[i + 2], pixels[i + 1], pixels[i]), color, 24)
+        })
+        .count();
+    count as f32 / s
+}
+
+/// 量一次胶囊形变：从 `from` 弹簧动画到 `to`，每帧截屏量面板中间一行的宽度，
+/// 记下到达 95% 的用时和过冲。量完前一直停在这一步；返回下次定时的间隔。
+fn measure(
+    app: &mut App,
+    smoke: &mut Smoke,
+    n: usize,
+    label: &str,
+    (from, to): (Metrics, Metrics),
+    spring: super::scene::Spring,
+) -> u32 {
+    let expanded = IslandState::Expanded.metrics(Edge::Top);
+    let row = expanded.frame(Edge::Top).y + 150.0;
+    let width_at_row = |m: Metrics| {
+        let f = m.frame(Edge::Top);
+        if row >= f.y && row < f.bottom() {
+            m.width
+        } else {
+            0.0
+        }
+    };
+    match smoke.measure.take() {
+        None => {
+            let _ = app.scene.jump_to(from);
+            smoke.measure = Some((0, Vec::new()));
+            smoke.step = n;
+            400
+        }
+        Some((0, v)) => {
+            let _ = app.scene.animate_to(to, spring);
+            smoke.measure = Some((tick(), v));
+            smoke.step = n;
+            1
+        }
+        Some((start, mut v)) => {
+            let t = tick() - start;
+            v.push((t, row_width(app, row, LIGHT.background)));
+            if t < 1500 {
+                smoke.measure = Some((start, v));
+                smoke.step = n;
+                return 1;
+            }
+            let (a, b) = (width_at_row(from), width_at_row(to));
+            let band = (b - a).abs() * 0.05;
+            // 最后一次离开 95% 范围之后的那个采样
+            let settled = v
+                .iter()
+                .rposition(|(_, w)| (w - b).abs() > band)
+                .map_or(0, |i| v.get(i + 1).map_or(t, |s| s.0));
+            let over = v
+                .iter()
+                .map(|(_, w)| if b > a { w - b } else { b - w })
+                .fold(0.0f32, f32::max);
+            smoke.note(&format!(
+                "动画 {label}：到 95% 用时 {settled} ms，过冲 {over:.1} DIP（{} 次采样）",
+                v.len()
+            ));
+            smoke.timings.push(settled);
+            let _ = app.scene.jump_to(IslandState::Idle.metrics(Edge::Top));
+            600
+        }
+    }
+}
+
+/// 发一次真实的鼠标点击（窗口内物理像素），走和用户点击一样的消息路径。
+fn click(app: &App, (x, y): (i32, i32)) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_LBUTTONDOWN, WM_LBUTTONUP};
+    let lp = LPARAM(((y as isize & 0xFFFF) << 16) | (x as isize & 0xFFFF));
+    unsafe {
+        let _ = PostMessageW(Some(app.hwnd), WM_LBUTTONDOWN, WPARAM(1), lp);
+        let _ = PostMessageW(Some(app.hwnd), WM_LBUTTONUP, WPARAM(0), lp);
+    }
+}
+
+fn click_target(app: &App, smoke: &mut Smoke, hit: Hit) {
+    match app.target_point(hit) {
+        Some(p) => click(app, p),
+        None => smoke.check(false, &format!("找到按钮 {hit:?}")),
     }
 }
 
@@ -914,6 +1020,157 @@ pub fn step(app: &mut App) {
                 "记住的屏幕不在了：显示在主屏幕上",
             );
             app.settings.monitor.clear();
+            app.set_palette(LIGHT);
+            next = 600;
+        }
+        // 收放动画的速度：在屏幕上实际量（旧参数只记录，用来对比）
+        71 => {
+            let old = super::scene::Spring {
+                period: 0.40,
+                damping: 0.72,
+            };
+            next = measure(
+                app,
+                &mut smoke,
+                n,
+                "展开（旧参数）",
+                (IslandState::Idle.metrics(Edge::Top), expanded),
+                old,
+            );
+        }
+        72 => {
+            let old = super::scene::Spring {
+                period: 0.30,
+                damping: 0.92,
+            };
+            next = measure(
+                app,
+                &mut smoke,
+                n,
+                "收起（旧参数）",
+                (expanded, IslandState::Idle.metrics(Edge::Top)),
+                old,
+            );
+        }
+        73 => {
+            next = measure(
+                app,
+                &mut smoke,
+                n,
+                "展开",
+                (IslandState::Idle.metrics(Edge::Top), expanded),
+                super::scene::EXPAND,
+            );
+        }
+        74 => {
+            next = measure(
+                app,
+                &mut smoke,
+                n,
+                "收起",
+                (expanded, IslandState::Idle.metrics(Edge::Top)),
+                super::scene::COLLAPSE,
+            );
+        }
+        75 => {
+            let t = smoke.timings.clone();
+            smoke.check(
+                t.len() == 4 && (150..=550).contains(&t[2]) && (30..=400).contains(&t[3]),
+                &format!("展开 0.15–0.55 秒、收起 0.4 秒内到位（{t:?} ms）"),
+            );
+            app.set_palette(DARK);
+            app.set_tab(Tab::Appearance);
+            app.set_pinned(true);
+            next = 600;
+        }
+        // 真实点击"外观 → 位置"的按钮
+        76 => {
+            click_target(app, &mut smoke, Hit::Dock(Edge::Left));
+            next = 800;
+        }
+        77 => {
+            smoke.check(
+                placed_at(app, Edge::Left) && app.settings.dock == Edge::Left,
+                "点「左侧」按钮：停靠到左侧",
+            );
+            click_target(app, &mut smoke, Hit::Dock(Edge::Right));
+            next = 800;
+        }
+        78 => {
+            smoke.check(
+                placed_at(app, Edge::Right) && app.settings.dock == Edge::Right,
+                "点「右侧」按钮：停靠到右侧",
+            );
+            click_target(app, &mut smoke, Hit::Dock(Edge::Top));
+            next = 800;
+        }
+        79 => {
+            smoke.check(
+                placed_at(app, Edge::Top) && app.settings.dock == Edge::Top,
+                "点「顶部」按钮：回到顶部",
+            );
+            app.set_tab(Tab::Music);
+            next = 400;
+        }
+        // 按住面板空白处拖到屏幕左边，松手后停靠到左侧
+        80 => {
+            use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
+            match app.blank_point() {
+                Some((x, y)) => {
+                    let mut r = RECT::default();
+                    unsafe {
+                        let _ = GetWindowRect(app.hwnd, &mut r);
+                        let _ = SetCursorPos(r.left + x, r.top + y);
+                    }
+                    let lp = windows::Win32::Foundation::LPARAM(((y as isize) << 16) | x as isize);
+                    unsafe {
+                        let _ = windows::Win32::UI::WindowsAndMessaging::PostMessageW(
+                            Some(app.hwnd),
+                            windows::Win32::UI::WindowsAndMessaging::WM_LBUTTONDOWN,
+                            windows::Win32::Foundation::WPARAM(1),
+                            lp,
+                        );
+                    }
+                }
+                None => smoke.check(false, "面板里有空白处可以拖"),
+            }
+            next = 300;
+        }
+        81 => {
+            use windows::Win32::Foundation::{LPARAM, POINT, WPARAM};
+            use windows::Win32::UI::WindowsAndMessaging::{
+                PostMessageW, SetCursorPos, WM_LBUTTONUP, WM_MOUSEMOVE,
+            };
+            let work = unsafe {
+                let monitor = MonitorFromPoint(POINT { x: 0, y: 0 }, MONITOR_DEFAULTTOPRIMARY);
+                let mut info = MONITORINFO {
+                    cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                    ..Default::default()
+                };
+                let _ = GetMonitorInfoW(monitor, &mut info);
+                info.rcWork
+            };
+            unsafe {
+                // 分两段移动，像真的拖动一样
+                let _ = SetCursorPos(work.left + 200, work.top + 300);
+                let _ = PostMessageW(Some(app.hwnd), WM_MOUSEMOVE, WPARAM(1), LPARAM(0));
+                let _ = SetCursorPos(work.left + 20, (work.top + work.bottom) / 2);
+                let _ = PostMessageW(Some(app.hwnd), WM_MOUSEMOVE, WPARAM(1), LPARAM(0));
+                let _ = PostMessageW(Some(app.hwnd), WM_LBUTTONUP, WPARAM(0), LPARAM(0));
+            }
+            next = 800;
+        }
+        82 => {
+            smoke.check(
+                placed_at(app, Edge::Left) && app.settings.dock == Edge::Left,
+                &format!("拖到屏幕左边：停靠到左侧（{:?}）", app.settings.dock),
+            );
+            snapshot(app, &mut smoke, "27-dragged-left", None);
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::SetCursorPos(0, 0);
+            }
+            app.set_dock(Edge::Top);
+            app.set_pinned(false);
             smoke.step = 15;
             next = 35;
         }

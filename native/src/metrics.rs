@@ -110,6 +110,19 @@ pub const EXPANDED: Metrics = Metrics {
     top: TOP_MARGIN,
 };
 
+/// 拖动松手时停靠到哪条边：光标离工作区的上、左、右哪条边最近（物理像素，相对工作区左上角）。
+/// 一样近时优先顶部。
+pub fn nearest_edge(x: i32, y: i32, width: i32) -> Edge {
+    let (top, left, right) = (y.max(0), x.max(0), (width - x).max(0));
+    if top <= left && top <= right {
+        Edge::Top
+    } else if left <= right {
+        Edge::Left
+    } else {
+        Edge::Right
+    }
+}
+
 /// 选哪块屏幕：`monitors` 是各屏幕的设备名（主屏幕在第一个），`saved` 是设置里记的设备名。
 /// 没设置过、或者那块屏幕已经拔掉了，就用主屏幕。
 pub fn pick_monitor(saved: &str, monitors: &[String]) -> usize {
@@ -269,6 +282,16 @@ impl Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drops_on_the_nearest_edge() {
+        assert_eq!(nearest_edge(960, 20, 1920), Edge::Top);
+        assert_eq!(nearest_edge(30, 500, 1920), Edge::Left);
+        assert_eq!(nearest_edge(1900, 500, 1920), Edge::Right);
+        assert_eq!(nearest_edge(10, 10, 1920), Edge::Top);
+        assert_eq!(nearest_edge(-50, 400, 1920), Edge::Left);
+        assert_eq!(nearest_edge(2000, 400, 1920), Edge::Right);
+    }
 
     #[test]
     fn picks_the_saved_monitor_or_the_primary_one() {
