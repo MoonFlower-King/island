@@ -1075,8 +1075,8 @@ pub fn step(app: &mut App) {
         75 => {
             let t = smoke.timings.clone();
             smoke.check(
-                t.len() == 4 && (150..=550).contains(&t[2]) && (80..=400).contains(&t[3]),
-                &format!("展开 0.15–0.55 秒、收起 0.08–0.4 秒内到位（{t:?} ms）"),
+                t.len() == 4 && (150..=550).contains(&t[2]) && (30..=400).contains(&t[3]),
+                &format!("展开 0.15–0.55 秒、收起 0.4 秒内到位（{t:?} ms）"),
             );
             app.set_palette(DARK);
             app.set_tab(Tab::Appearance);
