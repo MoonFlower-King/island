@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod drag;
+pub mod forward;
 pub mod gfx;
 pub mod log;
 pub mod media;

@@ -46,6 +46,8 @@ pub struct Smoke {
     measure: Option<(u64, Vec<(u64, f32)>)>,
     /// 各次测量到 95% 的用时（毫秒）。
     timings: Vec<u64>,
+    /// `--notify` 子进程（模拟 AI 工具的钩子）。
+    children: Vec<std::process::Child>,
 }
 
 impl Smoke {
@@ -60,6 +62,7 @@ impl Smoke {
             waits: 0,
             measure: None,
             timings: Vec::new(),
+            children: Vec::new(),
         }
     }
 
@@ -546,6 +549,81 @@ fn click_target(app: &App, smoke: &mut Smoke, hit: Hit) {
     match app.target_point(hit) {
         Some(p) => click(app, p),
         None => smoke.check(false, &format!("找到按钮 {hit:?}")),
+    }
+}
+
+/// 另起一个 `Island.exe --notify ...`（模拟 AI 工具的钩子），可选地往标准输入写一段 JSON。
+fn spawn_notify(args: &[&str], stdin: Option<&str>) -> std::io::Result<std::process::Child> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe()?)
+        .arg("--notify")
+        .args(args)
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .spawn()?;
+    if let (Some(text), Some(mut pipe)) = (stdin, child.stdin.take()) {
+        pipe.write_all(text.as_bytes())?;
+    }
+    Ok(child)
+}
+
+/// 试一下 UserNotificationListener：拿不拿得到、权限状态、能不能读到通知。在单独的线程里跑，最多等 8 秒。
+fn probe_listener() -> String {
+    use windows::UI::Notifications::Management::UserNotificationListener;
+    use windows::UI::Notifications::NotificationKinds;
+    use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let r = (|| -> std::result::Result<String, String> {
+            unsafe { RoInitialize(RO_INIT_MULTITHREADED) }
+                .map_err(|e| format!("RoInitialize {e}"))?;
+            let l = UserNotificationListener::Current().map_err(|e| format!("Current 失败 {e}"))?;
+            let status = l
+                .GetAccessStatus()
+                .map(|s| format!("{}", s.0))
+                .unwrap_or_else(|e| format!("失败 {e}"));
+            let request = l
+                .RequestAccessAsync()
+                .and_then(|op| op.join())
+                .map(|s| format!("{}", s.0))
+                .unwrap_or_else(|e| format!("失败 {e}"));
+            let list = l
+                .GetNotificationsAsync(NotificationKinds::Toast)
+                .and_then(|op| op.join())
+                .and_then(|v| v.Size())
+                .map(|n| format!("{n} 条"))
+                .unwrap_or_else(|e| format!("失败 {e}"));
+            Ok(format!(
+                "权限状态 {status}，请求权限 {request}（0 未指定 1 允许 2 拒绝），读取通知 {list}"
+            ))
+        })();
+        let _ = tx.send(r.unwrap_or_else(|e| e));
+    });
+    rx.recv_timeout(std::time::Duration::from_secs(8))
+        .unwrap_or_else(|_| "超时".into())
+}
+
+/// Windows 把通知存在 %LOCALAPPDATA%\Microsoft\Windows\Notifications\wpndatabase.db（SQLite）。看看读不读得到。
+fn probe_database() -> String {
+    use std::io::Read;
+    let Some(base) = std::env::var_os("LOCALAPPDATA") else {
+        return "没有 LOCALAPPDATA".into();
+    };
+    let path = std::path::Path::new(&base).join(r"Microsoft\Windows\Notifications\wpndatabase.db");
+    let size = std::fs::metadata(&path).map(|m| m.len());
+    let head = std::fs::File::open(&path).and_then(|mut f| {
+        let mut b = [0u8; 16];
+        f.read_exact(&mut b)?;
+        Ok(b)
+    });
+    match (size, head) {
+        (Err(e), _) => format!("不存在或读不到（{e}）"),
+        (Ok(n), Ok(b)) => format!("{n} 字节，文件头 {:?}", String::from_utf8_lossy(&b[..15])),
+        (Ok(n), Err(e)) => format!("{n} 字节，但打不开（{e}）"),
     }
 }
 
@@ -1171,6 +1249,66 @@ pub fn step(app: &mut App) {
             }
             app.set_dock(Edge::Top);
             app.set_pinned(false);
+            next = 400;
+        }
+        // AI 工具的消息：像 Claude Code 的钩子一样，另起一个 Island.exe --notify，JSON 从标准输入传进来
+        83 => {
+            let stop = r###"{"session_id":"s1","cwd":"C:\\work\\island","hook_event_name":"Stop","last_assistant_message":"## 完成\n- 侧边胶囊做好了"}"###;
+            match spawn_notify(&["claude"], Some(stop)) {
+                Ok(c) => smoke.children.push(c),
+                Err(e) => smoke.check(false, &format!("启动 --notify（{e}）")),
+            }
+            next = 1500;
+        }
+        84 => {
+            let first = app.ai.first();
+            smoke.check(
+                first.is_some_and(|e| {
+                    e.title() == "Claude 完成了任务" && e.body() == "island · 完成 侧边胶囊做好了"
+                }),
+                &format!(
+                    "Claude Code 的钩子消息弹出提醒（{:?}）",
+                    first.map(|e| (e.title(), e.body()))
+                ),
+            );
+            smoke.check(
+                app.state == IslandState::Notification,
+                &format!("AI 提醒显示成通知胶囊（{:?}）", app.state),
+            );
+            snapshot(app, &mut smoke, "28-ai-claude", None);
+            // Codex 的 notify：JSON 是最后一个参数
+            let codex = r#"{"type":"agent-turn-complete","cwd":"D:\\shop","last-assistant-message":"购物车已修好"}"#;
+            match spawn_notify(&["codex", codex], None) {
+                Ok(c) => smoke.children.push(c),
+                Err(e) => smoke.check(false, &format!("启动 --notify（{e}）")),
+            }
+            next = 1500;
+        }
+        85 => {
+            let first = app.ai.first();
+            smoke.check(
+                app.ai.len() == 2
+                    && first.is_some_and(|e| {
+                        e.title() == "Codex 完成了任务" && e.body() == "shop · 购物车已修好"
+                    }),
+                &format!(
+                    "Codex 的 notify 消息弹出提醒（{:?}）",
+                    first.map(|e| (e.title(), e.body()))
+                ),
+            );
+            let codes: Vec<Option<i32>> = smoke
+                .children
+                .iter_mut()
+                .map(|c| c.try_wait().ok().flatten().and_then(|s| s.code()))
+                .collect();
+            smoke.check(
+                codes.iter().all(|c| *c == Some(0)),
+                &format!("--notify 送完就退出（退出码 {codes:?}）"),
+            );
+            // 读系统通知：没有打包的 exe 能不能用（只记录，真机上还要再看）
+            smoke.note(&format!("系统通知接口：{}", probe_listener()));
+            smoke.note(&format!("通知数据库：{}", probe_database()));
+            app.dismiss_notification();
             smoke.step = 15;
             next = 35;
         }
