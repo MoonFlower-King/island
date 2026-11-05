@@ -51,7 +51,7 @@ use super::translator::{Draft, Status, TranslateUi};
 use super::views::{
     self, CLIP_ROWS, Editing, Field, Hit, SHELF_ROWS, TODO_ROWS, Tab, Targets, ViewState,
 };
-use super::{log, smoke};
+use super::{forward, log, smoke};
 
 const TIMER_POLL: usize = 1;
 const TIMER_TOPMOST: usize = 2;
@@ -70,6 +70,10 @@ const NEAR_DIP: f32 = 160.0;
 const LEVEL_HUD_MS: u32 = 1600;
 /// 通知停留多久。
 const NOTIFICATION_MS: u32 = 3500;
+/// AI 完成任务的提醒多停一会儿。
+const AI_NOTIFICATION_MS: u32 = 6000;
+/// AI 消息的图标（Segoe Fluent Icons：机器人）。
+const GLYPH_AI: char = '\u{E99A}';
 /// 系统音量多久看一次。
 const VOLUME_POLL_MS: u64 = 110;
 
@@ -133,6 +137,8 @@ pub struct App {
     pub level_hud: Option<(char, f64, String)>,
     /// 正在显示的通知：(图标, 标题, 内容)。
     pub notification: Option<(char, String, String)>,
+    /// 收到过的 AI 消息，新的在前。
+    pub ai: Vec<island::ai::Event>,
     poll_ms: u32,
     last_volume_poll: u64,
     targets: Targets,
@@ -318,6 +324,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             wheel_until: 0,
             level_hud: None,
             notification: None,
+            ai: Vec::new(),
             poll_ms: POLL_MS,
             last_volume_poll: 0,
             targets: Targets::default(),
@@ -564,15 +571,34 @@ impl App {
 
     /// 弹出一条通知，几秒后自动缩回。全屏时不打扰。
     pub fn show_notification(&mut self, glyph: char, title: &str, body: &str) {
+        self.show_notification_for(glyph, title, body, NOTIFICATION_MS);
+    }
+
+    /// 弹出通知，`ms` 毫秒后自动缩回。
+    pub fn show_notification_for(&mut self, glyph: char, title: &str, body: &str, ms: u32) {
         if self.hidden {
             return;
         }
         self.notification = Some((glyph, title.into(), body.into()));
         self.redraw_notification();
         unsafe {
-            SetTimer(Some(self.hwnd), TIMER_NOTIFICATION, NOTIFICATION_MS, None);
+            SetTimer(Some(self.hwnd), TIMER_NOTIFICATION, ms, None);
         }
         self.update_state();
+    }
+
+    /// AI 工具发来的消息（`Island.exe --notify`）：记下来并弹出提醒，比普通通知多停一会儿。
+    pub fn on_ai_messages(&mut self) {
+        for (source, payload) in forward::take() {
+            let Some(event) = island::ai::parse(&source, &payload) else {
+                continue;
+            };
+            log::info(&format!("AI 消息：{}（{}）", event.title(), event.project));
+            let (title, body) = (event.title(), event.body());
+            self.ai.insert(0, event);
+            self.ai.truncate(50);
+            self.show_notification_for(GLYPH_AI, &title, &body, AI_NOTIFICATION_MS);
+        }
     }
 
     pub fn dismiss_notification(&mut self) {
@@ -2335,6 +2361,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_DRAG => {
             with_app(|a| a.on_drag(wparam.0));
+            LRESULT(0)
+        }
+        WM_COPYDATA if forward::receive(hwnd, lparam) => LRESULT(1),
+        forward::WM_AI => {
+            with_app(|a| a.on_ai_messages());
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {

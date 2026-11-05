@@ -8,6 +8,10 @@ mod win;
 #[cfg(windows)]
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    // AI 工具的钩子：把消息转给正在运行的岛，马上退出
+    if args.iter().any(|a| a == "--notify") {
+        std::process::exit(win::forward::run(&args));
+    }
     let smoke = args.iter().position(|a| a == "--smoke-test").map(|i| {
         args.get(i + 1)
             .map(std::path::PathBuf::from)
