@@ -254,6 +254,7 @@ fn fake_media(playing: bool) -> Snapshot {
         taken_at: tick(),
         can_previous: true,
         can_next: true,
+        can_seek: true,
         app: "冒烟测试".into(),
         known_duration: None,
         accent: island::color::dominant(&art.pixels),
@@ -632,10 +633,18 @@ pub fn step(app: &mut App) {
         3 => {
             smoke.check(app.state == IslandState::Expanded, "置顶后展开");
             snapshot(app, &mut smoke, "04-expanded-music", None);
+            // 进度条可以拖：在正中间点一下（真实的鼠标消息），应该跳到一半的位置
+            smoke.check(has_target(app, |h| h == Hit::Seek), "音乐进度条可以拖");
+            click_target(app, &mut smoke, Hit::Seek);
             app.set_palette(LIGHT);
             next = 500;
         }
         4 => {
+            let pos = app.media.as_ref().map(|m| m.position);
+            smoke.check(
+                pos.is_some_and(|p| (p - 107.5).abs() < 3.0),
+                &format!("点进度条中间跳到一半（{pos:?} / 215 秒）"),
+            );
             // 浅色主题下在面板底部空白处取样：应该是浅色背景，说明合成内容真的显示在屏幕上
             let c = snapshot(
                 app,

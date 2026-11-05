@@ -172,6 +172,8 @@ pub enum Hit {
     Next,
     /// 音量条：按下 / 拖动时按横坐标设置音量。
     Volume,
+    /// 进度条：按下 / 拖动时预览位置，松开时跳过去。
+    Seek,
     ClipItem(usize),
     ClipDelete(usize),
     ClipClear,
@@ -275,6 +277,8 @@ pub struct ViewState<'a> {
     /// 播放进度（秒）和总时长（不知道时为 None）。
     pub progress: Option<(f64, Option<f64>)>,
     pub volume: Option<(f64, bool)>,
+    /// 正在拖进度条：预览的位置（0–1）。
+    pub seek: Option<f64>,
     pub clips: &'a [Entry],
     pub clip_scroll: usize,
     pub todos: &'a [Todo],
@@ -800,6 +804,10 @@ fn draw_header(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
 
 // ───────────────────────────── 音乐 ─────────────────────────────
 
+/// 音乐标签里进度条（画出来的细条）和它的可点范围（上下放宽，好按）。
+pub const PROGRESS_BAR: Rect = Rect::new(16.0, 186.0, 408.0, 4.0);
+pub const PROGRESS_TRACK: Rect = Rect::new(16.0, 177.0, 408.0, 22.0);
+
 /// 音乐标签里音量条的轨道（相对胶囊）。
 pub const VOLUME_TRACK: Rect = Rect::new(44.0, 220.0, 330.0, 18.0);
 
@@ -875,10 +883,17 @@ fn draw_player(p: &Painter, m: &Snapshot, v: &ViewState, t: &mut Targets) -> Res
 
     // 进度：播放器不报告进度时由 app 自己估算；不知道总时长时只显示已播放时间
     if let Some((position, duration)) = v.progress {
-        let bar = Rect::new(16.0, 186.0, 408.0, 4.0);
+        let bar = PROGRESS_BAR;
         let small = style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
-        if let Some(total) = duration.filter(|d| *d > 0.0) {
+        let total = duration.filter(|d| *d > 0.0);
+        // 拖动中显示预览的位置
+        let position = match (v.seek, total) {
+            (Some(f), Some(t)) => f * t,
+            _ => position,
+        };
+        if let Some(total) = total {
             let fraction = (position / total).clamp(0.0, 1.0) as f32;
+            let seekable = m.can_seek;
             p.fill_round(bar, 2.0, color(fg, 0.15))?;
             if fraction > 0.0 {
                 p.fill_round(
@@ -886,6 +901,19 @@ fn draw_player(p: &Painter, m: &Snapshot, v: &ViewState, t: &mut Targets) -> Res
                     2.0,
                     color(v.accent, 1.0),
                 )?;
+            }
+            if seekable {
+                // 指着或拖着时出现圆点，提示可以拖
+                let active = matches!(v.hovered, Some(Hit::Seek)) || v.seek.is_some();
+                if active {
+                    p.fill_circle(
+                        bar.x + bar.w * fraction,
+                        bar.y + bar.h / 2.0,
+                        6.0,
+                        color(fg, 1.0),
+                    )?;
+                }
+                t.add(PROGRESS_TRACK, Hit::Seek);
             }
             let right = TextStyle {
                 align: Align::Trailing,
