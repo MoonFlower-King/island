@@ -5,6 +5,7 @@ pub mod appinfo;
 pub mod drag;
 pub mod forward;
 pub mod gfx;
+pub mod jump;
 pub mod log;
 pub mod media;
 pub mod net;

@@ -205,7 +205,7 @@ pub enum Hit {
     SettingsBack,
     SettingsTest,
     SettingsSave,
-    /// AI 动态：标记一条已读、全部已读、清空。
+    /// AI 动态：打开一条（跳回来源）、全部已读、清空。
     AiItem(usize),
     AiReadAll,
     AiClear,
@@ -221,6 +221,8 @@ pub struct AiItem {
     pub read: bool,
     /// 软件自己的图标（桌面版的系统通知才有）。
     pub icon: Option<std::sync::Arc<Art>>,
+    /// 点了跳到哪儿（发消息的终端窗口、软件里的对话）。
+    pub target: super::jump::Target,
 }
 
 pub const AI_ROWS: usize = 4;
@@ -670,7 +672,7 @@ fn draw_ai(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
     }
     let unread = v.ai.iter().filter(|m| !m.read).count();
     let summary = if unread > 0 {
-        format!("{unread} 条没看过 · 点一条标记已读")
+        format!("{unread} 条没看过 · 点一条跳过去")
     } else {
         "都看过了".to_string()
     };

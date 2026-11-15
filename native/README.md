@@ -56,6 +56,8 @@ WPF 版的功能已经全部移植。
 
 桌面版的 AI 软件（Claude、Codex、WorkBuddy、DeepSeek 等）不用设置，它们的系统通知会直接显示在岛上。
 
+点岛上的 AI 消息会跳回对话：`--notify` 接的工具切回当时跑它的终端或编辑器窗口；桌面版软件的通知和在 Windows 通知中心里点它一样，由软件自己打开对应的对话。
+
 ## 架构
 
 ```
@@ -66,6 +68,7 @@ native/src/
 │   ├── color     封面取色、对比度
 │   ├── ai        AI 工具的消息（Claude Code 钩子、Codex notify）
 │   ├── toast     系统通知的 XML
+│   ├── jump      跳回来源时挑窗口、认链接
 │   └── text      时间格式化
 └── win/          Windows 部分
     ├── app       窗口、消息循环、状态机、鼠标穿透
@@ -76,6 +79,7 @@ native/src/
     ├── toasts    读取 Windows 通知记录（后台线程，系统自带的 winsqlite3）
     ├── appinfo   软件的显示名和图标
     ├── forward   Island.exe --notify
+    ├── jump      点消息跳回来源（窗口、软件的对话）
     └── smoke     冒烟测试
 ```
 
