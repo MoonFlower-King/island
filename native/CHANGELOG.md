@@ -2,7 +2,9 @@
 
 原生版（Rust 重写）的版本单独记录。WPF 版见仓库根目录的 CHANGELOG.md。
 
-## [未发布]
+## [2.0.2]
+
+下载 `Island-native-2.0.2-win-x64.zip`（ARM 电脑选 `win-arm64`），解压后替换原来的 `Island.exe` 即可，设置和数据都保留。
 
 ### 改进
 
