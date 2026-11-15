@@ -43,6 +43,7 @@ use island::todo::Todos;
 
 use super::drag::{self, WM_DRAG};
 use super::gfx::Gfx;
+use super::jump::{self, Target};
 use super::media::{self, Command, Snapshot, WM_MEDIA};
 use super::net::{self, WM_TRANSLATE};
 use super::scene::{self, Scene, View};
@@ -141,6 +142,8 @@ pub struct App {
     pub level_hud: Option<(char, f64, String)>,
     /// 正在显示的通知：(图标, 标题, 内容)。
     pub notification: Option<(char, String, String)>,
+    /// 点通知胶囊时跳到哪儿。
+    pub notification_target: Target,
     /// AI 动态：收到过的 AI 消息，新的在前。
     pub ai: Vec<views::AiItem>,
     /// 当前通知用的软件图标（其他软件的系统通知才有）。
@@ -333,6 +336,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             wheel_until: 0,
             level_hud: None,
             notification: None,
+            notification_target: Target::None,
             ai: Vec::new(),
             notification_icon: None,
             apps: appinfo::Cache::default(),
@@ -636,6 +640,7 @@ impl App {
             return;
         }
         self.notification_icon = icon;
+        self.notification_target = Target::None;
         self.notification = Some((glyph, title.into(), body.into()));
         self.redraw_notification();
         unsafe {
@@ -646,19 +651,40 @@ impl App {
 
     /// AI 工具发来的消息（`Island.exe --notify`）：记下来并弹出提醒，比普通通知多停一会儿。
     pub fn on_ai_messages(&mut self) {
-        for (source, payload) in forward::take() {
+        for (source, payload, window) in forward::take() {
             let Some(event) = island::ai::parse(&source, &payload) else {
                 continue;
             };
-            log::info(&format!("AI 消息：{}（{}）", event.title(), event.project));
+            log::info(&format!(
+                "AI 消息：{}（{}，{}）",
+                event.title(),
+                event.project,
+                if window != 0 {
+                    "记下了窗口"
+                } else {
+                    "没找到窗口"
+                }
+            ));
             let (title, body) = (event.title(), event.body());
-            self.add_ai(&title, &body, None);
+            let target = if window != 0 {
+                Target::Window(window)
+            } else {
+                Target::None
+            };
+            self.add_ai(&title, &body, None, target.clone());
             self.show_notification_for(views::GLYPH_AI, &title, &body, AI_NOTIFICATION_MS);
+            self.notification_target = target;
         }
     }
 
     /// 记一条 AI 消息（没看过），刷新所有显示"有新消息"的地方。
-    fn add_ai(&mut self, title: &str, body: &str, icon: Option<std::sync::Arc<super::media::Art>>) {
+    fn add_ai(
+        &mut self,
+        title: &str,
+        body: &str,
+        icon: Option<std::sync::Arc<super::media::Art>>,
+        target: Target,
+    ) {
         let t = unsafe { GetLocalTime() };
         self.ai.insert(
             0,
@@ -668,6 +694,7 @@ impl App {
                 at: format!("{:02}:{:02}", t.wHour, t.wMinute),
                 read: false,
                 icon,
+                target,
             },
         );
         self.ai.truncate(50);
@@ -701,11 +728,10 @@ impl App {
             return;
         }
         // 一下子来很多时只弹最后一条
-        let latest = raw
-            .into_iter()
-            .rev()
-            .find_map(|(aumid, xml)| island::toast::content(&xml).map(|c| (aumid, c)));
-        let Some((aumid, content)) = latest else {
+        let latest = raw.into_iter().rev().find_map(|(aumid, xml)| {
+            island::toast::content(&xml).map(|c| (aumid, c, island::toast::launch(&xml)))
+        });
+        let Some((aumid, content, launch)) = latest else {
             return;
         };
         let info = self.apps.get(&aumid);
@@ -718,11 +744,23 @@ impl App {
         } else {
             NOTIFICATION_MS
         };
-        log::info(&format!("系统通知：{}（{aumid}）", info.name));
+        // 启动参数只记开头和类型，方便排查点了跳不过去的软件
+        let args: String = launch.args.chars().take(80).collect();
+        log::info(&format!(
+            "系统通知：{}（{aumid}），点击参数：{}{args}",
+            info.name,
+            if launch.protocol { "[链接] " } else { "" },
+        ));
+        let target = Target::Toast {
+            aumid,
+            launch,
+            hint: content.title.clone(),
+        };
         if is_ai {
-            self.add_ai(&title, &body, info.icon.clone());
+            self.add_ai(&title, &body, info.icon.clone(), target.clone());
         }
         self.show_notification_with(GLYPH_BELL, info.icon, &title, &body, ms);
+        self.notification_target = target;
     }
 
     pub fn dismiss_notification(&mut self) {
@@ -857,6 +895,16 @@ impl App {
             ((f.x + r.x + r.w / 2.0) * s).round() as i32,
             ((f.y + r.y + r.h / 2.0) * s).round() as i32,
         ))
+    }
+
+    /// 当前胶囊的正中（窗口内物理像素）。
+    pub fn center_point(&self) -> (i32, i32) {
+        let f = self.metrics(self.state).frame(self.edge());
+        let s = self.scene.scale();
+        (
+            ((f.x + f.w / 2.0) * s).round() as i32,
+            ((f.y + f.h / 2.0) * s).round() as i32,
+        )
     }
 
     pub fn monitor_sample(&self) -> Option<system::Sample> {
@@ -1323,9 +1371,11 @@ impl App {
     }
 
     pub fn on_mouse_down(&mut self, x: f32, y: f32) {
-        // 点一下通知就关掉
+        // 点一下通知就关掉；AI 消息和其他软件的通知顺便跳过去
         if self.state == IslandState::Notification {
+            let target = std::mem::take(&mut self.notification_target);
             self.dismiss_notification();
+            jump::open(&target);
             return;
         }
         if self.state != IslandState::Expanded {
@@ -1498,12 +1548,15 @@ impl App {
                 self.hovered = None;
             }
             Hit::AiItem(i) => {
-                if let Some(m) = self.ai.get_mut(i)
-                    && !m.read
-                {
+                let Some(m) = self.ai.get_mut(i) else {
+                    return;
+                };
+                let target = m.target.clone();
+                if !m.read {
                     m.read = true;
                     self.ai_changed();
                 }
+                jump::open(&target);
             }
             Hit::AiReadAll => self.mark_ai_read(),
             Hit::AiClear => {

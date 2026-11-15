@@ -635,7 +635,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     if (!S.ai.length) return `<div class="abs s" style="left:0;right:0;top:110px;text-align:center;font-size:13px">还没有 AI 消息</div><div class="abs f" style="left:0;right:0;top:134px;text-align:center;font-size:11px">Claude、Codex 等完成任务或等你确认时会显示在这里</div>`;
     const n = S.ai.filter((a) => !a.read).length;
     const rows = S.ai.slice(0, 4).map((a, i) =>
-      `<div class="row" data-act="ai-read" data-i="${i}" style="top:${78 + i * 42}px;height:40px;align-items:center">
+      `<div class="row" data-act="ai-open" data-i="${i}" title="跳到 ${AI_APPS[a.app].name} 里的这个对话" style="top:${78 + i * 42}px;height:40px;align-items:center">
          ${badge(a.app, 24)}
          <div style="min-width:0;flex:1;display:grid">
            <span class="t" style="font-size:12.5px;font-weight:${a.read ? 500 : 700}">${AI_APPS[a.app].name} · ${esc(a.project)} · ${a.kind === "ask" ? "等你确认" : esc(a.title)}</span>
@@ -643,7 +643,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
          </div>
          <span class="f" style="font-size:10.5px;align-self:flex-start;margin-top:5px">${esc(a.at)}</span>
          ${a.read ? "" : `<span style="width:7px;height:7px;border-radius:50%;background:${AI_APPS[a.app].color};flex:none"></span>`}</div>`).join("");
-    return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${n ? `${n} 条没看过` : "都看过了"} · 点一条标记已读</span>
+    return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${n ? `${n} 条没看过 · 点一条跳过去` : "都看过了"}</span>
       <div class="seg" style="left:${n ? 344 : 368}px;top:50px">${n ? `<button data-act="ai-readall">全部已读</button>` : `<button data-act="ai-clear">清空</button>`}</div>${rows}`;
   }
   function panelHTML() {
@@ -788,13 +788,15 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     S.note = { icon, title, body }; update(true);
     noteTimer = setTimeout(() => { S.note = null; update(); }, 3500);
   }
+  // 真机上点 AI 消息会切回发消息的地方：终端 / 编辑器窗口，或者桌面版里对应的对话
+  function jumpText(a) { return `已切到${AI_APPS[a.app].name}里「${a.project}」的对话`; }
   function notifyAI(app, kind, body, project) {
     const [hh, mm] = hm();
     const title = `${AI_APPS[app].name} ${kind === "ask" ? "等你确认" : "完成了任务"}`;
     S.ai.unshift({ app, kind, title: kind === "ask" ? "等你确认" : "任务完成", body, project, at: `${hh}:${mm}`, read: false });
     S.ai = S.ai.slice(0, 50);
     clearTimeout(noteTimer);
-    S.note = { app, title, body: `${project} · ${body}` }; update(true); rerenderAll();
+    S.note = { app, title, body: `${project} · ${body}`, jump: jumpText({ app, project }) }; update(true); rerenderAll();
     // AI 消息多停一会儿（6 秒），之后收起的胶囊上还会留一个小点，直到你看过
     noteTimer = setTimeout(() => { S.note = null; update(true); }, 6000);
   }
@@ -829,7 +831,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     appIdx[app] = ((appIdx[app] ?? -1) + 1) % list.length;
     const [title, body] = list[appIdx[app]];
     clearTimeout(noteTimer);
-    S.note = { app, title: `${AI_APPS[app].name} · ${title}`, body }; update(true);
+    S.note = { app, title: `${AI_APPS[app].name} · ${title}`, body, jump: `已切到${AI_APPS[app].name}里和「${title}」的聊天` }; update(true);
     noteTimer = setTimeout(() => { S.note = null; update(true); }, 3500);
   });
   const sampleIdx = {};
@@ -870,11 +872,16 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   // 手机：点一下展开 / 收起
   island.addEventListener("pointerup", (e) => {
     if (e.pointerType !== "touch" || current === "expanded" && e.target.closest("button,input,textarea,.row")) return;
-    if (current === "note") { S.note = null; update(); return; }
+    if (current === "note") { openNote(); return; }
     S.hover = !S.hover; update(true);
   });
-  // 点通知关掉
-  island.addEventListener("click", (e) => { if (current === "note" && e.pointerType !== "touch") { clearTimeout(noteTimer); S.note = null; update(); } });
+  // 点通知：关掉，AI 消息和其他软件的通知顺便跳过去
+  function openNote() {
+    const jump = S.note && S.note.jump;
+    clearTimeout(noteTimer); S.note = null; update();
+    if (jump) flashHint(jump);
+  }
+  island.addEventListener("click", (e) => { if (current === "note" && e.pointerType !== "touch") openNote(); });
   // 滚轮调音量
   island.addEventListener("wheel", (e) => {
     if (current === "expanded") return;
@@ -891,7 +898,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     const song = SONGS[S.song];
     switch (act) {
       case "tab": S.tab = v; S.toast = ""; save(); break;
-      case "ai-read": S.ai[i].read = true; break;
+      case "ai-open": S.ai[i].read = true; flashHint(jumpText(S.ai[i])); break;
       case "ai-readall": S.ai.forEach((a) => (a.read = true)); break;
       case "ai-clear": S.ai = []; break;
       case "pin": S.pinned = !S.pinned; break;

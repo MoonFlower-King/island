@@ -106,6 +106,46 @@ pub fn content(xml: &str) -> Option<Content> {
     Some(Content { title, body })
 }
 
+/// 点通知时要交给软件的东西：`<toast launch="…" activationType="…">`。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Launch {
+    /// 启动参数（软件自己定的格式，常见的是链接或 `action=…&id=…`）。
+    pub args: String,
+    /// `activationType="protocol"`：参数是个链接，交给系统打开。
+    pub protocol: bool,
+}
+
+pub fn launch(xml: &str) -> Launch {
+    let Some(i) = xml.find("<toast") else {
+        return Launch::default();
+    };
+    let tag = &xml[i + 6..];
+    let tag = &tag[..tag.find('>').unwrap_or(tag.len())];
+    Launch {
+        args: attr(tag, "launch").unwrap_or_default(),
+        protocol: attr(tag, "activationType").is_some_and(|t| t.eq_ignore_ascii_case("protocol")),
+    }
+}
+
+/// 标签里某个属性的值（单双引号都认，实体会还原）。
+fn attr(tag: &str, name: &str) -> Option<String> {
+    let mut from = 0;
+    while let Some(i) = tag[from..].find(name).map(|i| i + from) {
+        from = i + name.len();
+        if i > 0 && !tag[..i].ends_with(char::is_whitespace) {
+            continue;
+        }
+        let Some(v) = tag[from..].trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let v = v.trim_start();
+        let q = v.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let v = &v[1..];
+        return v.find(q).map(|end| unescape(&v[..end]));
+    }
+    None
+}
+
 /// 没有快捷方式、查不到显示名时，从 AppUserModelID 猜个名字：
 /// `Microsoft.WindowsTerminal_8wekyb3d8bbwe!App` → `WindowsTerminal`，
 /// `C:\Program Files\Foo\foo.exe` → `foo`，`com.squirrel.Telegram.Telegram` → `Telegram`。
@@ -203,5 +243,22 @@ mod tests {
         };
         assert_eq!(island_title("Telegram", &c), "Telegram");
         assert_eq!(island_title("", &c), "Telegram");
+    }
+
+    #[test]
+    fn reads_launch_arguments() {
+        let xml = r#"<toast duration="short" launch="claude://chat/42?a=1&amp;b=2" activationType='Protocol'><visual/></toast>"#;
+        assert_eq!(
+            launch(xml),
+            Launch {
+                args: "claude://chat/42?a=1&b=2".into(),
+                protocol: true
+            }
+        );
+        let xml = r#"<toast xlaunch="no" launch = "action=open&amp;id=7"><visual/></toast>"#;
+        assert_eq!(launch(xml).args, "action=open&id=7");
+        assert!(!launch(xml).protocol);
+        assert_eq!(launch("<toast><visual/></toast>"), Launch::default());
+        assert_eq!(launch("nothing"), Launch::default());
     }
 }

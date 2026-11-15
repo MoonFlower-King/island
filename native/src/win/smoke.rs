@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use windows::Win32::Foundation::{GENERIC_WRITE, RECT};
+use windows::Win32::Foundation::{GENERIC_WRITE, HWND, RECT};
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTOPRIMARY, MONITORINFO, MonitorFromPoint,
@@ -17,7 +17,8 @@ use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance};
 use windows::Win32::System::ProcessStatus::{K32GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS_EX};
 use windows::Win32::System::Threading::GetCurrentProcess;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetWindowRect, IsWindowVisible, KillTimer, PostQuitMessage, SetTimer,
+    GetForegroundWindow, GetWindowRect, IsIconic, IsWindowVisible, KillTimer, PostQuitMessage,
+    SW_MINIMIZE, SetTimer, ShowWindow,
 };
 use windows::core::{HSTRING, Result};
 
@@ -48,6 +49,8 @@ pub struct Smoke {
     timings: Vec<u64>,
     /// `--notify` 子进程（模拟 AI 工具的钩子）。
     children: Vec<std::process::Child>,
+    /// 跳转测试用的命令行窗口。
+    console: Option<HWND>,
 }
 
 impl Smoke {
@@ -63,6 +66,7 @@ impl Smoke {
             measure: None,
             timings: Vec::new(),
             children: Vec::new(),
+            console: None,
         }
     }
 
@@ -577,13 +581,60 @@ fn spawn_notify(args: &[&str], stdin: Option<&str>) -> std::io::Result<std::proc
     Ok(child)
 }
 
+/// 新开一个命令行窗口，在里面跑 `Island.exe --notify smoke-agent jump-test`；窗口留着（cmd /k）。
+fn spawn_in_console() -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NEW_CONSOLE: u32 = 0x10;
+    let exe = std::env::current_exe()?;
+    std::process::Command::new("cmd.exe")
+        .raw_arg(format!(
+            "/d /k \"\"{}\" --notify smoke-agent jump-test\"",
+            exe.display()
+        ))
+        .creation_flags(CREATE_NEW_CONSOLE)
+        .spawn()
+}
+
 fn system_toast_shown(app: &App) -> bool {
     app.notification
         .as_ref()
         .is_some_and(|(_, t, _)| t.contains("冒烟测试的系统通知"))
 }
 
+/// 登记一个测试用的链接协议：打开 `islandsmoke://…` 时把链接写进 `file`。
+fn register_smoke_protocol(file: &std::path::Path) -> std::io::Result<()> {
+    let key = r"HKCU\Software\Classes\islandsmoke";
+    let command = format!("cmd.exe /d /c echo %1>\"{}\"", file.display());
+    for args in [
+        vec!["add", key, "/ve", "/d", "URL:Island smoke", "/f"],
+        vec!["add", key, "/v", "URL Protocol", "/d", "", "/f"],
+        vec![
+            "add",
+            &format!(r"{key}\shell\open\command"),
+            "/ve",
+            "/d",
+            &command,
+            "/f",
+        ],
+    ] {
+        std::process::Command::new("reg.exe")
+            .args(&args)
+            .stdout(std::process::Stdio::null())
+            .status()?;
+    }
+    Ok(())
+}
+
+/// 等这个文件出现（测试用的链接协议被打开了），读出里面的链接。
+fn opened_link(file: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(file)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
 /// 用 Windows PowerShell 的 AppUserModelID 弹一条真的系统通知（任何程序都可以借用已注册的 ID）。
+/// 点它会打开一个测试链接，和 Claude 桌面版之类的软件一样。
 fn show_real_toast() -> windows::core::Result<()> {
     use windows::Data::Xml::Dom::XmlDocument;
     use windows::UI::Notifications::{ToastNotification, ToastNotificationManager};
@@ -591,7 +642,8 @@ fn show_real_toast() -> windows::core::Result<()> {
         r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe";
     let xml = XmlDocument::new()?;
     xml.LoadXml(&HSTRING::from(
-        "<toast><visual><binding template=\"ToastGeneric\"><text>冒烟测试的系统通知</text>\
+        "<toast launch=\"islandsmoke://chat/42\" activationType=\"protocol\">\
+         <visual><binding template=\"ToastGeneric\"><text>冒烟测试的系统通知</text>\
          <text>来自 Windows 通知中心 &amp; 数据库</text></binding></visual></toast>",
     ))?;
     let toast = ToastNotification::CreateToastNotification(&xml)?;
@@ -1317,6 +1369,10 @@ pub fn step(app: &mut App) {
         // 其他软件的系统通知：用 PowerShell 的身份真的弹一条 Windows 通知，岛应该从通知数据库里读到
         86 => {
             smoke.note(&format!("读取系统通知：{}", super::toasts::status()));
+            let _ = std::fs::remove_file(smoke.dir.join("opened-link.txt"));
+            if let Err(e) = register_smoke_protocol(&smoke.dir.join("opened-link.txt")) {
+                smoke.check(false, &format!("登记测试链接协议（{e}）"));
+            }
             match show_real_toast() {
                 Ok(()) => {}
                 Err(e) => smoke.check(false, &format!("弹出一条 Windows 通知（{e}）")),
@@ -1352,7 +1408,12 @@ pub fn step(app: &mut App) {
                     ))
             ));
             snapshot(app, &mut smoke, "29-system-notification", None);
-            app.dismiss_notification();
+            // 点通知胶囊：应该和在通知中心里点它一样，打开通知里的链接
+            smoke.check(
+                app.notification_target.is_some(),
+                "系统通知记下了点了去哪儿",
+            );
+            click(app, app.center_point());
             next = 400;
         }
         // AI 动态：有没看过的消息时，收起的细线染成强调色；展开直接打开 AI 动态，收起后算看过
@@ -1372,6 +1433,78 @@ pub fn step(app: &mut App) {
         }
         90 => {
             smoke.check(!app.ai_unread(), "看过 AI 动态再收起，消息都算已读");
+            app.set_tab(Tab::Music);
+            smoke.waits = 0;
+            next = 400;
+        }
+        // 点系统通知打开了通知里的链接（协议处理程序启动要一会儿）
+        91 if opened_link(&smoke.dir.join("opened-link.txt")).is_none() && smoke.waits < 20 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
+        }
+        91 => {
+            let link = opened_link(&smoke.dir.join("opened-link.txt"));
+            smoke.check(
+                link.as_deref() == Some("islandsmoke://chat/42"),
+                &format!("点系统通知打开了通知里的链接（{link:?}）"),
+            );
+            smoke.check(app.state != IslandState::Notification, "点过的通知收起了");
+            // 在一个命令行窗口里跑 --notify（像终端里的 Claude Code），点消息应该切回这个窗口
+            match spawn_in_console() {
+                Ok(c) => smoke.children.push(c),
+                Err(e) => smoke.check(false, &format!("在命令行窗口里启动 --notify（{e}）")),
+            }
+            smoke.waits = 0;
+            next = 1000;
+        }
+        92 if !app
+            .ai
+            .first()
+            .is_some_and(|m| m.title.starts_with("smoke-agent"))
+            && smoke.waits < 20 =>
+        {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
+        }
+        92 => {
+            let target = app.ai.first().map(|m| m.target.clone()).unwrap_or_default();
+            let window = match target {
+                super::jump::Target::Window(h) => Some(HWND(h as *mut _)),
+                _ => None,
+            };
+            smoke.check(
+                window.is_some(),
+                &format!("--notify 记下了发消息的命令行窗口（{target:?}）"),
+            );
+            smoke.console = window;
+            if let Some(h) = window {
+                unsafe {
+                    let _ = ShowWindow(h, SW_MINIMIZE);
+                }
+            }
+            app.dismiss_notification();
+            app.set_pinned(true);
+            next = 800;
+        }
+        93 => {
+            smoke.check(app.tab == Tab::Ai, "有新消息时展开到 AI 动态");
+            click_target(app, &mut smoke, Hit::AiItem(0));
+            next = 800;
+        }
+        94 => {
+            if let Some(h) = smoke.console.take() {
+                let restored = !unsafe { IsIconic(h) }.as_bool();
+                smoke.check(restored, "点 AI 消息把最小化的命令行窗口还原了");
+                let front = unsafe { GetForegroundWindow() } == h;
+                smoke.note(&format!("命令行窗口到了最前面：{front}"));
+            }
+            // 关掉命令行窗口
+            for c in smoke.children.iter_mut() {
+                let _ = c.kill();
+            }
+            app.set_pinned(false);
             app.set_tab(Tab::Music);
             smoke.step = 15;
             next = 35;
