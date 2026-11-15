@@ -241,6 +241,18 @@ impl Metrics {
     /// 这样把鼠标甩到屏幕边上也能展开（细线只有 5 像素，很难精确碰到）。
     pub fn hover_zone(&self, edge: Edge) -> Rect {
         let body = self.rect(edge).inflate(2.0);
+        // 胶囊和屏幕边之间的那段空隙也算在岛上：鼠标沿屏幕边划过展开面板时不会被当成移开
+        // （否则会开始收起、马上又展开，面板看起来轻轻动一下）
+        let body = match edge {
+            Edge::Top => body.union(&Rect::new(body.x, 0.0, body.w, body.h)),
+            Edge::Left => body.union(&Rect::new(0.0, body.y, body.w, body.h)),
+            Edge::Right => body.union(&Rect::new(
+                body.right() - body.w,
+                body.y,
+                WINDOW_WIDTH - body.x,
+                body.h,
+            )),
+        };
         let hot = match edge {
             Edge::Top => {
                 let w = (self.width + 60.0).clamp(180.0, 260.0);
@@ -447,6 +459,14 @@ mod tests {
                 }
             }
         }
+        // 展开面板和屏幕边之间的空隙，整个宽度都算在岛上
+        let e = IslandState::Expanded.metrics(Edge::Top);
+        let f = e.frame(Edge::Top);
+        let z = e.hover_zone(Edge::Top);
+        assert!(z.contains(f.x + 1.0, 1.0) && z.contains(f.right() - 1.0, 1.0));
+        let z = e.hover_zone(Edge::Left);
+        let f = e.frame(Edge::Left);
+        assert!(z.contains(1.0, f.y + 1.0) && z.contains(1.0, f.bottom() - 1.0));
         let idle = IslandState::Idle.metrics(Edge::Top).hover_zone(Edge::Top);
         assert!(idle.w >= 180.0 && !idle.contains(WINDOW_WIDTH / 2.0, 40.0));
         let side = IslandState::Idle.metrics(Edge::Left).hover_zone(Edge::Left);

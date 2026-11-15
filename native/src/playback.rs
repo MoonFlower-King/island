@@ -38,31 +38,56 @@ impl Clock {
     }
 }
 
-/// 在网易云音乐的播放记录（%LOCALAPPDATA%\NetEase\CloudMusic\webdata\file\history）里
-/// 找歌名一致（有歌手时歌手也要对上）的第一项，返回时长（秒）。
+/// 在网易云音乐的本地文件里找这首歌的时长（秒）：播放记录（history）是一个数组，
+/// 当前播放列表（playingList）是一个对象，里面的列表也是这样的条目。不依赖具体结构：
+/// 递归找所有带 `name` 的对象（或它的 `track`），歌名一致、有歌手时歌手也对上的第一项。
 pub fn netease_duration(json: &str, title: &str, artist: &str) -> Option<f64> {
-    let Ok(Value::Array(items)) = serde_json::from_str::<Value>(json) else {
+    let value = serde_json::from_str::<Value>(json).ok()?;
+    find_duration(&value, title, artist, 0)
+}
+
+fn find_duration(v: &Value, title: &str, artist: &str, depth: u32) -> Option<f64> {
+    if depth > 6 {
         return None;
-    };
-    for item in &items {
-        let track = item.get("track").unwrap_or(item);
-        let Some(name) = track.get("name").and_then(Value::as_str) else {
-            continue;
-        };
-        if !name.trim().eq_ignore_ascii_case(title.trim()) {
-            continue;
-        }
-        if !artist_matches(track, artist) {
-            continue;
-        }
-        let ms = track
-            .get("duration")
-            .or_else(|| track.get("dt"))
-            .and_then(Value::as_i64)
-            .filter(|ms| *ms > 0)?;
-        return Some(ms as f64 / 1000.0);
     }
-    None
+    match v {
+        Value::Array(items) => items
+            .iter()
+            .find_map(|i| find_duration(i, title, artist, depth + 1)),
+        Value::Object(map) => {
+            let track = map.get("track").filter(|t| t.is_object()).unwrap_or(v);
+            if let Some(name) = track.get("name").and_then(Value::as_str)
+                && name.trim().eq_ignore_ascii_case(title.trim())
+                && artist_matches(track, artist)
+                && let Some(ms) = track
+                    .get("duration")
+                    .or_else(|| track.get("dt"))
+                    .and_then(Value::as_f64)
+                    .filter(|ms| *ms > 0.0)
+            {
+                return Some(ms / 1000.0);
+            }
+            map.values()
+                .filter(|c| c.is_array() || c.is_object())
+                .find_map(|c| find_duration(c, title, artist, depth + 1))
+        }
+        _ => None,
+    }
+}
+
+/// 换歌后多久之内，读到和上一首一模一样的封面就当作播放器还没换好（网易云常常先报新歌名、
+/// 过一会儿才换封面）。过了这段时间还是一样，就认为两首歌本来就是同一张封面（同一张专辑）。
+pub const STALE_ART_MS: u64 = 3000;
+
+/// 刚读到的封面是不是上一首留下来的。`fingerprint` 是封面图片内容的指纹。
+pub fn art_is_stale(
+    since_track_change_ms: u64,
+    fingerprint: Option<u64>,
+    previous_track_fingerprint: Option<u64>,
+) -> bool {
+    since_track_change_ms < STALE_ART_MS
+        && fingerprint.is_some()
+        && fingerprint == previous_track_fingerprint
 }
 
 fn artist_matches(track: &Value, artist: &str) -> bool {
@@ -119,5 +144,21 @@ mod tests {
         assert_eq!(netease_duration(HISTORY, "光年之外", ""), Some(235.0));
         assert_eq!(netease_duration(HISTORY, "不存在", "谁"), None);
         assert_eq!(netease_duration("{}", "晴天", ""), None);
+        // 当前播放列表：对象里套列表，时长可能是小数
+        let playing = r#"{"list": [{"id": 1, "track": {"name": "下雨天", "dt": 254500.0, "ar": [{"name": "南拳妈妈"}]}}], "index": 0}"#;
+        assert_eq!(netease_duration(playing, "下雨天", "南拳妈妈"), Some(254.5));
+        assert_eq!(netease_duration(playing, "下雨天", "别人"), None);
+        assert_eq!(netease_duration("not json", "下雨天", ""), None);
+    }
+
+    #[test]
+    fn stale_art_is_only_suspected_right_after_a_change() {
+        // 刚换歌、封面和上一首一样：还没换好
+        assert!(art_is_stale(500, Some(7), Some(7)));
+        // 过了一会儿还是一样：同一张专辑
+        assert!(!art_is_stale(STALE_ART_MS, Some(7), Some(7)));
+        // 封面不一样、或者没有封面：不算
+        assert!(!art_is_stale(500, Some(8), Some(7)));
+        assert!(!art_is_stale(500, None, None));
     }
 }
