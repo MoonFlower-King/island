@@ -181,7 +181,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     <p>和 <a href="https://github.com/MoonFlower-King/island/releases/tag/v2.0.0">2.0.0 正式版</a>一样的尺寸、动画和功能，模拟桌面上的岛可以直接操作：</p>
     <ul class="how">
       <li>鼠标移上去展开，展开后每个标签都能用；右键岛打开菜单</li>
-      <li>在岛上滚动滚轮调音量；按住展开面板的空白处拖到屏幕另一边，松手就停过去</li>
+      <li>在岛上滚动滚轮调音量；按住展开面板顶部标签栏的空白处拖到屏幕另一边，松手就停过去</li>
       <li>把电脑里的文件拖到岛上会放进中转站；在这页上复制的文字会出现在剪贴板标签里</li>
       <li>微信、QQ 等所有软件的通知都会显示在岛上；Claude、Codex 等 AI 完成任务会弹出提醒，没看过的在收起的胶囊上留一个小点</li>
       <li>停在左侧或右侧时，收起的胶囊都是竖着的</li>
@@ -759,7 +759,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     }).join("");
     if (hintUntil > Date.now()) return;
     hint.textContent = st === "expanded"
-      ? (S.pinned ? "已置顶：鼠标移开也不收起，点图钉取消" : "鼠标移开就收起；按住空白处可以拖到屏幕另一边")
+      ? (S.pinned ? "已置顶：鼠标移开也不收起，点图钉取消" : "鼠标移开就收起；按住顶部标签栏的空白处可以拖到屏幕另一边")
       : side() ? "鼠标移到岛上，从侧边展开；在岛上滚动可以调音量" : "鼠标移到岛上展开；在岛上滚动可以调音量";
   }
   document.querySelectorAll(".chips[data-group]").forEach((g) => g.addEventListener("click", (e) => {
@@ -1116,13 +1116,16 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   island.addEventListener("pointerdown", (e) => {
     if (current !== "expanded" || e.button !== 0 || e.pointerType === "touch") return;
     if (e.target.closest("button, input, textarea, .row, [data-act], #trOut, .seek")) return;
+    // 只有顶部标签栏那一行（44 DIP）能按住拖，和原生版一样
+    const k = screen.clientWidth / SCREEN_W, top = island.getBoundingClientRect().top;
+    if ((e.clientY - top) / k > 44) return;
     drag.from = { x: e.clientX, y: e.clientY }; drag.active = false;
     island.setPointerCapture(e.pointerId);
   });
   island.addEventListener("pointermove", (e) => {
     if (!drag.from) return;
     const dx = e.clientX - drag.from.x, dy = e.clientY - drag.from.y;
-    if (!drag.active && Math.hypot(dx, dy) < 5) return;
+    if (!drag.active && Math.hypot(dx, dy) < 12) return;
     drag.active = true; drag.dx = dx; drag.dy = dy;
   });
   island.addEventListener("pointerup", (e) => {

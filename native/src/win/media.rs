@@ -13,7 +13,6 @@ use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, IStream,
 };
-use windows::Win32::System::WinRT::CreateStreamOverRandomAccessStream;
 use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::core::Result;
 
@@ -185,10 +184,30 @@ fn attach_session(session: Option<GlobalSystemMediaTransportControlsSession>) {
     refresh();
 }
 
-/// 上一首封面的缓存：同一首歌的进度、播放状态变化时不用重新解码封面。
-/// （歌曲标识，封面，封面主题色）
-type ArtEntry = (String, Option<std::sync::Arc<Art>>, Option<Rgb>);
+/// 封面缓存：图片内容没变就不重新解码。（歌曲标识，封面内容的指纹，封面，封面主题色）
+type ArtEntry = (
+    String,
+    Option<u64>,
+    Option<std::sync::Arc<Art>>,
+    Option<Rgb>,
+);
 static ART_CACHE: Mutex<Option<ArtEntry>> = Mutex::new(None);
+
+/// 当前这首歌：（歌曲标识，换到这首歌的时刻，上一首的封面指纹）。
+static TRACK: Mutex<Option<(String, u64, Option<u64>)>> = Mutex::new(None);
+
+/// 换歌后过一会儿再读几次：网易云这类播放器的封面、播放记录常常比歌名晚到。
+fn refresh_later() {
+    std::thread::spawn(|| {
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        for wait in [1000, 2500] {
+            std::thread::sleep(std::time::Duration::from_millis(wait));
+            refresh();
+        }
+    });
+}
 
 fn refresh() {
     let session = SESSION.lock().unwrap().clone();
@@ -232,36 +251,63 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
     }
 
     let key = format!("{title}\u{1}{artist}");
+    let t = now();
+    // 换歌了：记下时间和上一首的封面指纹，过一会儿再读几次
+    let since_change = {
+        let mut track = TRACK.lock().unwrap();
+        match track.as_ref() {
+            Some((k, at, _)) if *k == key => t.saturating_sub(*at),
+            _ => {
+                let previous = ART_CACHE
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|(_, fp, _, _)| *fp);
+                *track = Some((key.clone(), t, previous));
+                refresh_later();
+                0
+            }
+        }
+    };
+    let previous_fp = TRACK.lock().unwrap().as_ref().and_then(|(_, _, fp)| *fp);
+    let bytes = props.Thumbnail().ok().and_then(|r| read_bytes(&r).ok());
+    let fp = bytes.as_deref().map(fingerprint);
     let cached = ART_CACHE
         .lock()
         .unwrap()
         .clone()
-        .filter(|(k, _, _)| *k == key);
+        .filter(|(k, f, _, _)| *k == key && *f == fp);
     let (art, accent) = match cached {
-        Some((_, art, accent)) => (art, accent),
+        Some((_, _, art, accent)) => (art, accent),
+        // 刚换歌、封面和上一首一模一样：播放器还没换好，先不显示，稍后再读
+        None if island::playback::art_is_stale(since_change, fp, previous_fp) => (None, None),
         None => {
-            let art = props
-                .Thumbnail()
-                .ok()
-                .and_then(|t| decode_art(&t).ok())
+            let art = bytes
+                .as_deref()
+                .and_then(|b| decode_art(b).ok())
                 .map(std::sync::Arc::new);
             let accent = art.as_ref().and_then(|a| color::dominant(&a.pixels));
-            *ART_CACHE.lock().unwrap() = Some((key.clone(), art.clone(), accent));
+            *ART_CACHE.lock().unwrap() = Some((key.clone(), fp, art.clone(), accent));
             (art, accent)
         }
     };
 
-    // 网易云音乐不报告时长：去它的本地播放记录里查（只在换歌时查一次）
+    // 网易云音乐不报告时长：去它的当前播放列表和播放记录里查。
+    // 查到了就记住；没查到下次再查（新歌常常过一会儿才写进去）
     let known_duration = if duration > 0.0 || app != "网易云音乐" {
         None
     } else {
         let mut cache = DURATION_CACHE.lock().unwrap();
         match cache.as_ref() {
-            Some((k, d)) if *k == key => *d,
+            Some((k, d)) if *k == key => Some(*d),
             _ => {
-                let d = netease_history()
-                    .and_then(|json| island::playback::netease_duration(&json, &title, &artist));
-                *cache = Some((key.clone(), d));
+                let d = ["playingList", "history"].iter().find_map(|f| {
+                    netease_file(f)
+                        .and_then(|json| island::playback::netease_duration(&json, &title, &artist))
+                });
+                if let Some(d) = d {
+                    *cache = Some((key.clone(), d));
+                }
                 d
             }
         }
@@ -284,18 +330,41 @@ fn read(session: &GlobalSystemMediaTransportControlsSession) -> Result<Snapshot>
     })
 }
 
-static DURATION_CACHE: Mutex<Option<(String, Option<f64>)>> = Mutex::new(None);
+static DURATION_CACHE: Mutex<Option<(String, f64)>> = Mutex::new(None);
 
-/// 网易云音乐的播放记录：%LOCALAPPDATA%\NetEase\CloudMusic\webdata\file\history。
-fn netease_history() -> Option<String> {
+/// 网易云音乐的本地文件：%LOCALAPPDATA%\NetEase\CloudMusic\webdata\file\ 下的
+/// playingList（当前播放列表）和 history（播放记录）。
+fn netease_file(name: &str) -> Option<String> {
     let base = std::env::var_os("LOCALAPPDATA")?;
     let path = std::path::Path::new(&base)
         .join("NetEase")
         .join("CloudMusic")
         .join("webdata")
         .join("file")
-        .join("history");
+        .join(name);
     std::fs::read_to_string(path).ok()
+}
+
+/// 封面图片的全部字节。
+fn read_bytes(
+    reference: &windows::Storage::Streams::IRandomAccessStreamReference,
+) -> Result<Vec<u8>> {
+    use windows::Storage::Streams::DataReader;
+    let stream = reference.OpenReadAsync()?.join()?;
+    let size = stream.Size()?.min(16 * 1024 * 1024) as u32;
+    let reader = DataReader::CreateDataReader(&stream.GetInputStreamAt(0)?)?;
+    let got = reader.LoadAsync(size)?.join()?;
+    let mut bytes = vec![0u8; got as usize];
+    reader.ReadBytes(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// 图片内容的指纹（用来判断封面换没换）。
+fn fingerprint(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut h);
+    h.finish()
 }
 
 fn filetime_now() -> i64 {
@@ -303,10 +372,10 @@ fn filetime_now() -> i64 {
     ((ft.dwHighDateTime as i64) << 32) | ft.dwLowDateTime as i64
 }
 
-fn decode_art(reference: &windows::Storage::Streams::IRandomAccessStreamReference) -> Result<Art> {
-    let stream = reference.OpenReadAsync()?.join()?;
+fn decode_art(bytes: &[u8]) -> Result<Art> {
     unsafe {
-        let istream: IStream = CreateStreamOverRandomAccessStream(&stream)?;
+        let istream: IStream = windows::Win32::UI::Shell::SHCreateMemStream(Some(bytes))
+            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_OUTOFMEMORY))?;
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?;
         let decoder =

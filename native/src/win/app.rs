@@ -70,6 +70,8 @@ const NEAR_DIP: f32 = 160.0;
 const LEVEL_HUD_MS: u32 = 1600;
 /// 通知停留多久。
 const NOTIFICATION_MS: u32 = 3500;
+/// 展开面板顶部可以按住拖动的那一行（标签栏）的高度。
+const DRAG_BAR_HEIGHT: f32 = 44.0;
 /// AI 完成任务的提醒多停一会儿。
 const AI_NOTIFICATION_MS: u32 = 6000;
 /// 查不到软件图标时用的铃铛。
@@ -828,22 +830,20 @@ impl App {
     }
 
     /// 展开面板里一处没有按钮的空白（窗口内物理像素），从下往上找。
+    /// 顶部标签栏里一处没有按钮的地方（窗口内物理像素）：按住这里可以拖动岛。
     pub fn blank_point(&self) -> Option<(i32, i32)> {
         let f = self.metrics(self.state).frame(self.edge());
         let s = self.scene.scale();
-        let mut y = f.h - 12.0;
-        while y > 12.0 {
-            let mut x = 24.0;
-            while x < f.w - 24.0 {
-                if self.targets.hit(x, y).is_none() {
-                    return Some((
-                        ((f.x + x) * s).round() as i32,
-                        ((f.y + y) * s).round() as i32,
-                    ));
-                }
-                x += 16.0;
+        let y = DRAG_BAR_HEIGHT / 2.0;
+        let mut x = f.w - 24.0;
+        while x > 24.0 {
+            if self.targets.hit(x, y).is_none() {
+                return Some((
+                    ((f.x + x) * s).round() as i32,
+                    ((f.y + y) * s).round() as i32,
+                ));
             }
-            y -= 16.0;
+            x -= 8.0;
         }
         None
     }
@@ -1361,8 +1361,9 @@ impl App {
                 }
                 _ => self.redraw_expanded(),
             }
-        } else {
-            // 空白处：按住拖动可以把岛挪到别的边（或别的屏幕）
+        } else if ly < DRAG_BAR_HEIGHT {
+            // 顶部标签栏的空白处：按住拖动可以把岛挪到别的边（或别的屏幕）。
+            // 只在这一行，免得在内容区点一下手一抖，面板就跟着动
             let mut pt = POINT::default();
             unsafe {
                 let _ = GetCursorPos(&mut pt);
@@ -1383,8 +1384,10 @@ impl App {
             let _ = GetCursorPos(&mut pt);
         }
         let (dx, dy) = (pt.x - start.x, pt.y - start.y);
+        // 比系统的拖动阈值大一些：点一下时手抖不会挪动岛
         let far = unsafe {
-            dx.abs() >= GetSystemMetrics(SM_CXDRAG) || dy.abs() >= GetSystemMetrics(SM_CYDRAG)
+            dx.abs() >= 3 * GetSystemMetrics(SM_CXDRAG)
+                || dy.abs() >= 3 * GetSystemMetrics(SM_CYDRAG)
         };
         if !active && !far {
             return;
@@ -2540,6 +2543,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEMOVE => {
             with_app(|a| {
                 let (x, y) = lparam_point(lparam, a.scene.scale());
+                // 左键没按着（松开的消息丢了）：不再跟着鼠标拖岛
+                if wparam.0 & windows::Win32::System::SystemServices::MK_LBUTTON.0 as usize == 0 {
+                    a.moving = None;
+                }
                 a.on_mouse_move(x, y)
             });
             // 拖出文件：系统的拖放循环会一直跑到放下为止，这期间不能借着 App
