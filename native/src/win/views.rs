@@ -209,6 +209,25 @@ pub enum Hit {
     AiItem(usize),
     AiReadAll,
     AiClear,
+    /// AI 工作台：批准、拒绝（第几个请求）；点请求本身 = 回终端处理；点正在干活的代理 = 跳过去。
+    ApproveAllow(usize),
+    ApproveDeny(usize),
+    ApprovalRow(usize),
+    AgentRow(usize),
+}
+
+/// 一个等你批准的操作（Claude Code 的钩子在等岛的答复）。
+#[derive(Clone, Debug)]
+pub struct ApprovalItem {
+    pub id: u64,
+    /// 同一个会话的键（和工作台一样）。
+    pub key: String,
+    /// "Claude 想运行命令"、"island · npm install"。
+    pub title: String,
+    pub body: String,
+    /// 等答复的 `--notify` 进程的小窗口，发消息的终端窗口（HWND 的值）。
+    pub reply: isize,
+    pub window: isize,
 }
 
 /// AI 动态里的一条消息。
@@ -304,6 +323,10 @@ pub struct ViewState<'a> {
     pub hovered: Option<Hit>,
     pub pressed: Option<Hit>,
     pub ai: &'a [AiItem],
+    /// AI 工作台：等你批准的、正在干活的，和现在的时间（毫秒，算跑了多久）。
+    pub approvals: &'a [ApprovalItem],
+    pub agents: &'a [island::ai::Agent],
+    pub now: u64,
 }
 
 mod glyph {
@@ -554,11 +577,38 @@ pub fn draw_notification(
     palette: &Palette,
     accent: Rgb,
     NoteIcon { glyph, image: icon }: NoteIcon,
-    title: &str,
-    body: &str,
+    (title, body): (&str, &str),
     vertical: bool,
-) -> Result<()> {
+    approval: bool,
+) -> Result<Targets> {
     let fg = palette.foreground;
+    let mut t = Targets::default();
+    // 批准请求：允许（强调色）和拒绝两个圆按钮
+    let button = |t: &mut Targets, cx: f32, cy: f32, r: f32, allow: bool| -> Result<()> {
+        let fill = if allow {
+            color(accent, 1.0)
+        } else {
+            color(fg, 0.14)
+        };
+        p.fill_circle(cx, cy, r, fill)?;
+        let ink = if allow {
+            color(on(accent), 1.0)
+        } else {
+            color(fg, 0.9)
+        };
+        let glyph = if allow { glyph::CHECK } else { glyph::CLOSE };
+        let rect = Rect::new(cx - r, cy - r, r * 2.0, r * 2.0);
+        p.icon(glyph, rect, r * 0.8, ink)?;
+        t.add(
+            rect,
+            if allow {
+                Hit::ApproveAllow(0)
+            } else {
+                Hit::ApproveDeny(0)
+            },
+        );
+        Ok(())
+    };
     if vertical {
         // 竖胶囊：上面图标，下面两列竖排文字，右边一列是标题、左边一列是正文（中文竖排从右往左读）
         let (w, h) = (SIDE_NOTIFICATION.width, SIDE_NOTIFICATION.height);
@@ -570,7 +620,13 @@ pub fn draw_notification(
                 p.icon(glyph, r, 15.0, color(on(accent), 1.0))?;
             }
         }
-        let (top, bottom) = (r.bottom() + 10.0, h - 16.0);
+        let mut bottom = h - 16.0;
+        if approval {
+            button(&mut t, w / 2.0, h - 29.0, 15.0, false)?;
+            button(&mut t, w / 2.0, h - 65.0, 15.0, true)?;
+            bottom = h - 88.0;
+        }
+        let top = r.bottom() + 10.0;
         vertical_text(
             p,
             title,
@@ -578,13 +634,14 @@ pub fn draw_notification(
             (12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD),
             color(fg, 1.0),
         )?;
-        return vertical_text(
+        vertical_text(
             p,
             body,
             (w / 2.0 - 9.0, top, bottom),
             (11.5, DWRITE_FONT_WEIGHT_NORMAL),
             color(fg, 0.62),
-        );
+        )?;
+        return Ok(t);
     }
     let h = NOTIFICATION.height;
     match icon {
@@ -608,18 +665,26 @@ pub fn draw_notification(
         }
     }
     let family = p.gfx.text_font.clone();
+    let mut text_w = 256.0;
+    if approval {
+        let w = NOTIFICATION.width;
+        button(&mut t, w - 70.0, h / 2.0, 16.0, false)?;
+        button(&mut t, w - 30.0, h / 2.0, 16.0, true)?;
+        text_w = w - 96.0 - 66.0;
+    }
     p.text(
         title,
-        Rect::new(66.0, 12.0, 256.0, 20.0),
+        Rect::new(66.0, 12.0, text_w, 20.0),
         &style(&family, 13.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
         color(fg, 1.0),
     )?;
     p.text(
         body,
-        Rect::new(66.0, 32.0, 256.0, 20.0),
+        Rect::new(66.0, 32.0, text_w, 20.0),
         &style(&family, 12.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
         color(fg, 0.65),
-    )
+    )?;
+    Ok(t)
 }
 
 // ───────────────────────────── 展开面板 ─────────────────────────────
@@ -650,7 +715,8 @@ fn draw_ai(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
     let fg = v.palette.foreground;
     let family = p.gfx.text_font.clone();
     let w = EXPANDED.width;
-    if v.ai.is_empty() {
+    let bench = v.approvals.len() + v.agents.len();
+    if bench == 0 && v.ai.is_empty() {
         p.icon(
             GLYPH_AI,
             Rect::new(0.0, 100.0, w, 32.0),
@@ -671,7 +737,16 @@ fn draw_ai(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
         );
     }
     let unread = v.ai.iter().filter(|m| !m.read).count();
-    let summary = if unread > 0 {
+    let summary = if bench > 0 {
+        let mut parts = Vec::new();
+        if !v.agents.is_empty() {
+            parts.push(format!("{} 个在干活", v.agents.len()));
+        }
+        if !v.approvals.is_empty() {
+            parts.push(format!("{} 个等你批准", v.approvals.len()));
+        }
+        parts.join(" · ")
+    } else if unread > 0 {
         format!("{unread} 条没看过 · 点一条跳过去")
     } else {
         "都看过了".to_string()
@@ -682,40 +757,140 @@ fn draw_ai(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
         &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
         color(fg, 0.5),
     )?;
-    let (label, hit) = if unread > 0 {
-        ("全部已读", Hit::AiReadAll)
-    } else {
-        ("清空", Hit::AiClear)
-    };
-    let bw = segment_width(label);
-    let b = Rect::new(w - 16.0 - bw, 51.0, bw, 22.0);
-    let hot = v.hovered == Some(hit);
-    p.fill_round(b, 11.0, color(fg, if hot { 0.18 } else { 0.1 }))?;
-    p.text(
-        label,
-        b,
-        &style(&family, 11.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
-        color(fg, 0.85),
-    )?;
-    t.add(b, hit);
+    if bench == 0 {
+        let (label, hit) = if unread > 0 {
+            ("全部已读", Hit::AiReadAll)
+        } else {
+            ("清空", Hit::AiClear)
+        };
+        let bw = segment_width(label);
+        let b = Rect::new(w - 16.0 - bw, 51.0, bw, 22.0);
+        let hot = v.hovered == Some(hit);
+        p.fill_round(b, 11.0, color(fg, if hot { 0.18 } else { 0.1 }))?;
+        p.text(
+            label,
+            b,
+            &style(&family, 11.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+            color(fg, 0.85),
+        )?;
+        t.add(b, hit);
+    }
 
     let title = style(&family, 12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading);
     let title_read = style(&family, 12.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
     let body = style(&family, 11.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
     let time = style(&family, 10.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing);
-    for (i, m) in v.ai.iter().take(AI_ROWS).enumerate() {
-        let y = AI_TOP + i as f32 * AI_ROW_HEIGHT;
-        let r = Rect::new(12.0, y, 416.0, AI_ROW_HEIGHT - 3.0);
-        let hovered = v.hovered == Some(Hit::AiItem(i));
-        p.fill_round(r, 10.0, color(fg, if hovered { 0.12 } else { 0.06 }))?;
+    let button = style(&family, 11.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Center);
+    let row_rect = |row: usize| {
+        let y = AI_TOP + row as f32 * AI_ROW_HEIGHT;
+        (y, Rect::new(12.0, y, 416.0, AI_ROW_HEIGHT - 3.0))
+    };
+    let badge = |y: f32, image: Option<&Art>| -> Result<()> {
         let icon = Rect::new(22.0, y + 7.0, 25.0, 25.0);
-        match &m.icon {
-            Some(a) => p.image(a.id, &a.pixels, a.width, a.height, icon, 6.0)?,
+        match image {
+            Some(a) => p.image(a.id, &a.pixels, a.width, a.height, icon, 6.0),
             None => {
                 p.fill_circle(icon.x + 12.5, icon.y + 12.5, 12.5, color(v.accent, 1.0))?;
-                p.icon(GLYPH_AI, icon, 12.0, color(on(v.accent), 1.0))?;
+                p.icon(GLYPH_AI, icon, 12.0, color(on(v.accent), 1.0))
             }
         }
+    };
+    let mut row = 0;
+
+    // 等你批准的：强调色底，右边拒绝 / 允许
+    for (i, a) in v.approvals.iter().enumerate().take(AI_ROWS) {
+        let (y, r) = row_rect(row);
+        row += 1;
+        let hovered = v.hovered == Some(Hit::ApprovalRow(i));
+        p.fill_round(r, 10.0, color(v.accent, if hovered { 0.26 } else { 0.18 }))?;
+        badge(y, None)?;
+        p.text(
+            &a.title,
+            Rect::new(56.0, y + 3.0, 236.0, 18.0),
+            &title,
+            color(fg, 1.0),
+        )?;
+        p.text(
+            &a.body,
+            Rect::new(56.0, y + 20.0, 236.0, 16.0),
+            &body,
+            color(fg, 0.65),
+        )?;
+        t.add(r, Hit::ApprovalRow(i));
+        let deny = Rect::new(300.0, y + 8.0, 54.0, 24.0);
+        let allow = Rect::new(360.0, y + 8.0, 58.0, 24.0);
+        let hot = |h| v.hovered == Some(h);
+        p.fill_round(
+            deny,
+            12.0,
+            color(fg, if hot(Hit::ApproveDeny(i)) { 0.24 } else { 0.14 }),
+        )?;
+        p.text("拒绝", deny, &button, color(fg, 0.9))?;
+        p.fill_round(
+            allow,
+            12.0,
+            color(v.accent, if hot(Hit::ApproveAllow(i)) { 0.85 } else { 1.0 }),
+        )?;
+        p.text("允许", allow, &button, color(on(v.accent), 1.0))?;
+        t.add(deny, Hit::ApproveDeny(i));
+        t.add(allow, Hit::ApproveAllow(i));
+    }
+
+    // 正在干活的：在干什么、任务、改了几个文件、跑了多久
+    for (i, g) in v.agents.iter().enumerate() {
+        if row >= AI_ROWS {
+            break;
+        }
+        let (y, r) = row_rect(row);
+        row += 1;
+        let hovered = v.hovered == Some(Hit::AgentRow(i));
+        p.fill_round(r, 10.0, color(fg, if hovered { 0.12 } else { 0.06 }))?;
+        badge(y, None)?;
+        let head = if g.project.is_empty() {
+            g.action.clone()
+        } else {
+            format!("{} · {}", g.project, g.action)
+        };
+        p.text(
+            &head,
+            Rect::new(56.0, y + 3.0, 300.0, 18.0),
+            &title,
+            color(fg, 1.0),
+        )?;
+        let mut line = if g.prompt.is_empty() {
+            format!("{} 刚开始", g.app_name)
+        } else {
+            g.prompt.clone()
+        };
+        if !g.files.is_empty() {
+            line.push_str(&format!(" · 改了 {} 个文件", g.files.len()));
+        }
+        p.text(
+            &line,
+            Rect::new(56.0, y + 20.0, 340.0, 16.0),
+            &body,
+            color(fg, 0.55),
+        )?;
+        p.text(
+            &island::ai::elapsed(v.now.saturating_sub(g.started)),
+            Rect::new(356.0, y + 3.0, 52.0, 18.0),
+            &time,
+            color(v.accent, 1.0),
+        )?;
+        p.fill_circle(r.right() - 9.0, y + 27.0, 3.0, color(v.accent, 1.0))?;
+        t.add(r, Hit::AgentRow(i));
+    }
+
+    // 剩下的位置给消息
+    for (i, m) in v.ai.iter().enumerate() {
+        if row >= AI_ROWS {
+            break;
+        }
+        let (y, r) = row_rect(row);
+        row += 1;
+        let hovered = v.hovered == Some(Hit::AiItem(i));
+        p.fill_round(r, 10.0, color(fg, if hovered { 0.12 } else { 0.06 }))?;
+        badge(y, m.icon.as_deref())?;
         p.text(
             &m.title,
             Rect::new(56.0, y + 3.0, 300.0, 18.0),

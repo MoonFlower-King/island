@@ -5,23 +5,32 @@
 //! 不在 WM_COPYDATA 里直接借用 App。
 //!
 //! 同时记下钩子是在哪个窗口里跑的（终端、编辑器），点岛上的消息时切回那个窗口。
+//!
+//! Claude Code 要你批准操作时（PermissionRequest 钩子），这个进程不马上退出：开一个只收消息的小窗口，
+//! 等岛上点了允许或拒绝，把结果按 Claude Code 的格式写到标准输出再退出。岛没在运行、岛关了、
+//! 或者你选了"回终端处理"，就什么也不写，Claude Code 照常在终端里问你。
 
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Console::{
-    ATTACH_PARENT_PROCESS, AttachConsole, FreeConsole, GetConsoleWindow,
+    ATTACH_PARENT_PROCESS, AttachConsole, FreeConsole, GetConsoleWindow, GetStdHandle,
+    STD_OUTPUT_HANDLE,
 };
 use windows::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowW, PostMessageW, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_APP, WM_COPYDATA,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetMessageW, HWND_MESSAGE,
+    IsWindow, KillTimer, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SMTO_ABORTIFHUNG,
+    SendMessageTimeoutW, SetTimer, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COPYDATA, WM_TIMER,
+    WNDCLASSW,
 };
 use windows::core::w;
 
@@ -29,11 +38,36 @@ use windows::core::w;
 pub const COPYDATA_AI: usize = 0x4941_0001;
 /// 同上，开头多 8 字节：发消息的窗口（HWND 的值，0 = 没找到）。
 pub const COPYDATA_AI_WINDOW: usize = 0x4941_0002;
+/// 同上，开头 16 字节：发消息的窗口、等答复的窗口（批准请求）。
+pub const COPYDATA_AI_ASK: usize = 0x4941_0003;
+/// 岛发回的答复：`allow`、`deny` 或 `ask`（回终端处理）。
+pub const COPYDATA_AI_REPLY: usize = 0x4941_0004;
 /// 有新的 AI 消息进了队列。
 pub const WM_AI: u32 = WM_APP + 4;
 
-/// 收到的消息：(来源, JSON, 发消息的窗口)。
-static INBOX: Mutex<Vec<(String, String, isize)>> = Mutex::new(Vec::new());
+/// 收到的一条消息。
+pub struct Inbound {
+    pub source: String,
+    pub payload: String,
+    /// 发消息的终端窗口（HWND 的值，0 = 没找到）。
+    pub window: isize,
+    /// 批准请求：等答复的窗口（0 = 不用答复）。
+    pub reply: isize,
+}
+
+static INBOX: Mutex<Vec<Inbound>> = Mutex::new(Vec::new());
+
+/// 岛对批准请求的答复。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Answer {
+    Allow,
+    Deny,
+    /// 不替你决定，回终端处理。
+    Terminal,
+}
+
+/// 批准请求最多等这么久（Claude Code 的钩子默认 600 秒后放弃）。
+const APPROVAL_WAIT: Duration = Duration::from_secs(590);
 
 /// 从标准输入最多等这么久（没有接管道时不会一直卡住）。
 const STDIN_WAIT: Duration = Duration::from_secs(3);
@@ -48,20 +82,33 @@ pub fn run(args: &[String]) -> i32 {
         Some(p) => p.clone(),
         None => read_stdin(),
     };
-    let project = island::ai::parse(&source, &payload)
-        .map(|e| e.project)
-        .unwrap_or_default();
+    let event = island::ai::parse(&source, &payload);
+    let approval = event
+        .as_ref()
+        .is_some_and(|e| e.kind == island::ai::Kind::Approval);
+    // 先拿到标准输出（后面接控制台可能会换掉它）
+    let stdout = unsafe { GetStdHandle(STD_OUTPUT_HANDLE) }.unwrap_or_default();
+    let Ok(island_hwnd) = (unsafe { FindWindowW(w!("Island.Native"), None) }) else {
+        return 0;
+    };
+    let project = event.map(|e| e.project).unwrap_or_default();
     let window = origin_window(&project) as i64;
+    let reply = if approval { reply_window() } else { None };
     let mut data = window.to_le_bytes().to_vec();
+    if let Some(r) = reply {
+        data.extend((r.0 as i64).to_le_bytes());
+    }
     data.extend(source.into_bytes());
     data.push(0);
     data.extend(payload.into_bytes().into_iter().take(MAX_PAYLOAD));
     unsafe {
-        let Ok(hwnd) = FindWindowW(w!("Island.Native"), None) else {
-            return 0;
-        };
+        let hwnd = island_hwnd;
         let cds = COPYDATASTRUCT {
-            dwData: COPYDATA_AI_WINDOW,
+            dwData: if reply.is_some() {
+                COPYDATA_AI_ASK
+            } else {
+                COPYDATA_AI_WINDOW
+            },
             cbData: data.len() as u32,
             lpData: data.as_ptr() as *mut _,
         };
@@ -75,7 +122,134 @@ pub fn run(args: &[String]) -> i32 {
             None,
         );
     }
+    if let Some(r) = reply {
+        let answer = wait_answer(r, island_hwnd);
+        if let Some(allow) = match answer {
+            Some(Answer::Allow) => Some(true),
+            Some(Answer::Deny) => Some(false),
+            _ => None,
+        } {
+            write_stdout(stdout, &island::ai::permission_reply(allow));
+        }
+    }
     0
+}
+
+fn write_stdout(handle: HANDLE, text: &str) {
+    use std::os::windows::io::FromRawHandle;
+    if handle.is_invalid() || handle.0.is_null() {
+        return;
+    }
+    // 句柄属于进程，写完不关（进程马上就退出了）
+    let file = unsafe { std::fs::File::from_raw_handle(handle.0) };
+    let mut file = std::mem::ManuallyDrop::new(file);
+    let _ = file.write_all(text.as_bytes());
+    let _ = file.flush();
+}
+
+static ANSWER: Mutex<Option<Answer>> = Mutex::new(None);
+
+/// 只收消息的小窗口，岛把答复发到这里。
+fn reply_window() -> Option<HWND> {
+    unsafe extern "system" fn proc(
+        hwnd: HWND,
+        msg: u32,
+        wparam: WPARAM,
+        lparam: LPARAM,
+    ) -> LRESULT {
+        if msg == WM_COPYDATA {
+            let cds = unsafe { (lparam.0 as *const COPYDATASTRUCT).as_ref() };
+            if let Some(c) = cds.filter(|c| c.dwData == COPYDATA_AI_REPLY && !c.lpData.is_null()) {
+                let bytes =
+                    unsafe { std::slice::from_raw_parts(c.lpData as *const u8, c.cbData as usize) };
+                let answer = match bytes {
+                    b"allow" => Answer::Allow,
+                    b"deny" => Answer::Deny,
+                    _ => Answer::Terminal,
+                };
+                if let Ok(mut a) = ANSWER.lock() {
+                    *a = Some(answer);
+                }
+                unsafe { PostQuitMessage(0) };
+                return LRESULT(1);
+            }
+        }
+        unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+    }
+    unsafe {
+        let instance = GetModuleHandleW(None).ok()?;
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(proc),
+            hInstance: instance.into(),
+            lpszClassName: w!("Island.Reply"),
+            ..Default::default()
+        };
+        RegisterClassW(&class);
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("Island.Reply"),
+            None,
+            WINDOW_STYLE(0),
+            0,
+            0,
+            0,
+            0,
+            Some(HWND_MESSAGE),
+            None,
+            Some(instance.into()),
+            None,
+        )
+        .ok()
+    }
+}
+
+/// 等岛的答复。岛关了或者等太久，返回 None。
+fn wait_answer(reply: HWND, island: HWND) -> Option<Answer> {
+    let start = std::time::Instant::now();
+    unsafe {
+        SetTimer(Some(reply), 1, 500, None);
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            if msg.message == WM_TIMER
+                && (start.elapsed() > APPROVAL_WAIT || !IsWindow(Some(island)).as_bool())
+            {
+                break;
+            }
+            DispatchMessageW(&msg);
+        }
+        let _ = KillTimer(Some(reply), 1);
+    }
+    ANSWER.lock().ok().and_then(|a| *a)
+}
+
+/// 把答复发给等着的 `--notify` 进程。
+pub fn answer(reply: isize, a: Answer) {
+    let text: &[u8] = match a {
+        Answer::Allow => b"allow",
+        Answer::Deny => b"deny",
+        Answer::Terminal => b"ask",
+    };
+    let cds = COPYDATASTRUCT {
+        dwData: COPYDATA_AI_REPLY,
+        cbData: text.len() as u32,
+        lpData: text.as_ptr() as *mut _,
+    };
+    unsafe {
+        let _ = SendMessageTimeoutW(
+            HWND(reply as *mut _),
+            WM_COPYDATA,
+            WPARAM(0),
+            LPARAM(&cds as *const _ as isize),
+            SMTO_ABORTIFHUNG,
+            2000,
+            None,
+        );
+    }
+}
+
+/// 等答复的进程还在不在（Claude Code 那边已经在终端里答了、或者关了，它就不在了）。
+pub fn waiting(reply: isize) -> bool {
+    unsafe { IsWindow(Some(HWND(reply as *mut _))) }.as_bool()
 }
 
 fn read_stdin() -> String {
@@ -163,18 +337,26 @@ fn processes() -> HashMap<u32, (u32, String)> {
 pub fn receive(hwnd: HWND, lparam: LPARAM) -> bool {
     let cds = unsafe { (lparam.0 as *const COPYDATASTRUCT).as_ref() };
     let Some(cds) = cds.filter(|c| {
-        (c.dwData == COPYDATA_AI || c.dwData == COPYDATA_AI_WINDOW) && !c.lpData.is_null()
+        matches!(c.dwData, COPYDATA_AI | COPYDATA_AI_WINDOW | COPYDATA_AI_ASK)
+            && !c.lpData.is_null()
     }) else {
         return false;
     };
     let mut bytes =
         unsafe { std::slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize) };
-    let mut window = 0;
-    if cds.dwData == COPYDATA_AI_WINDOW {
+    let (mut window, mut reply) = (0, 0);
+    if cds.dwData != COPYDATA_AI {
         let Some((head, rest)) = bytes.split_first_chunk::<8>() else {
             return false;
         };
         window = i64::from_le_bytes(*head) as isize;
+        bytes = rest;
+    }
+    if cds.dwData == COPYDATA_AI_ASK {
+        let Some((head, rest)) = bytes.split_first_chunk::<8>() else {
+            return false;
+        };
+        reply = i64::from_le_bytes(*head) as isize;
         bytes = rest;
     }
     let (source, payload) = match bytes.iter().position(|&b| b == 0) {
@@ -184,11 +366,12 @@ pub fn receive(hwnd: HWND, lparam: LPARAM) -> bool {
     if let Ok(mut q) = INBOX.lock()
         && q.len() < 100
     {
-        q.push((
-            String::from_utf8_lossy(source).into_owned(),
-            String::from_utf8_lossy(payload).into_owned(),
+        q.push(Inbound {
+            source: String::from_utf8_lossy(source).into_owned(),
+            payload: String::from_utf8_lossy(payload).into_owned(),
             window,
-        ));
+            reply,
+        });
     }
     unsafe {
         let _ = PostMessageW(Some(hwnd), WM_AI, WPARAM(0), LPARAM(0));
@@ -196,7 +379,7 @@ pub fn receive(hwnd: HWND, lparam: LPARAM) -> bool {
     true
 }
 
-pub fn take() -> Vec<(String, String, isize)> {
+pub fn take() -> Vec<Inbound> {
     INBOX
         .lock()
         .map(|mut q| std::mem::take(&mut *q))
