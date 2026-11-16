@@ -52,7 +52,7 @@ use super::translator::{Draft, Status, TranslateUi};
 use super::views::{
     self, CLIP_ROWS, Editing, Field, Hit, SHELF_ROWS, TODO_ROWS, Tab, Targets, ViewState,
 };
-use super::{appinfo, forward, log, smoke, toasts};
+use super::{appinfo, forward, log, smoke, toasts, tray};
 
 const TIMER_POLL: usize = 1;
 const TIMER_TOPMOST: usize = 2;
@@ -148,6 +148,8 @@ pub struct App {
     pub notification_target: Target,
     /// AI 动态：收到过的 AI 消息，新的在前。
     pub ai: Vec<views::AiItem>,
+    /// 任务栏通知区的图标。
+    pub tray: Option<tray::Tray>,
     /// AI 工作台：正在干活的代理、等你批准的操作。
     pub bench: island::ai::Workbench,
     pub approvals: Vec<views::ApprovalItem>,
@@ -348,6 +350,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             notification: None,
             notification_target: Target::None,
             ai: Vec::new(),
+            tray: None,
             bench: island::ai::Workbench::default(),
             approvals: Vec::new(),
             next_approval: 0,
@@ -370,6 +373,7 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         app.apply_accent();
         app.redraw_all();
         app.shelf_fill_info();
+        app.tray = Some(tray::Tray::new(hwnd));
         let smoking = app.testing;
         let read_notifications = app.settings.show_system_notifications;
         APP.with(|cell| *cell.borrow_mut() = Some(app));
@@ -802,6 +806,7 @@ impl App {
 
     /// 请求列表变了：弹着的那个没了就换下一个，或者收起。
     fn approvals_changed(&mut self) {
+        self.update_tray();
         if self.note_approval.is_some()
             && self.note_approval != self.approvals.first().map(|a| a.id)
         {
@@ -844,7 +849,21 @@ impl App {
         self.ai.iter().any(|m| !m.read)
     }
 
+    /// 任务栏图标：有没看过的 AI 消息、等你批准的操作时带个点。
+    fn update_tray(&mut self) {
+        let dot = self.ai_unread() || !self.approvals.is_empty();
+        if let Some(t) = &mut self.tray {
+            t.set_dot(dot);
+        }
+    }
+
+    /// 点任务栏图标：展开（置顶）或收起。
+    pub fn toggle_from_tray(&mut self) {
+        self.set_pinned(!self.pinned);
+    }
+
     fn ai_changed(&mut self) {
+        self.update_tray();
         self.redraw_clock();
         self.redraw_compact();
         self.update_line_tint();
@@ -2568,6 +2587,26 @@ struct MenuState {
     persist_clipboard: bool,
 }
 
+/// 在岛上或任务栏图标上点右键：弹出菜单，执行选中的项。
+fn context_menu(hwnd: HWND) {
+    let Some(state) = with_app(|a| {
+        a.menu_open = true;
+        MenuState {
+            pinned: a.pinned,
+            level: a.settings.show_level_hud,
+            toasts: a.settings.show_system_notifications,
+            persist_clipboard: a.settings.persist_clipboard,
+        }
+    }) else {
+        return;
+    };
+    let cmd = show_menu(hwnd, &state);
+    with_app(|a| {
+        a.menu_open = false;
+        on_menu_command(a, cmd);
+    });
+}
+
 /// 右键菜单。菜单是模态的，期间不能借用 App。
 fn show_menu(hwnd: HWND, s: &MenuState) -> usize {
     unsafe {
@@ -2833,21 +2872,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_RBUTTONUP => {
-            let Some(state) = with_app(|a| {
-                a.menu_open = true;
-                MenuState {
-                    pinned: a.pinned,
-                    level: a.settings.show_level_hud,
-                    toasts: a.settings.show_system_notifications,
-                    persist_clipboard: a.settings.persist_clipboard,
+            context_menu(hwnd);
+            LRESULT(0)
+        }
+        // 任务栏图标：点一下（或用键盘选中）展开 / 收起，右键打开菜单
+        tray::WM_TRAY => {
+            match (lparam.0 as u32) & 0xFFFF {
+                NIN_SELECT | tray::NIN_KEYSELECT => {
+                    with_app(|a| a.toggle_from_tray());
                 }
-            }) else {
-                return LRESULT(0);
-            };
-            let cmd = show_menu(hwnd, &state);
+                WM_CONTEXTMENU => context_menu(hwnd),
+                _ => {}
+            }
+            LRESULT(0)
+        }
+        // 资源管理器重启了：把图标加回去
+        m if m == tray::taskbar_created() => {
             with_app(|a| {
-                a.menu_open = false;
-                on_menu_command(a, cmd);
+                if let Some(t) = &mut a.tray {
+                    t.add();
+                }
             });
             LRESULT(0)
         }
