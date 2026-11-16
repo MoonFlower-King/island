@@ -14,4 +14,5 @@ pub mod smoke;
 pub mod system;
 pub mod toasts;
 pub mod translator;
+pub mod tray;
 pub mod views;

@@ -16,3 +16,4 @@ pub mod text;
 pub mod toast;
 pub mod todo;
 pub mod translate;
+pub mod trayicon;

@@ -623,6 +623,21 @@ fn child_output(smoke: &mut Smoke) -> String {
     out.trim().to_string()
 }
 
+/// 像点了任务栏图标一样：给岛发通知区图标的回调消息。
+fn tray_click(app: &App) {
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
+    use windows::Win32::UI::Shell::NIN_SELECT;
+    use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
+    unsafe {
+        let _ = PostMessageW(
+            Some(app.hwnd),
+            super::tray::WM_TRAY,
+            WPARAM(0),
+            LPARAM(NIN_SELECT as isize),
+        );
+    }
+}
+
 /// 新开一个命令行窗口，在里面跑 `Island.exe --notify smoke-agent jump-test`；窗口留着（cmd /k）。
 fn spawn_in_console() -> std::io::Result<std::process::Child> {
     use std::os::windows::process::CommandExt;
@@ -1682,6 +1697,30 @@ pub fn step(app: &mut App) {
             app.dismiss_notification();
             app.set_pinned(false);
             app.set_tab(Tab::Music);
+            next = 600;
+        }
+        // 任务栏通知区的图标：加上了；点一下展开，再点一下收起
+        104 => {
+            smoke.check(
+                app.tray.as_ref().is_some_and(|t| t.added),
+                "图标加到了任务栏通知区",
+            );
+            tray_click(app);
+            next = 800;
+        }
+        105 => {
+            smoke.check(
+                app.state == IslandState::Expanded && app.pinned,
+                &format!("点任务栏图标展开（{:?}）", app.state),
+            );
+            tray_click(app);
+            next = 800;
+        }
+        106 => {
+            smoke.check(
+                app.state != IslandState::Expanded,
+                &format!("再点一下收起（{:?}）", app.state),
+            );
             smoke.step = 15;
             next = 35;
         }

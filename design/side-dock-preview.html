@@ -70,7 +70,12 @@ header a { color: var(--accent); }
 .win::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 9%; background: rgba(0,0,0,.06); border-radius: 8px 8px 0 0; }
 .win p { margin: 0; user-select: text; }
 .win p:first-of-type { margin-top: 6%; }
-.taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 5.3%; background: rgba(20,22,28,.72); }
+.taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 5.3%; background: rgba(20,22,28,.72); display: flex; align-items: center; justify-content: flex-end; padding-right: 12px; }
+.tray { position: relative; width: 30px; height: 26px; max-height: 90%; border: 0; border-radius: 5px; background: transparent; display: grid; place-items: center; cursor: default; padding: 0; }
+.tray:hover, .tray:focus-visible { background: rgba(255,255,255,.12); outline: none; }
+.tray i { display: block; width: 18px; height: 8px; border-radius: 4px; background: #1c1c1e; box-shadow: 0 0 0 1.3px #e8e8ea; }
+.tray b { position: absolute; right: 3px; top: 4px; width: 7px; height: 7px; border-radius: 50%; background: #ff9f0a; box-shadow: 0 0 0 1.5px rgba(20,22,28,.9); display: none; }
+.tray.dot b { display: block; }
 .hint {
   position: absolute; right: 10px; bottom: calc(5.3% + 8px); font-size: 12px; color: #fff;
   background: rgba(0,0,0,.45); padding: 2px 8px; border-radius: 6px; pointer-events: none; max-width: 70%;
@@ -196,7 +201,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       <p>这是一个普通窗口。选中这段文字按 Ctrl+C，然后打开岛上的剪贴板标签看看。</p>
       <p>晴天 —— 故事的小黄花，从出生那年就飘着。</p>
     </div>
-    <div class="taskbar"></div>
+    <div class="taskbar"><button class="tray" id="tray" title="灵动岛" aria-label="灵动岛：点一下展开或收起，右键打开菜单"><i></i><b></b></button></div>
     <div class="island" id="island"><div class="bg" id="islandBg"></div></div>
     <div class="hint" id="hint"></div>
   </div>
@@ -1211,7 +1216,13 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     menu.remove(); menu = null; S.menuOpen = false;
     setTimeout(tryCollapse, 150);
   }
-  island.addEventListener("contextmenu", (e) => {
+  // 任务栏通知区的图标：点一下展开 / 收起，右键是同一个菜单；有没看过的 AI 消息或等你批准时带个小点
+  const tray = document.getElementById("tray");
+  tray.addEventListener("click", () => { closeMenu(); S.pinned = !S.pinned; if (S.pinned && (unread() || S.approvals.length)) S.tab = "ai"; update(true); rerenderAll(); });
+  tray.addEventListener("contextmenu", openMenu);
+  setInterval(() => tray.classList.toggle("dot", unread() || S.approvals.length > 0), 500);
+  island.addEventListener("contextmenu", openMenu);
+  function openMenu(e) {
     e.preventDefault();
     closeMenu();
     S.menuOpen = true;
@@ -1250,7 +1261,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       }
       closeMenu();
     });
-  });
+  }
   document.addEventListener("pointerdown", (e) => { if (menu && !menu.contains(e.target)) closeMenu(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
 
