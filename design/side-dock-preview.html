@@ -98,6 +98,9 @@ header a { color: var(--accent); }
 .ico.solid { fill: currentColor; stroke: none; }
 .eq { display: flex; gap: 2px; align-items: flex-end; height: 14px; }
 .eq i { display: block; width: 3px; border-radius: 2px; background: var(--i-accent); animation: eq 0.9s ease-in-out infinite; }
+.pulse { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: 0.25; transform: scale(0.7); } }
+@media (prefers-reduced-motion: reduce) { .pulse { animation: none; } }
 .eq i:nth-child(2) { animation-delay: -.3s; } .eq i:nth-child(3) { animation-delay: -.6s; } .eq i:nth-child(4) { animation-delay: -.15s; }
 .eq.v { flex-direction: column; height: auto; width: 14px; align-items: flex-start; }
 .eq.v i { height: 3px; animation-name: eqv; }
@@ -232,6 +235,14 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
         <button class="chip action" data-app="claude" data-kind="ask">Claude 等你确认</button>
       </div>
     </div>
+    <div class="crow"><span class="label">AI 工作台</span>
+      <div class="chips" id="benchDemos">
+        <button class="chip action" data-app="claude" data-run="1">Claude 开始干活</button>
+        <button class="chip action" data-app="codex" data-run="1">Codex 开始干活</button>
+        <button class="chip action" data-app="claude" data-approve="1">Claude 请求批准</button>
+      </div>
+      <span class="note">真机上来自 Claude Code 的钩子：正在干什么、跑了多久实时显示；要批准的操作直接在岛上点允许或拒绝，不用切回终端。</span>
+    </div>
     <div class="crow"><span class="label">其他软件</span>
       <div class="chips" id="appDemos">
         <button class="chip action" data-app="wechat">微信消息</button>
@@ -365,6 +376,11 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     tr: { input: "今天天气很好，适合出去走走。", output: "", status: "idle", settings: false, provider: "anthropic", url: "", model: "", key: "" },
     mon: { cpu: 18, mem: 0.52, up: 12, down: 340 },
     toast: "",
+    // AI 工作台：正在干活的代理、等你批准的操作
+    agents: [
+      { id: 1, app: "claude", project: "island", prompt: "把 AI 工作台做进预览页", action: "运行 npm test", start: Date.now() - 222000, edits: 3 },
+    ],
+    approvals: [],
     // AI 动态：完成任务、等你确认。没看过的会在收起的胶囊上留一个小点
     ai: [
       { app: "codex", kind: "done", title: "任务完成", body: "已修复登录页的表单校验，3 个测试全部通过。", project: "web-shop", at: "09:41", read: true },
@@ -425,7 +441,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   const layers = {};
   for (const k of Object.keys(NAMES)) {
     const el = document.createElement("div");
-    el.className = "layer" + (k === "expanded" ? " interactive" : "");
+    el.className = "layer" + (k === "expanded" || k === "note" ? " interactive" : "");
     el.innerHTML = '<div class="content"><div class="inner"></div></div>';
     island.appendChild(el);
     layers[k] = el;
@@ -470,6 +486,21 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     if (st === "note") {
       const n = S.note || { icon: "mail", title: "新消息", body: "这是一条来自灵动岛的演示通知" };
       const head = (size) => n.app ? badge(n.app, size) : `<span class="t" style="width:${size}px;height:${size}px;border-radius:50%;background:var(--i-track);display:grid;place-items:center;flex:none">${ico(n.icon, size / 2)}</span>`;
+      if (n.approval) {
+        const btn = (act, label, icon, filled, size) => `<button class="p-btn" data-ap="${act}" aria-label="${label}" title="${label}" style="position:static;width:${size}px;height:${size}px;border-radius:50%;flex:none;${filled ? "background:var(--i-accent);color:var(--i-bg)" : "background:var(--i-track)"}">${ico(icon, size / 2.2)}</button>`;
+        return vert
+          ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;padding:14px 0 14px;gap:8px">
+               ${head(32)}
+               <div style="flex:1;display:flex;flex-direction:row-reverse;gap:6px;min-height:0">
+                 <span class="t vtext" style="font-size:13px;font-weight:600;max-height:100%">${esc(n.title)}</span>
+                 <span class="s vtext" style="font-size:12px;max-height:100%">${esc(n.body)}</span></div>
+               ${btn("allow", "允许", "check", true, 30)}${btn("deny", "拒绝", "x", false, 30)}</div>`
+          : `<div class="abs" style="inset:0;display:flex;align-items:center;gap:10px;padding:0 14px 0 14px">
+               ${head(36)}
+               <div style="min-width:0;flex:1"><div class="t" style="font-size:13.5px;font-weight:600">${esc(n.title)}</div>
+               <div class="s" style="font-size:12.5px;font-family:ui-monospace,Consolas,monospace">${esc(n.body)}</div></div>
+               ${btn("deny", "拒绝", "x", false, 32)}${btn("allow", "允许", "check", true, 32)}</div>`;
+      }
       if (n.app) return vert
         ? `<div class="abs" style="inset:0;display:flex;flex-direction:column;align-items:center;padding:14px 0 18px;gap:10px">
              ${head(32)}
@@ -631,20 +662,56 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   }
   function unread() { return S.ai.some((a) => !a.read); }
   function firstUnread() { return S.ai.find((a) => !a.read); }
+  function elapsed(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60);
+    return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${m}:${String(s % 60).padStart(2, "0")}`;
+  }
+  // 工作台的行：先是等你批准的，再是正在干活的，剩下的位置给消息
+  function benchRows() {
+    const rows = [];
+    S.approvals.forEach((a, i) => rows.push(
+      `<div class="row" data-act="ap-term" data-i="${i}" title="在终端里处理" style="top:TOPpx;height:40px;align-items:center;background:${rgba(AI_APPS[a.app].color, 0.16)}">
+         ${badge(a.app, 24)}
+         <div style="min-width:0;flex:1;display:grid">
+           <span class="t" style="font-size:12.5px;font-weight:700">${AI_APPS[a.app].name} 想${esc(a.verb)} · ${esc(a.project)}</span>
+           <span class="s" style="font-size:11.5px;font-family:ui-monospace,Consolas,monospace">${esc(a.detail)}</span>
+         </div>
+         <button class="p-btn" data-act="ap-deny" data-i="${i}" style="position:static;width:44px;height:24px;border-radius:12px;background:var(--i-track);font-size:11.5px">拒绝</button>
+         <button class="p-btn" data-act="ap-allow" data-i="${i}" style="position:static;width:44px;height:24px;border-radius:12px;background:var(--i-accent);color:var(--i-bg);font-size:11.5px;font-weight:600">允许</button></div>`));
+    S.agents.forEach((g, i) => rows.push(
+      `<div class="row" data-act="agent-open" data-i="${i}" title="跳到这个对话" style="top:TOPpx;height:40px;align-items:center">
+         ${badge(g.app, 24)}
+         <div style="min-width:0;flex:1;display:grid">
+           <span class="t" style="font-size:12.5px;font-weight:600">${esc(g.project)} · ${esc(g.action)}</span>
+           <span class="s" style="font-size:11.5px">${esc(g.prompt || "刚开始")}${g.edits ? ` · 改了 ${g.edits} 个文件` : ""}</span>
+         </div>
+         <span class="pulse" style="width:6px;height:6px;border-radius:50%;background:var(--i-accent);flex:none"></span>
+         <span style="font-size:11px;color:var(--i-accent);font-variant-numeric:tabular-nums;min-width:34px;text-align:right">${elapsed(Date.now() - g.start)}</span></div>`));
+    return rows;
+  }
   function tabAI() {
+    const bench = benchRows();
+    if (bench.length) {
+      const msgs = S.ai.slice(0, Math.max(0, 4 - bench.length)).map((a, i) => aiRow(a, i));
+      const head = [S.agents.length ? `${S.agents.length} 个在干活` : "", S.approvals.length ? `${S.approvals.length} 个等你批准` : ""].filter(Boolean).join(" · ");
+      return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${head}</span>` +
+        bench.concat(msgs).slice(0, 4).map((r, i) => r.replace("top:TOPpx", `top:${78 + i * 42}px`)).join("");
+    }
     if (!S.ai.length) return `<div class="abs s" style="left:0;right:0;top:110px;text-align:center;font-size:13px">还没有 AI 消息</div><div class="abs f" style="left:0;right:0;top:134px;text-align:center;font-size:11px">Claude、Codex 等完成任务或等你确认时会显示在这里</div>`;
     const n = S.ai.filter((a) => !a.read).length;
-    const rows = S.ai.slice(0, 4).map((a, i) =>
-      `<div class="row" data-act="ai-open" data-i="${i}" title="跳到 ${AI_APPS[a.app].name} 里的这个对话" style="top:${78 + i * 42}px;height:40px;align-items:center">
+    const rows = S.ai.slice(0, 4).map((a, i) => aiRow(a, i).replace("top:TOPpx", `top:${78 + i * 42}px`)).join("");
+    return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${n ? `${n} 条没看过 · 点一条跳过去` : "都看过了"}</span>
+      <div class="seg" style="left:${n ? 344 : 368}px;top:50px">${n ? `<button data-act="ai-readall">全部已读</button>` : `<button data-act="ai-clear">清空</button>`}</div>${rows}`;
+  }
+  function aiRow(a, i) {
+    return `<div class="row" data-act="ai-open" data-i="${i}" title="跳到 ${AI_APPS[a.app].name} 里的这个对话" style="top:TOPpx;height:40px;align-items:center">
          ${badge(a.app, 24)}
          <div style="min-width:0;flex:1;display:grid">
            <span class="t" style="font-size:12.5px;font-weight:${a.read ? 500 : 700}">${AI_APPS[a.app].name} · ${esc(a.project)} · ${a.kind === "ask" ? "等你确认" : esc(a.title)}</span>
            <span class="s" style="font-size:11.5px">${esc(a.body)}</span>
          </div>
          <span class="f" style="font-size:10.5px;align-self:flex-start;margin-top:5px">${esc(a.at)}</span>
-         ${a.read ? "" : `<span style="width:7px;height:7px;border-radius:50%;background:${AI_APPS[a.app].color};flex:none"></span>`}</div>`).join("");
-    return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${n ? `${n} 条没看过 · 点一条跳过去` : "都看过了"}</span>
-      <div class="seg" style="left:${n ? 344 : 368}px;top:50px">${n ? `<button data-act="ai-readall">全部已读</button>` : `<button data-act="ai-clear">清空</button>`}</div>${rows}`;
+         ${a.read ? "" : `<span style="width:7px;height:7px;border-radius:50%;background:${AI_APPS[a.app].color};flex:none"></span>`}</div>`;
   }
   function panelHTML() {
     const body = { ai: tabAI, music: tabMusic, todo: tabTodo, clipboard: tabClipboard, shelf: tabShelf, translate: tabTranslate, monitor: tabMonitor, appearance: tabAppearance }[S.tab]();
@@ -788,6 +855,63 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     S.note = { icon, title, body }; update(true);
     noteTimer = setTimeout(() => { S.note = null; update(); }, 3500);
   }
+  // ───────── AI 工作台 ─────────
+  let benchId = 10;
+  const VERB = { Bash: "运行命令", Edit: "修改文件", Write: "新建文件", WebFetch: "打开网页" };
+  // 等你批准：弹出带按钮的胶囊，一直停着，直到你点了（真机上 Claude Code 也在等）
+  function requestApproval(app, project, tool, detail, onDone) {
+    const a = { id: ++benchId, app, project, tool, verb: VERB[tool] || `用 ${tool}`, detail, onDone };
+    S.approvals.push(a);
+    showApproval();
+  }
+  function showApproval() {
+    const a = S.approvals[0]; if (!a) return;
+    clearTimeout(noteTimer);
+    S.note = { app: a.app, title: `${AI_APPS[a.app].name} 想${a.verb}`, body: `${a.project} · ${a.detail}`, approval: a.id };
+    update(true); rerenderAll();
+  }
+  function decide(i, how) {
+    const a = S.approvals[i]; if (!a) return;
+    S.approvals.splice(i, 1);
+    if (S.note && S.note.approval === a.id) S.note = null;
+    flashHint(how === "allow" ? `已允许：${a.detail}，${AI_APPS[a.app].name} 继续干活`
+      : how === "deny" ? `已拒绝：${a.detail}，${AI_APPS[a.app].name} 会换个办法`
+      : `已切到终端，在那里处理这个请求`);
+    if (a.onDone) a.onDone(how);
+    if (S.approvals.length) showApproval(); else { update(true); rerenderAll(); }
+  }
+  const SCRIPTS = {
+    claude: { project: "island", prompt: "给工作台加上批准按钮", steps: [["读 views.rs"], ["搜索 \"approval\""], ["改 views.rs", 1], ["改 app.rs", 1], ["运行 cargo test", 0, "Bash"], ["改 CHANGELOG.md", 1]], done: "批准按钮做好了，测试全部通过。" },
+    codex: { project: "web-shop", prompt: "购物车金额对不上", steps: [["读 cart.ts"], ["运行 npm test"], ["改 cart.ts", 1], ["运行 npm test"]], done: "金额计算已修好，新增 2 个测试。" },
+  };
+  function startAgent(app) {
+    const sc = SCRIPTS[app];
+    const g = { id: ++benchId, app, project: sc.project, prompt: sc.prompt, action: "思考中", start: Date.now(), edits: 0 };
+    S.agents.unshift(g); update(true); rerenderAll();
+    let k = 0;
+    const next = () => {
+      if (!S.agents.includes(g)) return;
+      if (k >= sc.steps.length) {
+        S.agents.splice(S.agents.indexOf(g), 1);
+        notifyAI(app, "done", sc.done, sc.project);
+        return;
+      }
+      const [action, edit, ask] = sc.steps[k++];
+      const go = () => { g.action = action; if (edit) g.edits++; refreshBench(); setTimeout(next, 2600); };
+      if (ask) { g.action = "等你批准"; refreshBench(); requestApproval(app, g.project, ask, action.replace(/^运行 /, ""), (how) => { if (how === "deny") { g.action = "换个办法"; refreshBench(); setTimeout(next, 2600); } else go(); }); }
+      else go();
+    };
+    setTimeout(next, 1500);
+  }
+  function refreshBench() { if (current === "expanded" && S.tab === "ai") update(true); }
+  document.getElementById("benchDemos").addEventListener("click", (e) => {
+    const b = e.target.closest(".chip"); if (!b) return;
+    if (b.dataset.run) startAgent(b.dataset.app);
+    else requestApproval("claude", "island", "Bash", "npm install --save-dev vitest");
+  });
+  // 跑了多久每秒走一次
+  setInterval(() => { if (S.agents.length) refreshBench(); }, 1000);
+
   // 真机上点 AI 消息会切回发消息的地方：终端 / 编辑器窗口，或者桌面版里对应的对话
   function jumpText(a) { return `已切到${AI_APPS[a.app].name}里「${a.project}」的对话`; }
   function notifyAI(app, kind, body, project) {
@@ -877,11 +1001,18 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   });
   // 点通知：关掉，AI 消息和其他软件的通知顺便跳过去
   function openNote() {
+    // 批准请求：点按钮以外的地方 = 回终端自己处理
+    if (S.note && S.note.approval) { decide(S.approvals.findIndex((a) => a.id === S.note.approval), "terminal"); return; }
     const jump = S.note && S.note.jump;
     clearTimeout(noteTimer); S.note = null; update();
     if (jump) flashHint(jump);
   }
-  island.addEventListener("click", (e) => { if (current === "note" && e.pointerType !== "touch") openNote(); });
+  island.addEventListener("click", (e) => {
+    if (current !== "note") return;
+    const b = e.target.closest("[data-ap]");
+    if (b && S.note && S.note.approval) { decide(S.approvals.findIndex((a) => a.id === S.note.approval), b.dataset.ap); return; }
+    if (e.pointerType !== "touch") openNote();
+  });
   // 滚轮调音量
   island.addEventListener("wheel", (e) => {
     if (current === "expanded") return;
@@ -899,6 +1030,10 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     switch (act) {
       case "tab": S.tab = v; S.toast = ""; save(); break;
       case "ai-open": S.ai[i].read = true; flashHint(jumpText(S.ai[i])); break;
+      case "ap-allow": decide(i, "allow"); return;
+      case "ap-deny": decide(i, "deny"); return;
+      case "ap-term": decide(i, "terminal"); return;
+      case "agent-open": flashHint(jumpText(S.agents[i])); break;
       case "ai-readall": S.ai.forEach((a) => (a.read = true)); break;
       case "ai-clear": S.ai = []; break;
       case "pin": S.pinned = !S.pinned; break;

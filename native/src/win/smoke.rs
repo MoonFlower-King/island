@@ -51,6 +51,8 @@ pub struct Smoke {
     children: Vec<std::process::Child>,
     /// 跳转测试用的命令行窗口。
     console: Option<HWND>,
+    /// 在等岛答复的 `--notify`（批准请求）。
+    waiting: Option<std::process::Child>,
 }
 
 impl Smoke {
@@ -67,6 +69,7 @@ impl Smoke {
             timings: Vec::new(),
             children: Vec::new(),
             console: None,
+            waiting: None,
         }
     }
 
@@ -579,6 +582,45 @@ fn spawn_notify(args: &[&str], stdin: Option<&str>) -> std::io::Result<std::proc
         pipe.write_all(text.as_bytes())?;
     }
     Ok(child)
+}
+
+/// 像 PermissionRequest 钩子那样起一个 `--notify claude`：JSON 从标准输入进来，答复从标准输出出去。
+fn spawn_waiting(json: &str) -> std::io::Result<std::process::Child> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(std::env::current_exe()?)
+        .args(["--notify", "claude"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+    if let Some(mut pipe) = child.stdin.take() {
+        pipe.write_all(json.as_bytes())?;
+    }
+    Ok(child)
+}
+
+fn child_done(smoke: &mut Smoke) -> bool {
+    smoke
+        .waiting
+        .as_mut()
+        .is_none_or(|c| c.try_wait().ok().flatten().is_some())
+}
+
+/// 等批准的进程写到标准输出的东西（没退出就先结束它）。
+fn child_output(smoke: &mut Smoke) -> String {
+    use std::io::Read;
+    let Some(mut c) = smoke.waiting.take() else {
+        return String::new();
+    };
+    if c.try_wait().ok().flatten().is_none() {
+        let _ = c.kill();
+    }
+    let mut out = String::new();
+    if let Some(mut pipe) = c.stdout.take() {
+        let _ = pipe.read_to_string(&mut out);
+    }
+    let _ = c.wait();
+    out.trim().to_string()
 }
 
 /// 新开一个命令行窗口，在里面跑 `Island.exe --notify smoke-agent jump-test`；窗口留着（cmd /k）。
@@ -1504,6 +1546,140 @@ pub fn step(app: &mut App) {
             for c in smoke.children.iter_mut() {
                 let _ = c.kill();
             }
+            app.set_pinned(false);
+            app.set_tab(Tab::Music);
+            next = 600;
+        }
+        // 在岛上直接批准：像 Claude Code 的 PermissionRequest 钩子一样，--notify 会一直等岛的答复
+        95 => {
+            let ask = r###"{"session_id":"s7","cwd":"C:\\work\\island","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"npm install"}}"###;
+            match spawn_waiting(ask) {
+                Ok(c) => smoke.waiting = Some(c),
+                Err(e) => smoke.check(false, &format!("启动等批准的 --notify（{e}）")),
+            }
+            smoke.waits = 0;
+            next = 500;
+        }
+        96 if app.note_approval.is_none() && smoke.waits < 20 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
+        }
+        96 => {
+            smoke.check(
+                app.state == IslandState::Notification
+                    && app
+                        .approvals
+                        .first()
+                        .is_some_and(|a| a.title == "Claude 想运行命令"),
+                &format!(
+                    "批准请求弹出带按钮的胶囊（{:?}，{:?}）",
+                    app.state,
+                    app.approvals.first().map(|a| (&a.title, &a.body))
+                ),
+            );
+            let blocked = smoke.waiting.is_some() && !child_done(&mut smoke);
+            smoke.check(blocked, "钩子在等岛的答复");
+            snapshot(app, &mut smoke, "31-approval", None);
+            click_target(app, &mut smoke, Hit::ApproveAllow(0));
+            smoke.waits = 0;
+            next = 400;
+        }
+        97 if !child_done(&mut smoke) && smoke.waits < 20 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 250;
+        }
+        97 => {
+            let out = child_output(&mut smoke);
+            smoke.check(
+                out.contains(r#""behavior":"allow""#) && out.contains("PermissionRequest"),
+                &format!("点允许后钩子输出允许（{out}）"),
+            );
+            smoke.check(
+                app.approvals.is_empty() && app.state != IslandState::Notification,
+                "答复后请求从岛上拿掉",
+            );
+            // 工作台：同一个会话开始新任务、正在跑命令
+            let start = r###"{"session_id":"s8","cwd":"C:\\work\\island","hook_event_name":"UserPromptSubmit","prompt":"跑一下测试"}"###;
+            match spawn_notify(&["claude"], Some(start)) {
+                Ok(c) => smoke.children.push(c),
+                Err(e) => smoke.check(false, &format!("启动 --notify（{e}）")),
+            }
+            next = 700;
+        }
+        98 => {
+            let tool = r###"{"session_id":"s8","cwd":"C:\\work\\island","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"C:\\work\\island\\app.rs"}}"###;
+            match spawn_notify(&["claude"], Some(tool)) {
+                Ok(c) => smoke.children.push(c),
+                Err(e) => smoke.check(false, &format!("启动 --notify（{e}）")),
+            }
+            next = 700;
+        }
+        99 => {
+            let agent = app.bench.agents.first();
+            smoke.check(
+                agent.is_some_and(|a| {
+                    a.prompt == "跑一下测试" && a.action == "改 app.rs" && a.files.len() == 1
+                }),
+                &format!(
+                    "工作台跟着会话更新（{:?}）",
+                    agent.map(|a| (&a.prompt, &a.action, a.files.len()))
+                ),
+            );
+            let ask = r###"{"session_id":"s8","cwd":"C:\\work\\island","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"cargo test"}}"###;
+            match spawn_waiting(ask) {
+                Ok(c) => smoke.waiting = Some(c),
+                Err(e) => smoke.check(false, &format!("启动等批准的 --notify（{e}）")),
+            }
+            smoke.waits = 0;
+            next = 500;
+        }
+        100 if app.approvals.is_empty() && smoke.waits < 20 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
+        }
+        100 => {
+            app.set_pinned(true);
+            next = 700;
+        }
+        101 => {
+            smoke.check(
+                app.tab == Tab::Ai
+                    && has_target(app, |h| h == Hit::ApproveDeny(0))
+                    && has_target(app, |h| h == Hit::AgentRow(0)),
+                &format!("AI 工作台列出请求和正在干活的代理（{:?}）", app.tab),
+            );
+            snapshot(app, &mut smoke, "32-workbench", None);
+            click_target(app, &mut smoke, Hit::ApproveDeny(0));
+            smoke.waits = 0;
+            next = 400;
+        }
+        102 if !child_done(&mut smoke) && smoke.waits < 20 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 250;
+        }
+        102 => {
+            let out = child_output(&mut smoke);
+            smoke.check(
+                out.contains(r#""behavior":"deny""#),
+                &format!("在工作台点拒绝后钩子输出拒绝（{out}）"),
+            );
+            let stop = r###"{"session_id":"s8","cwd":"C:\\work\\island","hook_event_name":"Stop","last_assistant_message":"测试通过"}"###;
+            match spawn_notify(&["claude"], Some(stop)) {
+                Ok(c) => smoke.children.push(c),
+                Err(e) => smoke.check(false, &format!("启动 --notify（{e}）")),
+            }
+            next = 1000;
+        }
+        103 => {
+            smoke.check(
+                !app.bench.agents.iter().any(|a| a.key == "s8"),
+                "做完后从工作台拿掉",
+            );
+            app.dismiss_notification();
             app.set_pinned(false);
             app.set_tab(Tab::Music);
             smoke.step = 15;

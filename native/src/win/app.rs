@@ -75,6 +75,8 @@ const NOTIFICATION_MS: u32 = 3500;
 const DRAG_BAR_HEIGHT: f32 = 44.0;
 /// AI 完成任务的提醒多停一会儿。
 const AI_NOTIFICATION_MS: u32 = 6000;
+/// 批准请求一直停着（钩子最多等 10 分钟）。
+const APPROVAL_NOTIFICATION_MS: u32 = 600_000;
 /// 查不到软件图标时用的铃铛。
 const GLYPH_BELL: char = '\u{EA8F}';
 /// 系统音量多久看一次。
@@ -146,6 +148,14 @@ pub struct App {
     pub notification_target: Target,
     /// AI 动态：收到过的 AI 消息，新的在前。
     pub ai: Vec<views::AiItem>,
+    /// AI 工作台：正在干活的代理、等你批准的操作。
+    pub bench: island::ai::Workbench,
+    pub approvals: Vec<views::ApprovalItem>,
+    next_approval: u64,
+    /// 正在弹的批准请求（不会被别的通知顶掉），和通知胶囊上按钮的位置。
+    pub note_approval: Option<u64>,
+    raising_approval: bool,
+    note_targets: std::cell::RefCell<Targets>,
     /// 当前通知用的软件图标（其他软件的系统通知才有）。
     pub notification_icon: Option<std::sync::Arc<super::media::Art>>,
     /// 软件名和图标，查过的记住。
@@ -338,6 +348,12 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             notification: None,
             notification_target: Target::None,
             ai: Vec::new(),
+            bench: island::ai::Workbench::default(),
+            approvals: Vec::new(),
+            next_approval: 0,
+            note_approval: None,
+            raising_approval: false,
+            note_targets: Default::default(),
             notification_icon: None,
             apps: appinfo::Cache::default(),
             poll_ms: POLL_MS,
@@ -490,8 +506,11 @@ impl App {
             self.state = target;
             let (a, b) = (self.metrics(previous), self.metrics(target));
             let growing = b.width * b.height > a.width * a.height;
-            // 展开时有没看过的 AI 消息：直接打开 AI 动态（拖文件进来时除外）
-            if target == IslandState::Expanded && self.ai_unread() && !self.drag_over {
+            // 展开时有没看过的 AI 消息、等你批准的操作：直接打开 AI 动态（拖文件进来时除外）
+            if target == IslandState::Expanded
+                && (self.ai_unread() || !self.approvals.is_empty())
+                && !self.drag_over
+            {
                 self.tab = Tab::Ai;
             }
             // 看着 AI 动态收起：算都看过了
@@ -596,10 +615,11 @@ impl App {
             return;
         };
         let icon = self.notification_icon.as_deref();
+        let mut targets = Targets::default();
         let r = self
             .gfx
             .draw(&self.scene.notification.surface, self.scene.scale(), |p| {
-                views::draw_notification(
+                targets = views::draw_notification(
                     p,
                     &self.palette,
                     self.accent,
@@ -607,14 +627,16 @@ impl App {
                         glyph: *glyph,
                         image: icon,
                     },
-                    title,
-                    body,
+                    (title, body),
                     self.edge().is_side(),
-                )
+                    self.note_approval.is_some(),
+                )?;
+                Ok(())
             });
         if let Err(e) = r {
             log::warn(&format!("绘制通知失败：{e}"));
         }
+        *self.note_targets.borrow_mut() = targets;
     }
 
     /// 弹出一条通知，几秒后自动缩回。全屏时不打扰。
@@ -636,9 +658,15 @@ impl App {
         body: &str,
         ms: u32,
     ) {
-        if self.hidden {
+        // 批准请求弹着时，别的通知只进列表、不把它顶掉
+        if self.hidden || (self.note_approval.is_some() && !self.raising_approval) {
             return;
         }
+        self.note_approval = if self.raising_approval {
+            self.approvals.first().map(|a| a.id)
+        } else {
+            None
+        };
         self.notification_icon = icon;
         self.notification_target = Target::None;
         self.notification = Some((glyph, title.into(), body.into()));
@@ -649,31 +677,142 @@ impl App {
         self.update_state();
     }
 
-    /// AI 工具发来的消息（`Island.exe --notify`）：记下来并弹出提醒，比普通通知多停一会儿。
+    /// AI 工具发来的消息（`Island.exe --notify`）：更新工作台；做完了、等你确认的记下来并弹出提醒；
+    /// 要你批准的弹出带按钮的胶囊，一直停着等你点。
     pub fn on_ai_messages(&mut self) {
-        for (source, payload, window) in forward::take() {
-            let Some(event) = island::ai::parse(&source, &payload) else {
+        use island::ai::Kind;
+        let now = tick();
+        let mut bench_changed = false;
+        for m in forward::take() {
+            let Some(event) = island::ai::parse(&m.source, &m.payload) else {
+                if m.reply != 0 {
+                    forward::answer(m.reply, forward::Answer::Terminal);
+                }
                 continue;
             };
-            log::info(&format!(
-                "AI 消息：{}（{}，{}）",
-                event.title(),
-                event.project,
-                if window != 0 {
-                    "记下了窗口"
-                } else {
-                    "没找到窗口"
-                }
-            ));
-            let (title, body) = (event.title(), event.body());
-            let target = if window != 0 {
-                Target::Window(window)
+            // 每次用工具都会来一条，不记日志
+            if !matches!(event.kind, Kind::Started | Kind::Working) {
+                log::info(&format!(
+                    "AI 消息：{}（{}，{}）",
+                    event.title(),
+                    event.project,
+                    if m.window != 0 {
+                        "记下了窗口"
+                    } else {
+                        "没找到窗口"
+                    }
+                ));
+            }
+            bench_changed |= self.bench.apply(&event, now, m.window);
+            let key = event.key();
+            let target = if m.window != 0 {
+                Target::Window(m.window)
             } else {
                 Target::None
             };
-            self.add_ai(&title, &body, None, target.clone());
-            self.show_notification_for(views::GLYPH_AI, &title, &body, AI_NOTIFICATION_MS);
-            self.notification_target = target;
+            match event.kind {
+                Kind::Approval if m.reply != 0 => {
+                    self.next_approval += 1;
+                    self.approvals.push(views::ApprovalItem {
+                        id: self.next_approval,
+                        key,
+                        title: event.title(),
+                        body: event.approval_body(),
+                        reply: m.reply,
+                        window: m.window,
+                    });
+                    if self.note_approval.is_none() {
+                        self.show_approval();
+                    }
+                    self.ai_changed();
+                }
+                Kind::Done | Kind::Ask => {
+                    if event.kind == Kind::Done {
+                        // 这一轮做完了：还没答复的请求已经用不上了
+                        self.drop_approvals(&key);
+                    } else if self.approvals.iter().any(|a| a.key == key) {
+                        // 已经在岛上问着了
+                        continue;
+                    }
+                    let (title, body) = (event.title(), event.body());
+                    self.add_ai(&title, &body, None, target.clone());
+                    self.show_notification_for(views::GLYPH_AI, &title, &body, AI_NOTIFICATION_MS);
+                    if self.note_approval.is_none() {
+                        self.notification_target = target;
+                    }
+                }
+                Kind::Ended => self.drop_approvals(&key),
+                _ => {}
+            }
+        }
+        if bench_changed && self.state == IslandState::Expanded && self.tab == Tab::Ai {
+            self.redraw_expanded();
+        }
+    }
+
+    /// 弹出排在最前的批准请求（带允许、拒绝按钮，一直停着）。
+    fn show_approval(&mut self) {
+        let Some(a) = self.approvals.first().cloned() else {
+            return;
+        };
+        self.raising_approval = true;
+        self.show_notification_with(
+            views::GLYPH_AI,
+            None,
+            &a.title,
+            &a.body,
+            APPROVAL_NOTIFICATION_MS,
+        );
+        self.raising_approval = false;
+        self.notification_target = if a.window != 0 {
+            Target::Window(a.window)
+        } else {
+            Target::None
+        };
+    }
+
+    /// 答复第 `i` 个批准请求。"回终端处理"会顺便切到那个终端。
+    pub fn decide(&mut self, i: usize, answer: forward::Answer) {
+        if i >= self.approvals.len() {
+            return;
+        }
+        let a = self.approvals.remove(i);
+        log::info(&format!("批准请求：{}（{answer:?}）", a.title));
+        forward::answer(a.reply, answer);
+        if answer == forward::Answer::Terminal && a.window != 0 {
+            jump::open(&Target::Window(a.window));
+        }
+        self.approvals_changed();
+    }
+
+    /// 同一个会话的请求已经用不上了（做完了、会话结束）：让等着的钩子退出，Claude Code 照常处理。
+    fn drop_approvals(&mut self, key: &str) {
+        let before = self.approvals.len();
+        self.approvals.retain(|a| {
+            let keep = a.key != key;
+            if !keep {
+                forward::answer(a.reply, forward::Answer::Terminal);
+            }
+            keep
+        });
+        if self.approvals.len() != before {
+            self.approvals_changed();
+        }
+    }
+
+    /// 请求列表变了：弹着的那个没了就换下一个，或者收起。
+    fn approvals_changed(&mut self) {
+        if self.note_approval.is_some()
+            && self.note_approval != self.approvals.first().map(|a| a.id)
+        {
+            if self.approvals.is_empty() {
+                self.dismiss_notification();
+            } else {
+                self.show_approval();
+            }
+        }
+        if self.state == IslandState::Expanded {
+            self.redraw_expanded();
         }
     }
 
@@ -767,6 +906,7 @@ impl App {
         unsafe {
             let _ = KillTimer(Some(self.hwnd), TIMER_NOTIFICATION);
         }
+        self.note_approval = None;
         if self.notification.take().is_some() {
             self.update_state();
         }
@@ -857,6 +997,9 @@ impl App {
             pinned: self.pinned,
             hovered: self.hovered,
             ai: &self.ai,
+            approvals: &self.approvals,
+            agents: &self.bench.agents,
+            now: tick(),
             pressed: self.pressed,
         }
     }
@@ -888,7 +1031,11 @@ impl App {
 
     /// 某个按钮的中心，窗口内物理像素（冒烟测试用来模拟真实点击）。
     pub fn target_point(&self, hit: Hit) -> Option<(i32, i32)> {
-        let r = self.targets.rect(hit)?;
+        let r = if self.state == IslandState::Notification {
+            self.note_targets.borrow().rect(hit)?
+        } else {
+            self.targets.rect(hit)?
+        };
         let f = self.metrics(self.state).frame(self.edge());
         let s = self.scene.scale();
         Some((
@@ -1371,6 +1518,18 @@ impl App {
     }
 
     pub fn on_mouse_down(&mut self, x: f32, y: f32) {
+        // 批准请求：点按钮就答复；点别处 = 回终端处理
+        if self.state == IslandState::Notification && self.note_approval.is_some() {
+            let (lx, ly) = self.local(x, y);
+            let hit = self.note_targets.borrow().hit(lx, ly);
+            let answer = match hit {
+                Some(Hit::ApproveAllow(_)) => forward::Answer::Allow,
+                Some(Hit::ApproveDeny(_)) => forward::Answer::Deny,
+                _ => forward::Answer::Terminal,
+            };
+            self.decide(0, answer);
+            return;
+        }
         // 点一下通知就关掉；AI 消息和其他软件的通知顺便跳过去
         if self.state == IslandState::Notification {
             let target = std::mem::take(&mut self.notification_target);
@@ -1559,6 +1718,16 @@ impl App {
                 jump::open(&target);
             }
             Hit::AiReadAll => self.mark_ai_read(),
+            Hit::ApproveAllow(i) => self.decide(i, forward::Answer::Allow),
+            Hit::ApproveDeny(i) => self.decide(i, forward::Answer::Deny),
+            Hit::ApprovalRow(i) => self.decide(i, forward::Answer::Terminal),
+            Hit::AgentRow(i) => {
+                if let Some(g) = self.bench.agents.get(i)
+                    && g.window != 0
+                {
+                    jump::open(&Target::Window(g.window));
+                }
+            }
             Hit::AiClear => {
                 self.ai.clear();
                 self.ai_changed();
@@ -2286,13 +2455,26 @@ impl App {
                 self.apply_theme();
             }
         }
+        // AI 工作台：去掉很久没动静的代理、等答复的钩子已经退出的请求（在终端里答了）
+        let pruned = self.bench.prune(tick());
+        let before = self.approvals.len();
+        self.approvals.retain(|a| forward::waiting(a.reply));
+        if self.approvals.len() != before {
+            log::info("有批准请求已经在别处处理了");
+            self.approvals_changed();
+        }
+        let bench = !self.bench.agents.is_empty() || pruned;
         let playing = self.media.as_ref().is_some_and(|m| m.playing);
         if self.state == IslandState::Expanded {
             let monitor = self.tab == Tab::Monitor;
             if monitor {
                 self.monitor.sample(tick());
             }
-            if minute_changed || monitor || (playing && self.tab == Tab::Music) {
+            if minute_changed
+                || monitor
+                || (playing && self.tab == Tab::Music)
+                || (bench && self.tab == Tab::Ai)
+            {
                 self.redraw_expanded();
             }
         }

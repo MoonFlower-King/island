@@ -39,18 +39,25 @@ WPF 版的功能已经全部移植。
 
 `Island.exe --notify <来源> [JSON]` 会把消息转给正在运行的岛然后马上退出（岛没在运行也正常退出，不会让工具报错）。把下面的路径换成你的 Island.exe：
 
-- **Claude Code**：在 `~/.claude/settings.json` 里加
+- **Claude Code**：在 `~/.claude/settings.json` 里加（每一项的命令都一样，只是事件不同）
 
   ```json
   {
     "hooks": {
+      "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "\"C:\\Tools\\Island\\Island.exe\" --notify claude" }] }],
+      "PreToolUse": [{ "hooks": [{ "type": "command", "command": "\"C:\\Tools\\Island\\Island.exe\" --notify claude" }] }],
+      "PermissionRequest": [{ "hooks": [{ "type": "command", "command": "\"C:\\Tools\\Island\\Island.exe\" --notify claude", "timeout": 600 }] }],
+      "Notification": [{ "hooks": [{ "type": "command", "command": "\"C:\\Tools\\Island\\Island.exe\" --notify claude" }] }],
       "Stop": [{ "hooks": [{ "type": "command", "command": "\"C:\\Tools\\Island\\Island.exe\" --notify claude" }] }],
-      "Notification": [{ "hooks": [{ "type": "command", "command": "\"C:\\Tools\\Island\\Island.exe\" --notify claude" }] }]
+      "SessionEnd": [{ "hooks": [{ "type": "command", "command": "\"C:\\Tools\\Island\\Island.exe\" --notify claude" }] }]
     }
   }
   ```
 
-  回答完提醒"完成了任务"（附最后一段回复的摘要），等你批准时提醒"等你确认"。
+  - `Stop`、`Notification`：回答完提醒"完成了任务"（附最后一段回复的摘要），等你回复时提醒"等你确认"
+  - `UserPromptSubmit`、`PreToolUse`、`SessionEnd`：**AI 工作台**，展开岛的 AI 标签能看到每个会话在干什么（"运行 npm test"、"改 app.rs"）、改了几个文件、跑了多久
+  - `PermissionRequest`：**在岛上直接批准**。Claude Code 要运行命令、改文件前，岛上弹出带"允许 / 拒绝"按钮的胶囊，点了 Claude Code 就继续；点胶囊别处是回终端自己处理。岛没在运行时什么也不做，照常在终端里问你
+  - 只想要部分功能就只加对应的几项
 - **Codex**：在 `~/.codex/config.toml` 里加 `notify = ["C:\\Tools\\Island\\Island.exe", "--notify", "codex"]`
 - **其他工具**：`Island.exe --notify 名字 "{\"message\": \"做完了\"}"`，或者把 JSON / 纯文字从标准输入传进来
 
