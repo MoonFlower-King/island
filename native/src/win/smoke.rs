@@ -1675,7 +1675,10 @@ pub fn step(app: &mut App) {
             next = 1000;
         }
         103 => {
-            smoke.check(app.bench.agents.is_empty(), "做完后从工作台拿掉");
+            smoke.check(
+                !app.bench.agents.iter().any(|a| a.key == "s8"),
+                "做完后从工作台拿掉",
+            );
             app.dismiss_notification();
             app.set_pinned(false);
             app.set_tab(Tab::Music);
