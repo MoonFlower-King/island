@@ -123,7 +123,7 @@ impl Drop for Tray {
 
 /// 用 island::trayicon 画的像素做一个图标（32 位带透明度）。
 fn make_icon(size: u32, dot: bool) -> Option<HICON> {
-    let px = island::trayicon::pixels(size, dot);
+    let px = island::icon::pixels(size, dot);
     unsafe {
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
