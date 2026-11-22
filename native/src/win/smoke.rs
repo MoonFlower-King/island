@@ -623,6 +623,41 @@ fn child_output(smoke: &mut Smoke) -> String {
     out.trim().to_string()
 }
 
+/// 桌面快捷方式：在测试目录里建一个（不碰真的桌面），读回来指向的程序；图标文件系统能读。
+fn check_shortcut(smoke: &mut Smoke) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        DestroyIcon, HICON, IMAGE_ICON, LR_LOADFROMFILE, LoadImageW,
+    };
+    let lnk = smoke.dir.join("灵动岛.lnk");
+    let exe = std::env::current_exe().unwrap_or_default();
+    let icon = super::shortcut::icon_path();
+    let made = super::shortcut::create(&lnk, &exe, &icon);
+    let target = super::shortcut::target(&lnk);
+    smoke.check(
+        made.is_ok() && target.as_deref() == Some(exe.as_path()),
+        &format!("建桌面快捷方式，指向程序本身（{made:?}，{target:?}）"),
+    );
+    let loaded = unsafe {
+        LoadImageW(
+            None,
+            &HSTRING::from(icon.as_os_str()),
+            IMAGE_ICON,
+            48,
+            48,
+            LR_LOADFROMFILE,
+        )
+    };
+    smoke.check(
+        loaded.is_ok(),
+        &format!("快捷方式的图标文件系统能读（{}）", icon.display()),
+    );
+    if let Ok(h) = loaded {
+        unsafe {
+            let _ = DestroyIcon(HICON(h.0));
+        }
+    }
+}
+
 /// 像点了任务栏图标一样：给岛发通知区图标的回调消息。
 fn tray_click(app: &App) {
     use windows::Win32::Foundation::{LPARAM, WPARAM};
@@ -1694,6 +1729,7 @@ pub fn step(app: &mut App) {
                 app.state != IslandState::Expanded,
                 &format!("再点一下收起（{:?}）", app.state),
             );
+            check_shortcut(&mut smoke);
             smoke.step = 15;
             next = 35;
         }

@@ -71,6 +71,10 @@ header a { color: var(--accent); }
 .win p { margin: 0; user-select: text; }
 .win p:first-of-type { margin-top: 6%; }
 .taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 5.3%; background: rgba(20,22,28,.72); display: flex; align-items: center; justify-content: flex-end; padding-right: 12px; }
+.desk-icon { position: absolute; left: 1.6%; top: 3%; width: 76px; padding: 6px 2px 4px; border: 0; border-radius: 4px; background: transparent; color: #fff; font: 12px/1.3 inherit; text-shadow: 0 1px 2px rgba(0,0,0,.8); display: grid; justify-items: center; gap: 4px; cursor: default; z-index: 1; }
+.desk-icon:hover, .desk-icon:focus-visible { background: rgba(255,255,255,.16); outline: none; }
+.desk-icon[hidden] { display: none; }
+.desk-icon svg { width: 44px; height: 44px; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
 .tray { position: relative; width: 30px; height: 26px; max-height: 90%; border: 0; border-radius: 5px; background: transparent; display: grid; place-items: center; cursor: default; padding: 0; }
 .tray:hover, .tray:focus-visible { background: rgba(255,255,255,.12); outline: none; }
 .tray i { display: block; width: 18px; height: 8px; border-radius: 4px; background: #1c1c1e; box-shadow: 0 0 0 1.3px #e8e8ea; }
@@ -197,6 +201,10 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   </header>
 
   <div class="screen" id="screen">
+    <button class="desk-icon" id="deskIcon" title="灵动岛（第一次运行时自动放到桌面）" aria-label="桌面快捷方式：灵动岛，双击打开">
+      <svg viewBox="0 0 64 64" aria-hidden="true"><rect x="4.5" y="4.5" width="55" height="55" rx="12.5" fill="#F5F5F7" stroke="#C7C7CC" stroke-width="1.3"/><rect x="16.6" y="14.4" width="30.8" height="9.6" rx="4.8" fill="#1C1C1E"/></svg>
+      <span>灵动岛</span>
+    </button>
     <div class="win">
       <p>这是一个普通窗口。选中这段文字按 Ctrl+C，然后打开岛上的剪贴板标签看看。</p>
       <p>晴天 —— 故事的小黄花，从出生那年就飘着。</p>
@@ -354,7 +362,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   const PRESET_AC = ["#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#64D2FF"];
 
   const S = {
-    dock: "left", wall: "dark", showApps: true, showLevel: true, persistClips: true, autostart: false,
+    dock: "left", wall: "dark", showApps: true, showLevel: true, persistClips: true, autostart: false, shortcut: true,
     menuOpen: false,
     theme: "dark", custom: { bg: "#1C1C1E", fg: "#FFFFFF", ac: "#0A84FF" },
     idleLine: false, mediaLine: false,
@@ -393,7 +401,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     ],
   };
   // 记住页面上的选择（只是方便，失败也没关系）
-  const KEEP = ["dock", "wall", "showApps", "showLevel", "persistClips", "autostart", "theme", "custom", "idleLine", "mediaLine", "tab"];
+  const KEEP = ["dock", "wall", "showApps", "showLevel", "persistClips", "autostart", "shortcut", "theme", "custom", "idleLine", "mediaLine", "tab"];
   try { const saved = JSON.parse(localStorage.getItem("island-preview-v2") || "{}"); for (const k of KEEP) if (k in saved) S[k] = saved[k]; } catch (e) {}
   function save() { try { const o = {}; for (const k of KEEP) o[k] = S[k]; localStorage.setItem("island-preview-v2", JSON.stringify(o)); } catch (e) {} }
 
@@ -1216,6 +1224,11 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     menu.remove(); menu = null; S.menuOpen = false;
     setTimeout(tryCollapse, 150);
   }
+  // 桌面快捷方式：第一次运行时自动放上去；双击时岛已经在运行，就展开它（和点任务栏图标一样）
+  const deskIcon = document.getElementById("deskIcon");
+  deskIcon.addEventListener("dblclick", () => { closeMenu(); if (!S.pinned) { S.pinned = true; if (unread() || S.approvals.length) S.tab = "ai"; update(true); rerenderAll(); } flashHint("岛已经在运行：展开它"); });
+  deskIcon.addEventListener("keydown", (e) => { if (e.key === "Enter") deskIcon.dispatchEvent(new MouseEvent("dblclick")); });
+  setInterval(() => { deskIcon.hidden = !S.shortcut; }, 300);
   // 任务栏通知区的图标：点一下展开 / 收起，右键是同一个菜单；有没看过的 AI 消息或等你批准时带个小点
   const tray = document.getElementById("tray");
   tray.addEventListener("click", () => { closeMenu(); S.pinned = !S.pinned; if (S.pinned && (unread() || S.approvals.length)) S.tab = "ai"; update(true); rerenderAll(); });
@@ -1232,6 +1245,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       ["showApps", "显示其他软件的通知（微信、QQ、AI 工具等）"],
       ["persistClips", "保存剪贴板历史到磁盘"],
       ["autostart", "开机自动启动"],
+      ["shortcut", "在桌面放快捷方式"],
       null,
       ["demo", "演示：弹出一条通知"],
       ["data", "打开数据文件夹"],

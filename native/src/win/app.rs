@@ -52,8 +52,10 @@ use super::translator::{Draft, Status, TranslateUi};
 use super::views::{
     self, CLIP_ROWS, Editing, Field, Hit, SHELF_ROWS, TODO_ROWS, Tab, Targets, ViewState,
 };
-use super::{appinfo, forward, log, smoke, toasts, tray};
+use super::{appinfo, forward, log, shortcut, smoke, toasts, tray};
 
+/// 又启动了一次：展开（置顶），和点任务栏图标一样。
+const WM_SHOW_ISLAND: u32 = WM_APP + 7;
 const TIMER_POLL: usize = 1;
 const TIMER_TOPMOST: usize = 2;
 const TIMER_TICK: usize = 3;
@@ -214,6 +216,10 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             // 句柄故意不关闭，进程退出时由系统回收
             let _mutex = CreateMutexW(None, true, w!("Local\\Island.Native.SingleInstance"))?;
             if GetLastError() == ERROR_ALREADY_EXISTS {
+                // 已经在运行（比如又双击了桌面快捷方式）：让它展开，告诉你它在
+                if let Ok(running) = FindWindowW(w!("Island.Native"), None) {
+                    let _ = PostMessageW(Some(running), WM_SHOW_ISLAND, WPARAM(0), LPARAM(0));
+                }
                 return Ok(0);
             }
         }
@@ -374,6 +380,11 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
         app.redraw_all();
         app.shelf_fill_info();
         app.tray = Some(tray::Tray::new(hwnd));
+        // 第一次运行：在桌面放个快捷方式；exe 挪了位置就把快捷方式改过去
+        if !app.testing && shortcut::on_start(!app.settings.desktop_shortcut_offered) {
+            app.settings.desktop_shortcut_offered = true;
+            app.save_settings();
+        }
         let smoking = app.testing;
         let read_notifications = app.settings.show_system_notifications;
         APP.with(|cell| *cell.borrow_mut() = Some(app));
@@ -2579,12 +2590,14 @@ const MENU_CLIPBOARD: usize = 5;
 const MENU_DEMO: usize = 6;
 const MENU_TOASTS: usize = 7;
 const MENU_EXIT: usize = 9;
+const MENU_SHORTCUT: usize = 10;
 
 struct MenuState {
     pinned: bool,
     level: bool,
     toasts: bool,
     persist_clipboard: bool,
+    shortcut: bool,
 }
 
 /// 在岛上或任务栏图标上点右键：弹出菜单，执行选中的项。
@@ -2596,6 +2609,7 @@ fn context_menu(hwnd: HWND) {
             level: a.settings.show_level_hud,
             toasts: a.settings.show_system_notifications,
             persist_clipboard: a.settings.persist_clipboard,
+            shortcut: shortcut::exists(),
         }
     }) else {
         return;
@@ -2644,6 +2658,12 @@ fn show_menu(hwnd: HWND, s: &MenuState) -> usize {
             check(system::startup_enabled()),
             MENU_STARTUP,
             w!("开机自动启动"),
+        );
+        let _ = AppendMenuW(
+            menu,
+            check(s.shortcut),
+            MENU_SHORTCUT,
+            w!("在桌面放快捷方式"),
         );
         let _ = AppendMenuW(menu, MF_STRING, MENU_DEMO, w!("演示：弹出一条通知"));
         let _ = AppendMenuW(menu, MF_STRING, MENU_DATA, w!("打开数据文件夹"));
@@ -2701,6 +2721,13 @@ fn on_menu_command(a: &mut App, cmd: usize) {
                 let _ = std::fs::remove_file(data_file("clipboard.json"));
             }
             a.save_settings();
+        }
+        MENU_SHORTCUT => {
+            if shortcut::exists() {
+                shortcut::remove();
+            } else {
+                shortcut::add();
+            }
         }
         MENU_STARTUP => {
             let enable = !system::startup_enabled();
@@ -2884,6 +2911,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 WM_CONTEXTMENU => context_menu(hwnd),
                 _ => {}
             }
+            LRESULT(0)
+        }
+        WM_SHOW_ISLAND => {
+            with_app(|a| {
+                if !a.pinned {
+                    a.set_pinned(true);
+                }
+            });
             LRESULT(0)
         }
         // 资源管理器重启了：把图标加回去

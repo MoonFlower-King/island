@@ -84,6 +84,8 @@ pub struct Settings {
     pub persist_clipboard: bool,
     /// 在岛上显示其他软件的系统通知（微信、QQ、Telegram、Claude……）。只有原生版用。
     pub show_system_notifications: bool,
+    /// 第一次运行时已经在桌面放过快捷方式（之后用户删了就不再自动放）。
+    pub desktop_shortcut_offered: bool,
     /// 岛显示在哪块屏幕上（设备名，如 `\\.\DISPLAY2`）；空表示主屏幕。只有原生版用。
     pub monitor: String,
     /// 当前使用的翻译服务（预设的 id）。
@@ -133,6 +135,7 @@ impl Settings {
             theme,
             show_level_hud: get_bool(&raw, "ShowLevelHud", true),
             show_system_notifications: get_bool(&raw, "ShowSystemNotifications", true),
+            desktop_shortcut_offered: get_bool(&raw, "DesktopShortcutOffered", false),
             idle_as_line: get_bool(&raw, "IdleAsLine", true),
             media_as_line: get_bool(&raw, "MediaAsLine", false),
             dock: Edge::parse(raw.get("Dock").and_then(Value::as_str).unwrap_or("Top")),
@@ -205,6 +208,10 @@ impl Settings {
         m.insert(
             "ShowSystemNotifications".into(),
             json!(self.show_system_notifications),
+        );
+        m.insert(
+            "DesktopShortcutOffered".into(),
+            json!(self.desktop_shortcut_offered),
         );
         m.insert("IdleAsLine".into(), json!(self.idle_as_line));
         m.insert("MediaAsLine".into(), json!(self.media_as_line));
