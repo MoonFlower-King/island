@@ -53,7 +53,7 @@ impl Tab {
         Tab::Ai,
     ];
 
-    /// 和 WPF 版 settings.json 里 LastTab 的取值一致。
+    /// settings.json 里 LastTab 存的名字（1.x 起不变）。
     pub fn name(self) -> &'static str {
         match self {
             Tab::Music => "Music",

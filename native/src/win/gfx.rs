@@ -31,7 +31,7 @@ pub struct Gfx {
     pub icon_font: HSTRING,
     /// 文字字体：Windows 11 上是 Segoe UI Variable，Windows 10 上是 Segoe UI。中文由 DirectWrite 自动回退到微软雅黑。
     pub text_font: HSTRING,
-    /// 显卡是微软的软件渲染器（没有显卡的虚拟机、远程桌面）。这时一些合成效果（阴影）不可靠。
+    /// 显卡是微软的软件渲染器（没有显卡的虚拟机、远程桌面）。只写进日志，排查显示问题用。
     pub software: bool,
     /// 文字格式缓存：界面上只有十几种字号 / 字重组合，不必每画一段文字就新建一次。
     formats: RefCell<Vec<(FormatKey, IDWriteTextFormat)>>,

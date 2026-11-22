@@ -2514,7 +2514,7 @@ impl App {
     }
 }
 
-/// 新的 GUID，格式和 .NET 的 Guid.ToString() 一样（小写、带连字符、没有花括号）。
+/// 新的 GUID：小写、带连字符、没有花括号（todos.json 里 1.x 起就是这个格式）。
 fn new_guid() -> String {
     let g = unsafe { CoCreateGuid() }.unwrap_or_default();
     let d4 = g.data4;

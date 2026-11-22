@@ -144,7 +144,7 @@ jobs:
           name: Island-native-packages
           path: native/packages/
 
-  # 手动运行并填写标签时发布成 GitHub 预发布版本（不会成为"最新版本"，WPF 版仍是默认下载）
+  # 手动运行并填写标签时发布到 GitHub Releases（标签带 "-" 的是预览版，不带的是正式版）
   release:
     needs: [audit, build]
     if: startsWith(github.event.inputs.release_tag, 'v')

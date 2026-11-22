@@ -1,4 +1,4 @@
-//! 颜色计算：封面取色、对比度。和 WPF 版的 ColorExtractor / ColorMath 一致。
+//! 颜色计算：封面取色、对比度。
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Rgb {
@@ -210,7 +210,7 @@ pub fn is_daytime(day_starts: &str, night_starts: &str, minute_of_day: u32) -> b
     }
 }
 
-/// 根据设置、当前时间和系统偏好，算出此刻应该用的配色。和 WPF 版的 ThemeResolver 一致。
+/// 根据设置、当前时间和系统偏好，算出此刻应该用的配色。
 pub fn resolve(
     theme: &crate::settings::ThemeSettings,
     minute_of_day: u32,
@@ -248,7 +248,7 @@ pub fn resolve(
     }
 }
 
-/// 自定义主题的预设色块（和 WPF 版一样）。
+/// 自定义主题的预设色块。
 pub const BACKGROUND_PRESETS: [&str; 6] = [
     "#000000", "#1C1C1E", "#0B1F3A", "#2A1B47", "#F7F7F8", "#FFF4DE",
 ];

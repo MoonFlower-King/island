@@ -428,7 +428,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     return { w: s.t, h: s.l, r: s.t / 2, off: st === "line" ? -LINE_VIS : MARGIN };
   }
 
-  // ───────── 弹簧（和 WPF 版 CapsuleAnimator 同一个公式）─────────
+  // ───────── 弹簧（和原生版 scene.rs 的展开 / 收起参数对应）─────────
   function Spring(v) { this.v = v; this.vel = 0; this.t = v; }
   Spring.prototype.step = function (dt, R, Z) {
     const k = Math.pow(2 * Math.PI / R, 2), c = 4 * Math.PI * Z / R;

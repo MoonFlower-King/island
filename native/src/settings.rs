@@ -1,4 +1,5 @@
-//! 设置：%APPDATA%\Island\settings.json，和 WPF 版共用同一个文件、同样的字段名。
+//! 设置：%APPDATA%\Island\settings.json。字段名和取值从 1.x 起不变，老用户的设置照样能读；
+//! 不认识的字段原样保留。
 //!
 //! 用 JSON Value 读写：只改自己认识的字段，其余字段（翻译配置、加密的 Key 等）原样保留，
 //! 两个版本来回切换不会丢设置。
@@ -8,7 +9,7 @@ use serde_json::{Map, Value, json};
 use crate::metrics::Edge;
 use crate::translate::{self, Profile};
 
-/// 主题模式。数值和 WPF 版的枚举一致（settings.json 里存的是数字）。
+/// 主题模式。settings.json 里存的是数字（1.x 起的取值，不能改）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ThemeMode {
     #[default]

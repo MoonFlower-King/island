@@ -1214,37 +1214,10 @@ pub fn step(app: &mut App) {
             );
             app.settings.monitor.clear();
             app.set_palette(LIGHT);
+            smoke.step = 73;
             next = 600;
         }
-        // 收放动画的速度：在屏幕上实际量（旧参数只记录，用来对比）
-        71 => {
-            let old = super::scene::Spring {
-                period: 0.40,
-                damping: 0.72,
-            };
-            next = measure(
-                app,
-                &mut smoke,
-                n,
-                "展开（旧参数）",
-                (IslandState::Idle.metrics(Edge::Top), expanded),
-                old,
-            );
-        }
-        72 => {
-            let old = super::scene::Spring {
-                period: 0.30,
-                damping: 0.92,
-            };
-            next = measure(
-                app,
-                &mut smoke,
-                n,
-                "收起（旧参数）",
-                (expanded, IslandState::Idle.metrics(Edge::Top)),
-                old,
-            );
-        }
+        // 收放动画的速度：在屏幕上实际量
         73 => {
             next = measure(
                 app,
@@ -1268,7 +1241,7 @@ pub fn step(app: &mut App) {
         75 => {
             let t = smoke.timings.clone();
             smoke.check(
-                t.len() == 4 && (150..=550).contains(&t[2]) && (30..=400).contains(&t[3]),
+                t.len() == 2 && (150..=550).contains(&t[0]) && (30..=400).contains(&t[1]),
                 &format!("展开 0.15–0.55 秒、收起 0.4 秒内到位（{t:?} ms）"),
             );
             app.set_palette(DARK);

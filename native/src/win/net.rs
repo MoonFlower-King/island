@@ -1,5 +1,5 @@
 //! 翻译请求：用系统自带的 WinHTTP 发 HTTPS 请求（自动使用系统代理），在后台线程里流式读取，
-//! 每收到一段译文就通过 `WM_TRANSLATE` 通知窗口。另外是 DPAPI 加解密 Key（和 WPF 版通用）。
+//! 每收到一段译文就通过 `WM_TRANSLATE` 通知窗口。另外是 DPAPI 加解密 Key。
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -334,7 +334,7 @@ fn blob_bytes(blob: &CRYPT_INTEGER_BLOB) -> Vec<u8> {
     bytes
 }
 
-/// 用当前用户的 DPAPI 加密，返回 base64（和 .NET 的 ProtectedData.Protect(..., CurrentUser) 通用）。
+/// 用当前用户的 DPAPI 加密，返回 base64（不加额外熵，1.x 存下的 Key 也能解开）。
 pub fn protect(text: &str) -> Option<String> {
     let data = text.trim().as_bytes();
     if data.is_empty() {

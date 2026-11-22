@@ -1,5 +1,6 @@
 //! 文件中转站：临时"放"一些文件在岛上，之后再拖到别处。只记录路径，不复制文件。
-//! 和 WPF 版共用 shelf.json（`[{"Path": "..."}]`），新放进来的在最前面，最多 30 个。
+//! 保存在 shelf.json（`[{"Path": "..."}]`，1.x 起就是这个格式，老用户的文件照样能读），
+//! 新放进来的在最前面，最多 30 个。
 
 use serde_json::{Map, Value, json};
 
@@ -35,7 +36,7 @@ impl Item {
         self.info.as_ref().is_some_and(|(f, _)| *f)
     }
 
-    /// 按类型挑一个图标（Segoe Fluent Icons 字形），和 WPF 版一致。
+    /// 按类型挑一个图标（Segoe Fluent Icons 字形）。
     pub fn glyph(&self) -> char {
         if self.is_folder() {
             return '\u{E8B7}';
@@ -61,7 +62,7 @@ impl Item {
     }
 }
 
-/// 文件大小，和 WPF 版的写法一样（1023 B、1.5 KB、12.3 MB、1.25 GB）。
+/// 文件大小（1023 B、1.5 KB、12.3 MB、1.25 GB）。
 pub fn format_size(bytes: u64) -> String {
     let b = bytes as f64;
     let trim = |s: String| {

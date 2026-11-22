@@ -381,7 +381,7 @@ fn read_string(key: PCWSTR, name: PCWSTR) -> Option<String> {
     }
 }
 
-/// 开机启动：写在当前用户的 Run 项里（和 WPF 版同一个值名 "Island"）。
+/// 开机启动：写在当前用户的 Run 项里（值名 "Island"，1.x 起不变，升级后不会多出一项）。
 pub fn startup_enabled() -> bool {
     let Ok(exe) = std::env::current_exe() else {
         return false;
