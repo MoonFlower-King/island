@@ -2,18 +2,18 @@
 
 Windows 上的"灵动岛"：屏幕顶部正中的一个黑色胶囊。鼠标移上去展开成功能面板，移开立刻收起。
 
-推荐使用 2.0 起的原生版（Rust 重写，单个 exe 不到 1 MB）；1.x 的 WPF 版仍然可以下载。
+用 Rust 直接调用 Windows 合成引擎写成：单个 exe 不到 1 MB，不需要任何运行时，动画全部交给系统合成器在独立线程上运行。
 
 ## 下载
 
 到 [Releases](https://github.com/MoonFlower-King/island/releases) 下载最新版本，解压后双击 `Island.exe` 即可，不需要安装。
 
-- **原生版（推荐）**：`Island-native-<版本>-win-x64.zip`，ARM 处理器的电脑（如骁龙笔记本）选 `win-arm64`。不需要任何运行时，需要 Windows 10 1903 或更新版本。功能和设置说明见 [native/README.md](native/README.md)
-- **WPF 版（1.x）**：`win-x64`、`win-arm64`，或已安装 .NET 8 桌面运行时的电脑用 `win-x64-framework-dependent`（体积更小）
+- 一般电脑下载 `Island-native-<版本>-win-x64.zip`，ARM 处理器的电脑（如骁龙笔记本）选 `win-arm64`。
+- exe 没有数字签名，第一次运行如果提示"已保护你的电脑"，点"更多信息" → "仍要运行"。
+- 系统要求：Windows 10 1903 或更高版本、Windows 11。想开机自动运行，右键胶囊勾选"开机自动启动"。
+- 从 1.x（WPF 版）升级：先退出旧版，直接运行新版即可，设置和数据都沿用。1.x 已停止维护，旧的下载包还留在 Releases 里。
 
-两个版本共用设置和数据，可以来回切换，但不要同时运行。
-
-系统要求：Windows 10 1809 或更高版本、Windows 11。想开机自动运行，右键胶囊勾选"开机自动启动"。
+完整的功能说明、接入 Claude Code / Codex 的方法见 [native/README.md](native/README.md)，每个版本的改动见 [native/CHANGELOG.md](native/CHANGELOG.md)。
 
 ## 怎么用
 
@@ -72,70 +72,20 @@ Windows 上的"灵动岛"：屏幕顶部正中的一个黑色胶囊。鼠标移�
 | `shelf.json` | 中转站里的文件路径 |
 | `island.log` | 运行日志。遇到问题时可以附上这个文件 |
 
-## 原生版
-
-用 Rust 重写的更轻、更顺滑的版本：单个 exe 不到 1 MB，刚启动内存约 27 MB，动画全部交给系统合成器在独立线程上运行。包含 WPF 版的全部功能，另外还能显示其他软件的通知、提醒 AI 工具完成任务、停在屏幕两侧时收成竖胶囊。详见 [native/README.md](native/README.md) 和 [native/CHANGELOG.md](native/CHANGELOG.md)。
-
 ## 开发
 
-需要 Windows 10 1809 及以上，以及 [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)。
+代码在 [`native/`](native/)，开发、测试和架构说明见 [native/README.md](native/README.md#开发)。`design/side-dock-preview.html` 是设计预览页，界面改动先在这里做出效果。
 
-```bash
-dotnet run --project src/Island
-```
-
-```bash
-dotnet test
-```
-
-也可以用 Visual Studio 2022 打开 `Island.sln`。
-
-### 冒烟测试
-
-`Island.exe --smoke-test <输出目录>` 会在真实窗口上走一遍所有状态和功能标签，检查状态切换和尺寸，并把每个界面截图保存成 PNG。结果写到 `report.txt`，全部通过时退出码为 0。设置环境变量 `ISLAND_DATA_DIR` 可以把数据目录指到别处，避免影响自己的数据。
-
-### CI 与发布
-
-每次推送，GitHub Actions 都会在 Windows 上依次编译、运行单元测试、发布单文件程序，并对发布出来的 exe 运行冒烟测试。截图作为 `smoke-test` 构件上传。
+每次推送 `native/` 下的改动，GitHub Actions 都会在 Windows 上做格式检查、Clippy、单元测试、x64 / arm64 构建，并在 100% 和 150% 缩放下跑冒烟测试（截图作为构件上传）。
 
 发布新版本：
 
-1. 在 `CHANGELOG.md` 里写好新版本的说明（标题格式 `## [1.2.3]`）
-2. 推送对应的标签
+1. 把 `native/Cargo.toml` 的版本号改成新版本，在 `native/CHANGELOG.md` 里写好这一版的说明（标题格式 `## [2.1.0]`）
+2. 合并到 `main` 后，在 GitHub 的 Actions 页面选择 native 工作流，点 Run workflow，在 `main` 上运行并填入版本标签（如 `v2.1.0`，必须和 Cargo.toml 的版本一致）
 
-```bash
-git tag v1.2.3
-```
+CI 会构建、测试并创建 GitHub Release，附上 x64、arm64 两个压缩包和 SHA256 校验文件。标签带 `-`（如 `v2.1.0-beta.1`）的发布成预览版。
 
-```bash
-git push origin v1.2.3
-```
-
-CI 会用标签里的版本号构建，并自动创建 GitHub Release，附上 x64、arm64 和依赖运行时的三个压缩包，以及 SHA256 校验文件。
-
-不想在本地打标签的话，也可以在 GitHub 的 Actions 页面选择 build 工作流，点 Run workflow，在 `main` 上运行并填入版本标签（如 `v1.2.3`）。CI 会在这个提交上创建标签和 Release。
-
-## 目录结构
-
-```
-src/Island/
-├── App.xaml(.cs)                 启动、单实例、全局样式
-├── Core/                         状态与形状、主题计算、设置、JSON 存储
-├── Animation/                    胶囊形状的物理弹簧动画、内容缓动
-├── Interop/                      Win32：窗口样式、置顶、剪贴板监听、光标；Core Audio 音量接口
-├── Media/                        SMTC 媒体会话、封面取色
-├── Services/                     待办、剪贴板、中转站、翻译、系统监控、音量、亮度
-└── Views/
-    ├── IslandWindow.xaml(.cs)    胶囊窗口、状态机、悬停展开/收起、全屏隐藏
-    ├── IslandWindow.Features.cs  功能标签、键盘输入、拖放、剪贴板监听
-    ├── IslandWindow.Media.cs     音乐胶囊与播放器
-    ├── IslandWindow.Theme.cs     主题切换
-    ├── IslandWindow.Levels.cs    音量 / 亮度提示、滚轮调音量
-    ├── ThemeManager.cs           主题颜色资源与过渡动画
-    ├── IslandWindow.SmokeTest.cs 冒烟测试
-    └── Panels/                   待办、剪贴板、中转站、翻译、监控、外观面板
-tests/Island.Tests/               单元测试
-```
+1.x（WPF 版）的源码已从 `main` 移除，需要时可以看 `v1.3.0` 标签或 8257fe9 提交。
 
 ## 许可证
 

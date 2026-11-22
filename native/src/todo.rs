@@ -1,4 +1,4 @@
-//! 待办：和 WPF 版共用 todos.json（`[{Id, CreatedAt, Text, Done}]`）。
+//! 待办：保存在 todos.json（`[{Id, CreatedAt, Text, Done}]`，1.x 起就是这个格式）。
 //!
 //! 新待办放在最前面；勾选完成的沉到底部，取消勾选的回到顶部。
 //! 每一项保留原始 JSON，只改认识的字段。

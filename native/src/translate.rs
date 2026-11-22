@@ -1,7 +1,7 @@
 //! AI 翻译里与平台无关的部分：服务预设、请求地址、请求体、流式响应解析、错误信息。
 //!
-//! 和 WPF 版保持一致：同样的预设、同样的 settings.json 字段（TranslateProvider、TranslateProfiles），
-//! 同样的地址规则（公网只允许 https，http 只能用于本机和局域网）。
+//! 配置存在 settings.json 的 TranslateProvider、TranslateProfiles 里。
+//! 地址规则：公网只允许 https，http 只能用于本机和局域网。
 
 use serde_json::{Value, json};
 
@@ -138,7 +138,7 @@ pub struct Profile {
     pub format: Format,
     pub base_url: String,
     pub model: String,
-    /// DPAPI 加密后再 base64 的 Key（和 WPF 版 ProtectedData 的结果通用）。
+    /// DPAPI 加密后再 base64 的 Key。
     pub protected_key: Option<String>,
 }
 

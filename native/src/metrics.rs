@@ -1,4 +1,4 @@
-//! 胶囊在各个状态下的形状（单位：DIP）。和 WPF 版保持一致。
+//! 胶囊在各个状态下的形状（单位：DIP）。
 
 /// 岛的外观状态。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

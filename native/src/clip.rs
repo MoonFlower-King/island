@@ -1,4 +1,4 @@
-//! 剪贴板历史：最近 50 条文字，新的在前，重复的提到最前。保存格式和 WPF 版的 clipboard.json 一致。
+//! 剪贴板历史：最近 50 条文字，新的在前，重复的提到最前。保存在 clipboard.json（1.x 起的格式）。
 
 use serde_json::{Value, json};
 

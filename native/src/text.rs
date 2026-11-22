@@ -83,7 +83,7 @@ mod speed_tests {
 }
 
 /// SMTC 的 SourceAppUserModelId 形如 "Spotify.exe" 或 "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"，
-/// 转成好读一点的名字（和 WPF 版一致）。
+/// 转成好读一点的名字。
 pub fn friendly_app(aumid: &str) -> String {
     let mut name = aumid.trim();
     if let Some(i) = name.rfind('!') {

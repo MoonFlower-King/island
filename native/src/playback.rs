@@ -1,5 +1,5 @@
 //! 有些播放器（比如网易云音乐）不向系统报告播放进度，这时岛自己计时：
-//! 换歌时从 0 开始，播放时累加，暂停时停住。和 WPF 版的 PlaybackClock / NeteaseHistory 一致。
+//! 换歌时从 0 开始，播放时累加，暂停时停住。
 
 use serde_json::Value;
 

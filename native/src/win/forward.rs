@@ -34,9 +34,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::w;
 
-/// WM_COPYDATA 里 dwData 的标记（"IA" + 1），别的程序发来的 WM_COPYDATA 不理。
-pub const COPYDATA_AI: usize = 0x4941_0001;
-/// 同上，开头多 8 字节：发消息的窗口（HWND 的值，0 = 没找到）。
+/// WM_COPYDATA 里 dwData 的标记（"IA" + 2），别的程序发来的 WM_COPYDATA 不理。
+/// 开头 8 字节是发消息的窗口（HWND 的值，0 = 没找到），后面是"来源\0JSON"。
+/// （0x4941_0001 是 2.0.1 及以前不带窗口的格式，已经不用了。）
 pub const COPYDATA_AI_WINDOW: usize = 0x4941_0002;
 /// 同上，开头 16 字节：发消息的窗口、等答复的窗口（批准请求）。
 pub const COPYDATA_AI_ASK: usize = 0x4941_0003;
@@ -337,21 +337,18 @@ fn processes() -> HashMap<u32, (u32, String)> {
 pub fn receive(hwnd: HWND, lparam: LPARAM) -> bool {
     let cds = unsafe { (lparam.0 as *const COPYDATASTRUCT).as_ref() };
     let Some(cds) = cds.filter(|c| {
-        matches!(c.dwData, COPYDATA_AI | COPYDATA_AI_WINDOW | COPYDATA_AI_ASK)
-            && !c.lpData.is_null()
+        matches!(c.dwData, COPYDATA_AI_WINDOW | COPYDATA_AI_ASK) && !c.lpData.is_null()
     }) else {
         return false;
     };
     let mut bytes =
         unsafe { std::slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize) };
-    let (mut window, mut reply) = (0, 0);
-    if cds.dwData != COPYDATA_AI {
-        let Some((head, rest)) = bytes.split_first_chunk::<8>() else {
-            return false;
-        };
-        window = i64::from_le_bytes(*head) as isize;
-        bytes = rest;
-    }
+    let Some((head, rest)) = bytes.split_first_chunk::<8>() else {
+        return false;
+    };
+    let window = i64::from_le_bytes(*head) as isize;
+    bytes = rest;
+    let mut reply = 0;
     if cds.dwData == COPYDATA_AI_ASK {
         let Some((head, rest)) = bytes.split_first_chunk::<8>() else {
             return false;
