@@ -254,6 +254,13 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
         <button class="chip action" data-app="codex" data-run="1">Codex 开始干活</button>
         <button class="chip action" data-app="claude" data-approve="1">Claude 请求批准</button>
       </div>
+    </div>
+    <div class="crow"><span class="label">更新、离开</span>
+      <div class="chips">
+        <button class="chip action" id="demoUpdate">有新版本</button>
+        <button class="chip action" id="demoAway">离开 42 分钟后回来</button>
+      </div>
+      <span class="note">每天看一次有没有新版本，点一下自动下载、校验、替换并重启。锁屏或走开 10 分钟以上，回来时岛展开一张"离开期间"的汇总。</span>
       <span class="note">真机上来自 Claude Code 的钩子：正在干什么、跑了多久实时显示；要批准的操作直接在岛上点允许或拒绝，不用切回终端。</span>
     </div>
     <div class="crow"><span class="label">其他软件</span>
@@ -326,6 +333,8 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     x: '<path d="M6 6l12 12M18 6L6 18"/>',
     trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
     mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+    download: '<path d="M12 4v11"/><path d="M7 10l5 5 5-5"/><path d="M5 20h14"/>',
+    moon: '<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>',
     head: '<path d="M4 15v-3a8 8 0 0 1 16 0v3"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
     file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>',
     folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
@@ -391,8 +400,12 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     toast: "",
     // AI 工作台：正在干活的代理、等你批准的操作
     agents: [
-      { id: 1, app: "claude", project: "island", prompt: "把 AI 工作台做进预览页", action: "运行 npm test", start: Date.now() - 222000, edits: 3 },
+      { id: 1, app: "claude", project: "island", prompt: "把 AI 工作台做进预览页", action: "运行 npm test", start: Date.now() - 222000, edits: 3, tokens: 123400 },
     ],
+    // 今天用了多少 tokens（读 Claude Code 的对话记录，不算重复读的缓存）
+    tokensToday: 862000,
+    // 离开期间的汇总（回来时展开）
+    summary: null,
     approvals: [],
     // AI 动态：完成任务、等你确认。没看过的会在收起的胶囊上留一个小点
     ai: [
@@ -675,6 +688,28 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   }
   function unread() { return S.ai.some((a) => !a.read); }
   function firstUnread() { return S.ai.find((a) => !a.read); }
+  function fmtTok(n) { return n >= 1e8 ? `${(n / 1e8).toFixed(2)} 亿` : n >= 1e4 ? `${(n / 1e4).toFixed(1)} 万` : String(n); }
+  // 离开期间：AI 做完的、等你批准的、各软件来了几条消息
+  function tabSummary() {
+    const m = S.summary; if (!m) return "";
+    // 最要紧的在前：等你批准的；消息条数一直留一行；做完的任务填剩下的位置，放不下的合成"还有 N 个"
+    const head = [], tail = [];
+    if (S.approvals.length) head.push(`<div class="row" data-act="summary-ai" style="top:TOPpx;height:40px;align-items:center;background:${rgba(AI_APPS.claude.color, 0.16)}">${badge("claude", 24)}
+      <div style="min-width:0;flex:1;display:grid"><span class="t" style="font-size:12.5px;font-weight:700">${S.approvals.length} 个操作在等你批准</span><span class="s" style="font-size:11.5px">点这里去处理</span></div></div>`);
+    if (m.apps.length) tail.push(`<div class="row" style="top:TOPpx;height:40px;align-items:center;cursor:default">
+      <span style="display:flex;gap:3px;flex:none">${m.apps.slice(0, 3).map(([a]) => badge(a, 22)).join("")}</span>
+      <div style="min-width:0;flex:1;display:grid"><span class="t" style="font-size:12.5px;font-weight:600">${m.apps.reduce((n, [, c]) => n + c, 0)} 条消息</span><span class="s" style="font-size:11.5px">${m.apps.map(([a, c]) => `${AI_APPS[a].name} ${c} 条`).join(" · ")}</span></div></div>`);
+    const slots = 4 - head.length - tail.length;
+    const shown = m.done.length > slots ? Math.max(0, slots - 1) : m.done.length;
+    const mid = m.done.slice(0, shown).map((d) => `<div class="row" data-act="summary-ai" style="top:TOPpx;height:40px;align-items:center">${badge(d.app, 24)}
+      <div style="min-width:0;flex:1;display:grid"><span class="t" style="font-size:12.5px;font-weight:600">${AI_APPS[d.app].name} · ${esc(d.project)} 完成了任务</span><span class="s" style="font-size:11.5px">${esc(d.text)}</span></div>
+      <span class="f" style="font-size:10.5px;align-self:flex-start;margin-top:5px">${esc(d.at)}</span></div>`);
+    if (m.done.length > shown && slots > 0) mid.push(`<div class="row" data-act="summary-ai" style="top:TOPpx;height:40px;align-items:center"><span class="s" style="font-size:12px;padding-left:34px">${shown ? "还有" : "做完了"} ${m.done.length - shown} 个任务 · 在 AI 动态里看</span></div>`);
+    const rows = head.concat(mid, tail);
+    return `<span class="abs t" style="left:16px;top:50px;height:22px;line-height:22px;font-size:12px;font-weight:600;display:flex;gap:6px;align-items:center">${ico("moon", 13)}你离开的 ${m.mins} 分钟里</span>
+      <div class="seg" style="left:376px;top:50px"><button data-act="summary-done">知道了</button></div>` +
+      rows.slice(0, 4).map((r, i) => r.replace("top:TOPpx", `top:${78 + i * 42}px`)).join("");
+  }
   function elapsed(ms) {
     const s = Math.max(0, Math.floor(ms / 1000)), m = Math.floor(s / 60);
     return m >= 60 ? `${Math.floor(m / 60)}:${String(m % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}` : `${m}:${String(s % 60).padStart(2, "0")}`;
@@ -696,7 +731,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
          ${badge(g.app, 24)}
          <div style="min-width:0;flex:1;display:grid">
            <span class="t" style="font-size:12.5px;font-weight:600">${esc(g.project)} · ${esc(g.action)}</span>
-           <span class="s" style="font-size:11.5px">${esc(g.prompt || "刚开始")}${g.edits ? ` · 改了 ${g.edits} 个文件` : ""}</span>
+           <span class="s" style="font-size:11.5px">${esc(g.prompt || "刚开始")}${g.edits ? ` · 改了 ${g.edits} 个文件` : ""}${g.tokens ? ` · ${fmtTok(g.tokens)} tokens` : ""}</span>
          </div>
          <span class="pulse" style="width:6px;height:6px;border-radius:50%;background:var(--i-accent);flex:none"></span>
          <span style="font-size:11px;color:var(--i-accent);font-variant-numeric:tabular-nums;min-width:34px;text-align:right">${elapsed(Date.now() - g.start)}</span></div>`));
@@ -706,7 +741,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
     const bench = benchRows();
     if (bench.length) {
       const msgs = S.ai.slice(0, Math.max(0, 4 - bench.length)).map((a, i) => aiRow(a, i));
-      const head = [S.agents.length ? `${S.agents.length} 个在干活` : "", S.approvals.length ? `${S.approvals.length} 个等你批准` : ""].filter(Boolean).join(" · ");
+      const head = [S.agents.length ? `${S.agents.length} 个在干活` : "", S.approvals.length ? `${S.approvals.length} 个等你批准` : "", S.tokensToday ? `今天 ${fmtTok(S.tokensToday)} tokens` : ""].filter(Boolean).join(" · ");
       return `<span class="abs s" style="left:16px;top:50px;height:22px;line-height:22px;font-size:11.5px">${head}</span>` +
         bench.concat(msgs).slice(0, 4).map((r, i) => r.replace("top:TOPpx", `top:${78 + i * 42}px`)).join("");
     }
@@ -727,7 +762,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
          ${a.read ? "" : `<span style="width:7px;height:7px;border-radius:50%;background:${AI_APPS[a.app].color};flex:none"></span>`}</div>`;
   }
   function panelHTML() {
-    const body = { ai: tabAI, music: tabMusic, todo: tabTodo, clipboard: tabClipboard, shelf: tabShelf, translate: tabTranslate, monitor: tabMonitor, appearance: tabAppearance }[S.tab]();
+    const body = { summary: tabSummary, ai: tabAI, music: tabMusic, todo: tabTodo, clipboard: tabClipboard, shelf: tabShelf, translate: tabTranslate, monitor: tabMonitor, appearance: tabAppearance }[S.tab]();
     return header() + body + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : "");
   }
 
@@ -910,7 +945,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
         return;
       }
       const [action, edit, ask] = sc.steps[k++];
-      const go = () => { g.action = action; if (edit) g.edits++; refreshBench(); setTimeout(next, 2600); };
+      const go = () => { g.action = action; if (edit) g.edits++; const t = 4000 + Math.round(Math.random() * 9000); g.tokens = (g.tokens || 0) + t; S.tokensToday += t; refreshBench(); setTimeout(next, 2600); };
       if (ask) { g.action = "等你批准"; refreshBench(); requestApproval(app, g.project, ask, action.replace(/^运行 /, ""), (how) => { if (how === "deny") { g.action = "换个办法"; refreshBench(); setTimeout(next, 2600); } else go(); }); }
       else go();
     };
@@ -924,6 +959,39 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   });
   // 跑了多久每秒走一次
   setInterval(() => { if (S.agents.length) refreshBench(); }, 1000);
+
+  // ───────── 自动更新 ─────────
+  // 每天到 GitHub 看一次最新版本；点通知就下载、校验 SHA256、替换自己并重启（设置和数据不动）
+  function offerUpdate() {
+    clearTimeout(noteTimer);
+    S.note = { icon: "download", title: "有新版本 2.0.6", body: "点一下更新，设置和数据都保留", update: true };
+    update(true);
+    noteTimer = setTimeout(() => { S.note = null; update(); }, 8000);
+  }
+  function runUpdate() {
+    clearTimeout(noteTimer);
+    S.note = { icon: "download", title: "正在更新到 2.0.6…", body: "下载 0.9 MB · 校验中" }; update(true);
+    noteTimer = setTimeout(() => {
+      S.note = { icon: "check", title: "已更新到 2.0.6", body: "岛重新启动好了" }; update(true);
+      noteTimer = setTimeout(() => { S.note = null; update(); }, 3500);
+    }, 2200);
+  }
+  document.getElementById("demoUpdate").addEventListener("click", offerUpdate);
+  // ───────── 离开期间的汇总 ─────────
+  document.getElementById("demoAway").addEventListener("click", () => {
+    const [hh, mm] = hm();
+    S.summary = {
+      mins: 42,
+      done: [
+        { app: "claude", project: "island", text: "批准按钮做好了，测试全部通过。", at: `${hh}:${mm}` },
+        { app: "codex", project: "web-shop", text: "金额计算已修好，新增 2 个测试。", at: `${hh}:${mm}` },
+        { app: "claude", project: "api", text: "接口文档已更新。", at: `${hh}:${mm}` },
+      ],
+      apps: [["wechat", 5], ["qq", 2], ["telegram", 1]],
+    };
+    if (!S.approvals.length) S.approvals.push({ id: ++benchId, app: "claude", project: "island", tool: "Bash", verb: "运行命令", detail: "cargo test" });
+    S.note = null; S.tab = "summary"; S.pinned = true; update(true); rerenderAll();
+  });
 
   // 真机上点 AI 消息会切回发消息的地方：终端 / 编辑器窗口，或者桌面版里对应的对话
   function jumpText(a) { return `已切到${AI_APPS[a.app].name}里「${a.project}」的对话`; }
@@ -1014,6 +1082,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   });
   // 点通知：关掉，AI 消息和其他软件的通知顺便跳过去
   function openNote() {
+    if (S.note && S.note.update) { runUpdate(); return; }
     // 批准请求：点按钮以外的地方 = 回终端自己处理
     if (S.note && S.note.approval) { decide(S.approvals.findIndex((a) => a.id === S.note.approval), "terminal"); return; }
     const jump = S.note && S.note.jump;
@@ -1047,6 +1116,8 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       case "ap-deny": decide(i, "deny"); return;
       case "ap-term": decide(i, "terminal"); return;
       case "agent-open": flashHint(jumpText(S.agents[i])); break;
+      case "summary-ai": S.summary = null; S.tab = "ai"; break;
+      case "summary-done": S.summary = null; S.tab = "ai"; S.pinned = false; flashHint("汇总收起了；消息都还在 AI 动态里"); break;
       case "ai-readall": S.ai.forEach((a) => (a.read = true)); break;
       case "ai-clear": S.ai = []; break;
       case "pin": S.pinned = !S.pinned; break;
@@ -1246,6 +1317,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       ["persistClips", "保存剪贴板历史到磁盘"],
       ["autostart", "开机自动启动"],
       ["shortcut", "在桌面放快捷方式"],
+      ["update", "检查更新"],
       null,
       ["demo", "演示：弹出一条通知"],
       ["data", "打开数据文件夹"],
@@ -1268,6 +1340,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       if (m === "demo") { S.hover = false; notify("mail", "新消息", "这是一条来自灵动岛的演示通知"); }
       else if (m === "data") flashHint("真机上会打开 %LOCALAPPDATA% 里的灵动岛数据文件夹");
       else if (m === "exit") flashHint("预览里不会真的退出");
+      else if (m === "update") { S.hover = false; S.pinned = false; offerUpdate(); }
       else {
         S[m] = !S[m]; save();
         if (m === "showLevel" && !S.showLevel) S.level = 0;

@@ -6,10 +6,11 @@ Windows 上的"灵动岛"：屏幕顶部正中的一个黑色胶囊。鼠标移�
 
 ## 下载
 
-到 [Releases](https://github.com/MoonFlower-King/island/releases) 下载最新版本，解压后双击 `Island.exe` 即可，不需要安装。
+到 [Releases](https://github.com/MoonFlower-King/island/releases) 下载最新版本。
 
-- 一般电脑下载 `Island-native-<版本>-win-x64.zip`，ARM 处理器的电脑（如骁龙笔记本）选 `win-arm64`。
-- 第一次运行会在桌面放一个"灵动岛"快捷方式（不想要可以删掉，右键胶囊的"在桌面放快捷方式"可以再放回来）。
+- 一般电脑下载 `Island-native-<版本>-win-x64.exe`，ARM 处理器的电脑（如骁龙笔记本）选 `win-arm64.exe`，下载后直接双击。也可以下载同名的 `.zip`。
+- 第一次运行会把自己装到 `%LOCALAPPDATA%\Programs\Island`，在桌面和开始菜单放好"灵动岛"快捷方式。桌面的快捷方式不想要可以删掉，右键胶囊的"在桌面放快捷方式"可以再放回来。不想安装的话，在 Island.exe 旁边放一个 `portable.txt`。
+- 之后有新版本会自动提示，点一下就更新。
 - exe 没有数字签名，第一次运行如果提示"已保护你的电脑"，点"更多信息" → "仍要运行"。
 - 系统要求：Windows 10 1903 或更高版本、Windows 11。想开机自动运行，右键胶囊勾选"开机自动启动"。
 - 从 1.x（WPF 版）升级：先退出旧版，直接运行新版即可，设置和数据都沿用。1.x 已停止维护，旧的下载包还留在 Releases 里。

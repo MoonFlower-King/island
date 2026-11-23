@@ -17,7 +17,23 @@ fn main() {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("island-smoke"))
     });
-    let code = match win::app::run(smoke) {
+    let mut note = None;
+    if smoke.is_none() {
+        if let Some(i) = args.iter().position(|a| a == "--updated") {
+            // 自动更新后启动的新版本：等旧进程退出再继续
+            if let Some(pid) = args.get(i + 1).and_then(|p| p.parse().ok()) {
+                win::update::after_update(pid);
+            }
+            note = Some(win::app::StartNote::Updated);
+        } else if args.iter().any(|a| a == "--installed") {
+            note = Some(win::app::StartNote::Installed);
+        } else if win::install::run() {
+            // 从下载的地方运行：已经装好并从安装位置启动了
+            std::process::exit(0);
+        }
+        win::update::cleanup();
+    }
+    let code = match win::app::run(smoke, note) {
         Ok(code) => code,
         Err(e) => {
             win::log::warn(&format!("启动失败：{e}"));

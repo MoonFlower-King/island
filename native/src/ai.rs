@@ -74,6 +74,8 @@ pub struct Event {
     pub tool: String,
     pub verb: String,
     pub detail: String,
+    /// Claude Code 的对话记录文件（.jsonl），用来数 tokens；没有就空着。
+    pub transcript: String,
 }
 
 impl Event {
@@ -285,6 +287,8 @@ pub struct Agent {
     pub files: Vec<String>,
     /// 发消息的终端窗口（HWND 的值，0 = 不知道）。
     pub window: isize,
+    /// 这个会话用了多少 tokens（见 island::usage）。
+    pub tokens: u64,
 }
 
 /// 多久没动静就当它已经不在干活了（关了终端、钩子没装全）。
@@ -327,6 +331,7 @@ impl Workbench {
                             last: now,
                             files: Vec::new(),
                             window: 0,
+                            tokens: 0,
                         },
                     );
                     0
@@ -399,6 +404,10 @@ pub fn parse(source: &str, payload: &str) -> Option<Event> {
     };
     let project = project_name(str_field(&v, &["cwd", "project"]));
     let session = str_field(&v, &["session_id"]).to_string();
+    let transcript = Some(str_field(&v, &["transcript_path"]))
+        .filter(|p| p.to_ascii_lowercase().ends_with(".jsonl"))
+        .unwrap_or("")
+        .to_string();
     let event = |kind, text: &str| Event {
         app,
         app_name: app_name.clone(),
@@ -409,6 +418,7 @@ pub fn parse(source: &str, payload: &str) -> Option<Event> {
         tool: String::new(),
         verb: String::new(),
         detail: String::new(),
+        transcript: transcript.clone(),
     };
     let tool_event = |kind| {
         let name = str_field(&v, &["tool_name"]);

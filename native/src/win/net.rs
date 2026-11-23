@@ -270,6 +270,82 @@ fn run(job: &Job, post: &impl Fn(Event)) -> Result<(), Failure> {
     }
 }
 
+/// GET 一个地址，读回最多 `limit` 字节（检查更新、下载新版本用）。会跟着跳转走，状态码不是 2xx 算失败。
+/// 只接受 https；http 只用于本机（冒烟测试的假服务器）。
+pub fn get(url: &str, limit: usize) -> Result<Vec<u8>, String> {
+    let url = Url::parse(url).ok_or_else(|| "地址不对".to_string())?;
+    if !url.https && url.host != "127.0.0.1" && url.host != "localhost" {
+        return Err("只能用 https 下载".into());
+    }
+    let host = HSTRING::from(url.host.as_str());
+    let path = HSTRING::from(url.path.as_str());
+    unsafe {
+        let mut session = Handle(WinHttpOpen(
+            w!("Island-updater"),
+            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            0,
+        ));
+        if session.0.is_null() {
+            session = Handle(WinHttpOpen(
+                w!("Island-updater"),
+                WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                PCWSTR::null(),
+                PCWSTR::null(),
+                0,
+            ));
+        }
+        if session.0.is_null() {
+            return Err(last_error());
+        }
+        let _ = WinHttpSetTimeouts(session.0, 15_000, 15_000, 30_000, 60_000);
+        let connect = Handle(WinHttpConnect(session.0, &host, url.port, 0));
+        if connect.0.is_null() {
+            return Err(last_error());
+        }
+        let request = Handle(WinHttpOpenRequest(
+            connect.0,
+            w!("GET"),
+            &path,
+            PCWSTR::null(),
+            PCWSTR::null(),
+            std::ptr::null(),
+            if url.https {
+                WINHTTP_FLAG_SECURE
+            } else {
+                WINHTTP_OPEN_REQUEST_FLAGS(0)
+            },
+        ));
+        if request.0.is_null() {
+            return Err(last_error());
+        }
+        let headers: Vec<u16> = "Accept: application/vnd.github+json, */*\r\n"
+            .encode_utf16()
+            .collect();
+        WinHttpSendRequest(request.0, Some(&headers), None, 0, 0, 0).map_err(|_| last_error())?;
+        WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|_| last_error())?;
+        let mut status = 0u32;
+        let mut size = 4u32;
+        let _ = WinHttpQueryHeaders(
+            request.0,
+            WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+            PCWSTR::null(),
+            Some((&mut status as *mut u32).cast()),
+            &mut size,
+            std::ptr::null_mut(),
+        );
+        if !(200..300).contains(&status) {
+            return Err(format!("服务器返回 {status}"));
+        }
+        let body = read_all(request.0, limit + 1, &|| true);
+        if body.len() > limit {
+            return Err("文件太大".into());
+        }
+        Ok(body)
+    }
+}
+
 fn refusal(refused: bool) -> Result<(), Failure> {
     if refused {
         Err(("这段内容无法翻译".into(), false))

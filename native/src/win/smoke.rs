@@ -53,6 +53,8 @@ pub struct Smoke {
     console: Option<HWND>,
     /// 在等岛答复的 `--notify`（批准请求）。
     waiting: Option<std::process::Child>,
+    /// 假的更新服务器的端口。
+    port: u16,
 }
 
 impl Smoke {
@@ -70,6 +72,7 @@ impl Smoke {
             children: Vec::new(),
             console: None,
             waiting: None,
+            port: 0,
         }
     }
 
@@ -621,6 +624,90 @@ fn child_output(smoke: &mut Smoke) -> String {
     }
     let _ = c.wait();
     out.trim().to_string()
+}
+
+/// 假的新版本 exe 的内容。
+const FAKE_EXE: &[u8] = b"MZ fake island 99.0.0";
+
+/// 扮演 GitHub：最新版本信息、exe、正确和错误的校验文件。
+fn fake_update_server() -> u16 {
+    use std::io::{Read, Write};
+    let Ok(listener) = std::net::TcpListener::bind("127.0.0.1:0") else {
+        return 0;
+    };
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
+    let base = format!("http://127.0.0.1:{port}");
+    let arch = if cfg!(target_arch = "aarch64") {
+        "arm64"
+    } else {
+        "x64"
+    };
+    let exe_name = format!("Island-native-99.0.0-win-{arch}.exe");
+    let latest = format!(
+        r#"{{"tag_name":"v99.0.0","prerelease":false,"assets":[
+            {{"name":"{exe_name}","browser_download_url":"{base}/exe","size":{}}},
+            {{"name":"SHA256SUMS.txt","browser_download_url":"{base}/sums","size":100}}]}}"#,
+        FAKE_EXE.len()
+    );
+    let sums = format!("{}  {exe_name}\n", island::update::sha256_hex(FAKE_EXE));
+    let bad = format!("{}  {exe_name}\n", "0".repeat(64));
+    std::thread::spawn(move || {
+        for stream in listener.incoming().take(12) {
+            let Ok(mut stream) = stream else { continue };
+            let mut buf = [0u8; 4096];
+            let n = stream.read(&mut buf).unwrap_or(0);
+            let req = String::from_utf8_lossy(&buf[..n]);
+            let path = req.split_whitespace().nth(1).unwrap_or("");
+            let body: Vec<u8> = match path {
+                "/latest" => latest.clone().into_bytes(),
+                "/exe" => FAKE_EXE.to_vec(),
+                "/sums" => sums.clone().into_bytes(),
+                "/sums-bad" => bad.clone().into_bytes(),
+                _ => {
+                    let _ = stream.write_all(
+                        b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    );
+                    continue;
+                }
+            };
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+        }
+    });
+    port
+}
+
+/// 安装：复制到一个临时的安装目录、记下版本；正在运行的程序文件能被换掉。
+fn check_install(smoke: &mut Smoke) {
+    let dir = smoke.dir.join("install-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    let exe = std::env::current_exe().unwrap_or_default();
+    let installed = super::install::install_to(&dir);
+    let same = installed
+        .as_ref()
+        .ok()
+        .and_then(|p| std::fs::read(p).ok())
+        .zip(std::fs::read(&exe).ok())
+        .is_some_and(|(a, b)| a == b);
+    let version = std::fs::read_to_string(dir.join("version.txt")).unwrap_or_default();
+    smoke.check(
+        same && version == super::install::VERSION,
+        &format!("安装：复制程序并记下版本（{installed:?}，{version}）"),
+    );
+    // 换程序文件：旧的改名留着，新的放进来
+    let (target, new) = (dir.join("Island.exe"), dir.join("Island.new.exe"));
+    let _ = std::fs::write(&new, FAKE_EXE);
+    let swapped = super::update::swap(&target, &new);
+    smoke.check(
+        swapped.is_ok()
+            && std::fs::read(&target).ok().as_deref() == Some(FAKE_EXE)
+            && dir.join("Island.old.exe").exists(),
+        &format!("更新时换掉程序文件（{swapped:?}）"),
+    );
 }
 
 /// 桌面快捷方式：在测试目录里建一个（不碰真的桌面），读回来指向的程序；图标文件系统能读。
@@ -1624,8 +1711,26 @@ pub fn step(app: &mut App) {
                 "答复后请求从岛上拿掉",
             );
             // 工作台：同一个会话开始新任务、正在跑命令
-            let start = r###"{"session_id":"s8","cwd":"C:\\work\\island","hook_event_name":"UserPromptSubmit","prompt":"跑一下测试"}"###;
-            match spawn_notify(&["claude"], Some(start)) {
+            // 对话记录：两条回复，其中一条写了两行（只算一次）；读缓存的不算
+            let transcript = smoke.dir.join("s8.jsonl");
+            let reply = |id: &str, out: u64| {
+                format!(
+                    r#"{{"type":"assistant","timestamp":"2099-01-01T00:00:00Z","message":{{"id":"{id}","usage":{{"input_tokens":1000,"cache_creation_input_tokens":500,"cache_read_input_tokens":90000,"output_tokens":{out}}}}}}}"#
+                )
+            };
+            let _ = std::fs::write(
+                &transcript,
+                [reply("m1", 2000), reply("m1", 2000), reply("m2", 6000)].join("\n") + "\n",
+            );
+            let start = serde_json::json!({
+                "session_id": "s8",
+                "cwd": "C:\\work\\island",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "跑一下测试",
+                "transcript_path": transcript.to_string_lossy(),
+            })
+            .to_string();
+            match spawn_notify(&["claude"], Some(&start)) {
                 Ok(c) => smoke.children.push(c),
                 Err(e) => smoke.check(false, &format!("启动 --notify（{e}）")),
             }
@@ -1641,6 +1746,15 @@ pub fn step(app: &mut App) {
         }
         99 => {
             let agent = app.bench.agents.first();
+            // (1000 + 500 + 2000) + (1000 + 500 + 6000)
+            smoke.check(
+                agent.is_some_and(|a| a.tokens == 11_000),
+                &format!(
+                    "工作台数出这个会话用的 tokens（{:?}，今天 {:?}）",
+                    agent.map(|a| a.tokens),
+                    app.tokens_today.get("s8")
+                ),
+            );
             smoke.check(
                 agent.is_some_and(|a| {
                     a.prompt == "跑一下测试" && a.action == "改 app.rs" && a.files.len() == 1
@@ -1730,6 +1844,117 @@ pub fn step(app: &mut App) {
                 &format!("再点一下收起（{:?}）", app.state),
             );
             check_shortcut(&mut smoke);
+            check_install(&mut smoke);
+            // 自动更新：本机的假服务器扮演 GitHub
+            let port = fake_update_server();
+            super::update::check(app.hwnd, true, format!("http://127.0.0.1:{port}/latest"));
+            smoke.port = port;
+            smoke.waits = 0;
+            next = 800;
+        }
+        107 if app.update_offer.is_none() && smoke.waits < 20 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
+        }
+        107 => {
+            let offer = app.update_offer.as_ref().map(|r| r.version.clone());
+            smoke.check(
+                offer.as_deref() == Some("99.0.0"),
+                &format!("发现新版本（{offer:?}）"),
+            );
+            smoke.check(
+                app.notification
+                    .as_ref()
+                    .is_some_and(|(_, t, _)| t.contains("99.0.0")),
+                "弹出\"有新版本\"",
+            );
+            snapshot(app, &mut smoke, "33-update", None);
+            // 点通知开始更新
+            click(app, app.center_point());
+            smoke.waits = 0;
+            next = 600;
+        }
+        108 if app.update_ready.is_none() && smoke.waits < 25 => {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
+        }
+        108 => {
+            let got = app
+                .update_ready
+                .as_ref()
+                .and_then(|p| std::fs::read(p).ok());
+            smoke.check(
+                got.as_deref() == Some(FAKE_EXE),
+                &format!("下载新版本并通过校验（{:?}）", app.update_ready),
+            );
+            // 校验不对的文件不能用
+            if let Some(r) = app.update_offer.as_mut() {
+                r.sums_url = format!("http://127.0.0.1:{}/sums-bad", smoke.port);
+            }
+            app.update_ready = None;
+            app.start_update();
+            smoke.waits = 0;
+            next = 600;
+        }
+        109 if !app
+            .notification
+            .as_ref()
+            .is_some_and(|(_, t, _)| t.contains("没成功"))
+            && smoke.waits < 25 =>
+        {
+            smoke.waits += 1;
+            smoke.step = n;
+            next = 300;
+        }
+        109 => {
+            smoke.check(
+                app.update_ready.is_none()
+                    && app
+                        .notification
+                        .as_ref()
+                        .is_some_and(|(_, _, b)| b.contains("校验不对")),
+                &format!(
+                    "校验不对的下载被拒绝（{:?}）",
+                    app.notification.as_ref().map(|(_, t, b)| (t, b))
+                ),
+            );
+            app.dismiss_notification();
+            // 离开 11 分钟再回来：岛展开这段时间的汇总
+            app.check_away(super::app::AWAY_MS + 60_000);
+            app.check_away(0);
+            next = 800;
+        }
+        110 => {
+            let summary = app.summary.as_ref().map(|s| {
+                (
+                    s.minutes,
+                    s.done.len(),
+                    s.apps
+                        .iter()
+                        .map(|(n, c, _)| (n.clone(), *c))
+                        .collect::<Vec<_>>(),
+                )
+            });
+            smoke.check(
+                app.state == IslandState::Expanded
+                    && summary
+                        .as_ref()
+                        // 离开时长最多到开机时长（CI 的虚拟机刚开机几分钟），所以只看有没有算出来
+                        .is_some_and(|(m, d, apps)| *m >= 1 && *d >= 2 && !apps.is_empty()),
+                &format!("离开回来展开汇总（{summary:?}）"),
+            );
+            snapshot(app, &mut smoke, "34-away-summary", None);
+            click_target(app, &mut smoke, Hit::SummaryDone);
+            next = 800;
+        }
+        111 => {
+            smoke.check(
+                app.summary.is_none() && app.state != IslandState::Expanded,
+                &format!("点\"知道了\"收起汇总（{:?}）", app.state),
+            );
+            app.set_tab(Tab::Music);
             smoke.step = 15;
             next = 35;
         }

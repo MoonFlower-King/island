@@ -128,6 +128,9 @@ jobs:
           Copy-Item target/aarch64-pc-windows-msvc/release/Island.exe stage-arm64/Island.exe
           Compress-Archive -Path stage-x64/Island.exe -DestinationPath "packages/Island-native-$version-win-x64.zip"
           Compress-Archive -Path stage-arm64/Island.exe -DestinationPath "packages/Island-native-$version-win-arm64.zip"
+          # 单独的 exe：下载后直接双击（会自己装到 %LOCALAPPDATA%\Programs\Island），自动更新也下载它
+          Copy-Item target/release/Island.exe "packages/Island-native-$version-win-x64.exe"
+          Copy-Item target/aarch64-pc-windows-msvc/release/Island.exe "packages/Island-native-$version-win-arm64.exe"
           Get-ChildItem packages | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower()
             "$hash  $($_.Name)"
