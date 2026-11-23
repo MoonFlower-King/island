@@ -39,8 +39,9 @@ use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 pub struct Smoke {
     dir: PathBuf,
     step: usize,
-    /// 正在跑第几个场景。
+    /// 正在跑第几个场景、已经记过标题的是第几个。
     scenario: usize,
+    announced: Option<usize>,
     lines: Vec<String>,
     failures: u32,
     started: u64,
@@ -66,6 +67,7 @@ impl Smoke {
             dir,
             step: 0,
             scenario: 0,
+            announced: None,
             lines: Vec::new(),
             failures: 0,
             started: tick(),
@@ -868,7 +870,9 @@ pub fn step(app: &mut App) {
         };
         let n = smoke.step;
         smoke.step += 1;
-        if n == 0 {
+        // 进入新场景时记一行标题（第 0 步可能要等好几次，只记一次）
+        if smoke.announced != Some(smoke.scenario) {
+            smoke.announced = Some(smoke.scenario);
             smoke.note(&format!("—— {name} ——"));
         }
         match run(app, &mut smoke, n) {
