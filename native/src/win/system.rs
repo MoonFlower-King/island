@@ -400,11 +400,16 @@ pub fn repoint_startup() {
 }
 
 pub fn set_startup(enabled: bool) -> bool {
+    match std::env::current_exe() {
+        Ok(exe) => set_startup_for(enabled, &exe),
+        Err(_) => false,
+    }
+}
+
+/// 开机启动指向 `exe`（装好时指向安装位置）。
+pub fn set_startup_for(enabled: bool, exe: &std::path::Path) -> bool {
     unsafe {
         if enabled {
-            let Ok(exe) = std::env::current_exe() else {
-                return false;
-            };
             let value: Vec<u16> = format!("\"{}\"", exe.display())
                 .encode_utf16()
                 .chain(std::iter::once(0))

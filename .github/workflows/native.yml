@@ -121,14 +121,10 @@ jobs:
           Copy-Item target/release/Island.exe dist/Island-native-win-x64.exe
           Copy-Item target/aarch64-pc-windows-msvc/release/Island.exe dist/Island-native-win-arm64.exe
 
-          # 发布用的压缩包：里面就是 Island.exe
+          # 发布的就是两个 exe：下载后直接双击（会自己装到 %LOCALAPPDATA%\Programs\Island），
+          # 自动更新也下载它。不再发压缩包，免得用户不知道该点哪个
           $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          New-Item -ItemType Directory -Force packages, stage-x64, stage-arm64 | Out-Null
-          Copy-Item target/release/Island.exe stage-x64/Island.exe
-          Copy-Item target/aarch64-pc-windows-msvc/release/Island.exe stage-arm64/Island.exe
-          Compress-Archive -Path stage-x64/Island.exe -DestinationPath "packages/Island-native-$version-win-x64.zip"
-          Compress-Archive -Path stage-arm64/Island.exe -DestinationPath "packages/Island-native-$version-win-arm64.zip"
-          # 单独的 exe：下载后直接双击（会自己装到 %LOCALAPPDATA%\Programs\Island），自动更新也下载它
+          New-Item -ItemType Directory -Force packages | Out-Null
           Copy-Item target/release/Island.exe "packages/Island-native-$version-win-x64.exe"
           Copy-Item target/aarch64-pc-windows-msvc/release/Island.exe "packages/Island-native-$version-win-arm64.exe"
           Get-ChildItem packages | ForEach-Object {
@@ -172,8 +168,14 @@ jobs:
           awk -v v="$version" '
             /^## / { if (found) exit; if (index($0, "[" v "]")) { found = 1; next } }
             found { print }
-          ' native/CHANGELOG.md > notes.md
-          if [ ! -s notes.md ]; then echo "Island 原生版 $version" > notes.md; fi
+          ' native/CHANGELOG.md > changes.md
+          # 第一行就告诉用户点哪个
+          base="https://github.com/MoonFlower-King/island/releases/download/$TAG"
+          {
+            echo "**下载**：一般的电脑点 [Island-native-$version-win-x64.exe]($base/Island-native-$version-win-x64.exe)，骁龙等 ARM 电脑点 [win-arm64.exe]($base/Island-native-$version-win-arm64.exe)。下载后直接双击，会自己装好并在桌面放快捷方式；已经装了的会在岛上提示更新。"
+            echo
+            cat changes.md
+          } > notes.md
           cat notes.md
 
       - uses: softprops/action-gh-release@v2

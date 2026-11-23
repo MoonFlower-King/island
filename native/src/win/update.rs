@@ -3,21 +3,16 @@
 //! 设置和数据在 %APPDATA%\Island，不受影响。
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, WPARAM};
+use windows::Win32::Foundation::CloseHandle;
 use windows::Win32::System::Threading::{
     GetCurrentProcessId, OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
 };
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 use island::update::{self, Release};
 
 use super::install::{self, VERSION};
 use super::{log, net};
-
-/// 检查、下载有结果了。
-pub const WM_UPDATE: u32 = WM_APP + 8;
 
 pub enum Event {
     /// 有新版本。
@@ -30,37 +25,12 @@ pub enum Event {
     Failed(String),
 }
 
-static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
-
-pub fn take() -> Vec<Event> {
-    EVENTS
-        .lock()
-        .map(|mut e| std::mem::take(&mut *e))
-        .unwrap_or_default()
-}
-
-fn post(hwnd: HWND, e: Event) {
-    if let Ok(mut q) = EVENTS.lock() {
-        q.push(e);
-    }
-    unsafe {
-        let _ = PostMessageW(Some(hwnd), WM_UPDATE, WPARAM(0), LPARAM(0));
-    }
-}
-
-/// 窗口句柄在线程之间传递（只用来投递消息）。
-#[derive(Clone, Copy)]
-struct Window(isize);
-unsafe impl Send for Window {}
-impl Window {
-    fn hwnd(self) -> HWND {
-        HWND(self.0 as *mut _)
-    }
+fn post(e: Event) {
+    super::events::post(super::events::Event::Update(e));
 }
 
 /// 后台检查有没有新版本。`url` 一般是 GitHub 的 releases/latest（冒烟测试换成本机的假服务器）。
-pub fn check(hwnd: HWND, manual: bool, url: String) {
-    let w = Window(hwnd.0 as isize);
+pub fn check(manual: bool, url: String) {
     std::thread::spawn(move || {
         let result = net::get(&url, 1 << 20).and_then(|body| {
             let json = String::from_utf8_lossy(&body);
@@ -70,14 +40,14 @@ pub fn check(hwnd: HWND, manual: bool, url: String) {
         match result {
             Ok(r) if update::is_newer(&r.version, VERSION) => {
                 log::info(&format!("有新版本 {}", r.version));
-                post(w.hwnd(), Event::Available(r));
+                post(Event::Available(r));
             }
-            Ok(_) if manual => post(w.hwnd(), Event::UpToDate),
+            Ok(_) if manual => post(Event::UpToDate),
             Ok(_) => {}
             Err(e) => {
                 log::info(&format!("检查更新失败：{e}"));
                 if manual {
-                    post(w.hwnd(), Event::Failed(format!("检查更新失败：{e}")));
+                    post(Event::Failed(format!("检查更新失败：{e}")));
                 }
             }
         }
@@ -85,8 +55,7 @@ pub fn check(hwnd: HWND, manual: bool, url: String) {
 }
 
 /// 后台下载新版本到 `dir\Island.new.exe` 并校验。
-pub fn download(hwnd: HWND, release: Release, dir: PathBuf) {
-    let w = Window(hwnd.0 as isize);
+pub fn download(release: Release, dir: PathBuf) {
     std::thread::spawn(move || {
         let result = (|| {
             let sums = net::get(&release.sums_url, 256 << 10)?;
@@ -102,10 +71,10 @@ pub fn download(hwnd: HWND, release: Release, dir: PathBuf) {
             Ok(path)
         })();
         match result {
-            Ok(path) => post(w.hwnd(), Event::Ready(release, path)),
+            Ok(path) => post(Event::Ready(release, path)),
             Err(e) => {
                 log::warn(&format!("下载新版本失败：{e}"));
-                post(w.hwnd(), Event::Failed(format!("更新失败：{e}")));
+                post(Event::Failed(format!("更新失败：{e}")));
             }
         }
     });

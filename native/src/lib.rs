@@ -5,6 +5,7 @@ pub mod ai;
 pub mod clip;
 pub mod color;
 pub mod edit;
+pub mod hooks;
 pub mod icon;
 pub mod jump;
 pub mod level;

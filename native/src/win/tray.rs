@@ -14,14 +14,14 @@ use windows::Win32::UI::Shell::{
     NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateIconIndirect, DestroyIcon, HICON, ICONINFO, RegisterWindowMessageW, SM_CXSMICON, WM_APP,
+    CreateIconIndirect, DestroyIcon, HICON, ICONINFO, RegisterWindowMessageW, SM_CXSMICON,
 };
 use windows::core::w;
 
 use super::log;
 
-/// 图标上的点击发到岛的窗口：消息号。
-pub const WM_TRAY: u32 = WM_APP + 6;
+/// 图标上的点击发到岛的窗口：消息号（在 events 里统一登记）。
+pub use super::events::WM_TRAY;
 /// 用键盘选中图标（windows-rs 里没有这个常量）。
 pub const NIN_KEYSELECT: u32 = windows::Win32::UI::Shell::NIN_SELECT | 1;
 const ID: u32 = 1;

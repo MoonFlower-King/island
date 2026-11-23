@@ -7,35 +7,19 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Sender, channel};
 use std::sync::{Mutex, OnceLock};
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::SystemInformation::GetLocalTime;
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 
 use island::usage::Tally;
-
-/// 有新的用量数字了。
-pub const WM_USAGE: u32 = WM_APP + 9;
-
-/// (工作台里的键, 这个会话一共, 这个会话今天)。
-static RESULTS: Mutex<Vec<(String, u64, u64)>> = Mutex::new(Vec::new());
 
 struct Request {
     key: String,
     path: PathBuf,
-    hwnd: isize,
 }
 
 static QUEUE: OnceLock<Mutex<Sender<Request>>> = OnceLock::new();
 
-pub fn take() -> Vec<(String, u64, u64)> {
-    RESULTS
-        .lock()
-        .map(|mut r| std::mem::take(&mut *r))
-        .unwrap_or_default()
-}
-
 /// 让后台去读一下这个会话的对话记录。
-pub fn request(hwnd: HWND, key: &str, path: &str) {
+pub fn request(key: &str, path: &str) {
     if path.is_empty() {
         return;
     }
@@ -47,13 +31,7 @@ pub fn request(hwnd: HWND, key: &str, path: &str) {
                 let f = files.entry(r.path.clone()).or_default();
                 f.read_new(&r.path);
                 let today = f.tally.since(local_midnight());
-                if let Ok(mut out) = RESULTS.lock() {
-                    out.push((r.key, f.tally.total(), today));
-                }
-                unsafe {
-                    let _ =
-                        PostMessageW(Some(HWND(r.hwnd as *mut _)), WM_USAGE, WPARAM(0), LPARAM(0));
-                }
+                super::events::post(super::events::Event::Usage(r.key, f.tally.total(), today));
             }
         });
         Mutex::new(tx)
@@ -62,7 +40,6 @@ pub fn request(hwnd: HWND, key: &str, path: &str) {
         let _ = q.send(Request {
             key: key.to_string(),
             path: PathBuf::from(path),
-            hwnd: hwnd.0 as isize,
         });
     }
 }

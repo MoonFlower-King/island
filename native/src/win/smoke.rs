@@ -39,6 +39,9 @@ use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 pub struct Smoke {
     dir: PathBuf,
     step: usize,
+    /// 正在跑第几个场景、已经记过标题的是第几个。
+    scenario: usize,
+    announced: Option<usize>,
     lines: Vec<String>,
     failures: u32,
     started: u64,
@@ -63,6 +66,8 @@ impl Smoke {
         Self {
             dir,
             step: 0,
+            scenario: 0,
+            announced: None,
             lines: Vec::new(),
             failures: 0,
             started: tick(),
@@ -829,44 +834,92 @@ fn show_real_toast() -> windows::core::Result<()> {
     ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(POWERSHELL))?.Show(&toast)
 }
 
+/// 冒烟测试的场景，按顺序跑。每个场景自己从第 0 步编号；加场景只要往这里加一项。
+const SCENARIOS: &[(&str, Scenario)] = &[
+    (
+        "启动和各个状态：细线、音乐胶囊、音量提示、展开、标签、停靠两侧、时间、待办",
+        basics,
+    ),
+    ("输入、外观、翻译、中转站、通知、多块屏幕", inputs),
+    ("收放动画的速度、停靠按钮、拖到别的边", motion),
+    ("AI 消息、其他软件的通知、AI 动态、点了跳过去", ai_messages),
+    ("在岛上批准、AI 工作台、tokens", approvals),
+    ("任务栏图标、快捷方式、安装、自动更新", install),
+    ("离开期间的汇总", away),
+    ("设置、欢迎卡片、卸载确认", settings_page),
+    ("快速反复展开收起", stress),
+];
+
+/// 一个场景：执行第 `n` 步，返回多少毫秒后执行下一步；没有这一步了返回 None（换下一个场景）。
+/// 要等某件事时把 `smoke.step` 设回 `n`，下次还执行这一步。
+type Scenario = fn(&mut App, &mut Smoke, usize) -> Option<u32>;
+
+/// 一步之后默认等多久（毫秒）：动画、重绘都做完了。
+const SETTLE: u32 = 1100;
+
 /// 每次定时器触发执行一步，返回后按需要的等待时间重新定时。
 pub fn step(app: &mut App) {
     let Some(mut smoke) = app.smoke.take() else {
         return;
     };
-    let settle = 1100;
-    let n = smoke.step;
-    smoke.step += 1;
-    let mut next = settle;
-    let expanded = IslandState::Expanded.metrics(app.settings.dock);
+    loop {
+        let Some(&(name, run)) = SCENARIOS.get(smoke.scenario) else {
+            finish(app, &mut smoke);
+            app.smoke = Some(smoke);
+            return;
+        };
+        let n = smoke.step;
+        smoke.step += 1;
+        // 进入新场景时记一行标题（第 0 步可能要等好几次，只记一次）
+        if smoke.announced != Some(smoke.scenario) {
+            smoke.announced = Some(smoke.scenario);
+            smoke.note(&format!("—— {name} ——"));
+        }
+        match run(app, &mut smoke, n) {
+            Some(next) => {
+                reschedule(app, next);
+                app.smoke = Some(smoke);
+                return;
+            }
+            None => {
+                smoke.scenario += 1;
+                smoke.step = 0;
+            }
+        }
+    }
+}
 
+/// 场景：启动和各个状态：细线、音乐胶囊、音量提示、展开、标签、停靠两侧、时间、待办。
+fn basics(app: &mut App, smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let mut next = SETTLE;
+    let expanded = IslandState::Expanded.metrics(app.settings.dock);
     match n {
         0 => {
             smoke.check(unsafe { IsWindowVisible(app.hwnd) }.as_bool(), "窗口已显示");
             smoke.check(app.state == IslandState::Idle, "启动后是待机细线");
             smoke.check(placed_at(app, Edge::Top), "窗口在屏幕顶部正中");
             smoke.note(&format!("内存（刚启动）：{}", memory()));
-            snapshot(app, &mut smoke, "01-idle", None);
+            snapshot(app, smoke, "01-idle", None);
             app.set_media(Some(fake_media(true)));
         }
         1 => {
             smoke.check(app.state == IslandState::Compact, "播放音乐时显示音乐胶囊");
-            snapshot(app, &mut smoke, "02-compact", None);
+            snapshot(app, smoke, "02-compact", None);
             app.show_level(island::level::volume_glyph(0.42, false), 0.42, "42%".into());
             next = 600;
         }
         2 => {
             smoke.check(app.state == IslandState::Level, "调音量时显示音量提示");
-            snapshot(app, &mut smoke, "03-level", None);
+            snapshot(app, smoke, "03-level", None);
             app.hide_level();
             app.set_pinned(true);
         }
         3 => {
             smoke.check(app.state == IslandState::Expanded, "置顶后展开");
-            snapshot(app, &mut smoke, "04-expanded-music", None);
+            snapshot(app, smoke, "04-expanded-music", None);
             // 进度条可以拖：在正中间点一下（真实的鼠标消息），应该跳到一半的位置
             smoke.check(has_target(app, |h| h == Hit::Seek), "音乐进度条可以拖");
-            click_target(app, &mut smoke, Hit::Seek);
+            click_target(app, smoke, Hit::Seek);
             app.set_palette(LIGHT);
             next = 500;
         }
@@ -879,7 +932,7 @@ pub fn step(app: &mut App) {
             // 浅色主题下在面板底部空白处取样：应该是浅色背景，说明合成内容真的显示在屏幕上
             let c = snapshot(
                 app,
-                &mut smoke,
+                smoke,
                 "05-expanded-light",
                 Some((expanded, 220.0, 250.0)),
             );
@@ -911,7 +964,7 @@ pub fn step(app: &mut App) {
         5 => {
             let c = snapshot(
                 app,
-                &mut smoke,
+                smoke,
                 "06-expanded-interactive",
                 Some((expanded, 220.0, 250.0)),
             );
@@ -931,7 +984,7 @@ pub fn step(app: &mut App) {
             next = 400;
         }
         6 => {
-            snapshot(app, &mut smoke, "07-tab-clipboard", None);
+            snapshot(app, smoke, "07-tab-clipboard", None);
             smoke.check(
                 app.has_target(|h| matches!(h, Hit::ClipItem(_))),
                 "剪贴板标签列出了记录",
@@ -940,7 +993,7 @@ pub fn step(app: &mut App) {
             next = 2200;
         }
         7 => {
-            snapshot(app, &mut smoke, "08-tab-monitor", None);
+            snapshot(app, smoke, "08-tab-monitor", None);
             smoke.check(
                 app.monitor_sample().is_some_and(|s| s.memory > 0.0),
                 "系统监控有采样数据",
@@ -949,7 +1002,7 @@ pub fn step(app: &mut App) {
             next = 400;
         }
         8 => {
-            snapshot(app, &mut smoke, "09-tab-appearance", None);
+            snapshot(app, smoke, "09-tab-appearance", None);
             smoke.check(
                 app.has_target(|h| matches!(h, Hit::Dock(_))),
                 "外观标签有停靠位置选项",
@@ -968,7 +1021,7 @@ pub fn step(app: &mut App) {
             let line = IslandState::Idle.metrics(Edge::Top);
             let c = snapshot(
                 app,
-                &mut smoke,
+                smoke,
                 "10-line-tinted",
                 Some((line, line.width / 2.0, line.height - 2.0)),
             );
@@ -1011,13 +1064,13 @@ pub fn step(app: &mut App) {
             );
             let lit = bright_pixels(app, side);
             smoke.check(lit > 40, &format!("竖胶囊里画出了封面和竖排歌名（{lit}）"));
-            snapshot(app, &mut smoke, "11-dock-left", None);
+            snapshot(app, smoke, "11-dock-left", None);
             app.set_palette(DARK);
             app.set_pinned(true);
         }
         11 => {
             smoke.check(app.state == IslandState::Expanded, "左侧展开");
-            snapshot(app, &mut smoke, "12-dock-left-expanded", None);
+            snapshot(app, smoke, "12-dock-left-expanded", None);
             app.set_pinned(false);
             app.set_dock(Edge::Right);
         }
@@ -1026,11 +1079,11 @@ pub fn step(app: &mut App) {
                 placed_at(app, Edge::Right),
                 "停靠右侧：窗口贴着屏幕右边居中",
             );
-            snapshot(app, &mut smoke, "13-dock-right", None);
+            snapshot(app, smoke, "13-dock-right", None);
             app.set_pinned(true);
         }
         13 => {
-            snapshot(app, &mut smoke, "14-dock-right-expanded", None);
+            snapshot(app, smoke, "14-dock-right-expanded", None);
             app.set_pinned(false);
             app.set_dock(Edge::Top);
             app.set_media(None);
@@ -1040,19 +1093,27 @@ pub fn step(app: &mut App) {
                 app.state == IslandState::Idle && placed_at(app, Edge::Top),
                 "回到顶部、没有音乐后是待机细线",
             );
-            snapshot(app, &mut smoke, "15-idle-again", None);
+            snapshot(app, smoke, "15-idle-again", None);
             // 待机样式换成“显示时间”
             app.activate(Hit::IdleStyle(false));
-            smoke.step = 60;
         }
-        60 => {
+        _ => return None,
+    }
+    Some(next)
+}
+
+/// 场景：输入、外观、翻译、中转站、通知、多块屏幕。
+fn inputs(app: &mut App, smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let mut next = SETTLE;
+    match n {
+        0 => {
             smoke.check(
                 app.state == IslandState::Idle && !app.settings.idle_as_line,
                 "待机样式：显示时间",
             );
             let lit = bright_pixels(app, island::metrics::IDLE_CLOCK);
             smoke.check(lit > 20, &format!("时间小胶囊里画出了时间（亮像素 {lit}）"));
-            snapshot(app, &mut smoke, "15b-idle-clock", None);
+            snapshot(app, smoke, "15b-idle-clock", None);
             app.activate(Hit::IdleStyle(true));
             // 待办：输入框获得焦点，打字（含中文和表情的代理对），回车添加
             app.set_pinned(true);
@@ -1062,7 +1123,7 @@ pub fn step(app: &mut App) {
                 app.on_char(unit);
             }
         }
-        61 => {
+        1 => {
             smoke.check(
                 app.editing
                     .as_ref()
@@ -1070,7 +1131,7 @@ pub fn step(app: &mut App) {
                 "待办输入框收到输入",
             );
             smoke.check(has_caret(app), "输入框有光标");
-            snapshot(app, &mut smoke, "17-todo-typing", None);
+            snapshot(app, smoke, "17-todo-typing", None);
             app.on_key(VK_LEFT);
             app.on_key(VK_BACK); // 删掉表情前的空格
             app.on_key(VK_RETURN);
@@ -1078,7 +1139,7 @@ pub fn step(app: &mut App) {
             app.on_char('二' as u16);
             app.on_key(VK_RETURN);
         }
-        62 => {
+        2 => {
             let texts: Vec<&str> = app.todos.items.iter().map(|t| t.text.as_str()).collect();
             smoke.check(
                 texts == ["第二", "买牛奶 smoke😀"],
@@ -1096,7 +1157,7 @@ pub fn step(app: &mut App) {
                     .is_some_and(|t| t.done && t.text == "第二"),
                 "勾选完成的待办沉到底部",
             );
-            snapshot(app, &mut smoke, "18-todo-list", None);
+            snapshot(app, smoke, "18-todo-list", None);
             // 自定义主题：直接填强调色
             app.set_tab(Tab::Appearance);
             app.activate(Hit::Theme(ThemeMode::Custom));
@@ -1106,13 +1167,13 @@ pub fn step(app: &mut App) {
             }
             app.on_key(VK_RETURN);
         }
-        63 => {
+        3 => {
             smoke.check(app.editing.is_none(), "回车结束编辑");
             smoke.check(
                 app.settings.theme.custom_accent == "#30D158",
                 &format!("填写的颜色写进设置（{}）", app.settings.theme.custom_accent),
             );
-            snapshot(app, &mut smoke, "19-custom-hex", None);
+            snapshot(app, smoke, "19-custom-hex", None);
             // 格式不对的颜色不接受
             app.focus_field(Field::Hex(0));
             for unit in "#12".encode_utf16() {
@@ -1140,8 +1201,8 @@ pub fn step(app: &mut App) {
                 &format!("时间规范成 HH:MM（{}）", app.settings.theme.day_starts),
             );
         }
-        64 => {
-            snapshot(app, &mut smoke, "20-schedule", None);
+        4 => {
+            snapshot(app, smoke, "20-schedule", None);
             app.activate(Hit::Theme(ThemeMode::Dark));
             // 翻译：本机起一个假的服务，走一遍 OpenAI 和 Anthropic 两种流式格式
             let port = fake_server();
@@ -1158,7 +1219,7 @@ pub fn step(app: &mut App) {
             for unit in "smoke".encode_utf16() {
                 app.on_char(unit);
             }
-            snapshot(app, &mut smoke, "21-translate-settings", None);
+            snapshot(app, smoke, "21-translate-settings", None);
             app.activate(Hit::SettingsSave);
             smoke.check(
                 !app.translate.settings_open
@@ -1174,12 +1235,12 @@ pub fn step(app: &mut App) {
             next = 2000;
         }
         // 翻译请求还没回来（第一次连接时 WinHTTP 可能要先探测代理）：再等等
-        65..=67 if app.translate.status == Status::Busy && smoke.waits < 60 => {
+        5..=7 if app.translate.status == Status::Busy && smoke.waits < 60 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 500;
         }
-        65 => {
+        5 => {
             smoke.check(
                 app.translate.output == "Hello, world" && app.translate.status == Status::Idle,
                 &format!(
@@ -1194,7 +1255,7 @@ pub fn step(app: &mut App) {
                     && request.contains("你好"),
                 "请求地址和请求体正确",
             );
-            snapshot(app, &mut smoke, "22-translate-openai", None);
+            snapshot(app, smoke, "22-translate-openai", None);
             // 换成 Anthropic 格式，填 Key，点测试
             app.activate(Hit::TranslateSettings);
             app.activate(Hit::ApiFormat(Format::Anthropic));
@@ -1206,7 +1267,7 @@ pub fn step(app: &mut App) {
             app.activate(Hit::SettingsTest);
             next = 2000;
         }
-        66 => {
+        6 => {
             let request = last_request();
             smoke.check(
                 app.test_output == "你好，世界"
@@ -1234,24 +1295,24 @@ pub fn step(app: &mut App) {
                     .is_some_and(|k| k == "sk-smoke"),
                 "Key 用 DPAPI 加密保存，能解出来",
             );
-            snapshot(app, &mut smoke, "23-translate-test", None);
+            snapshot(app, smoke, "23-translate-test", None);
             // 模型名不对：服务返回 401
             app.translate.draft.model = "bad".into();
             app.activate(Hit::SettingsSave);
             app.start_translation("x", false);
             next = 2000;
         }
-        67 => {
+        7 => {
             smoke.check(
                 matches!(&app.translate.status, Status::Error(e) if e.contains("API Key")),
                 &format!("错误状态码变成可读的提示（{:?}）", app.translate.status),
             );
-            snapshot(app, &mut smoke, "24-translate-error", None);
+            snapshot(app, smoke, "24-translate-error", None);
             // 中转站：用真实的外壳数据对象模拟从资源管理器拖进来一个文件
             app.set_tab(Tab::Shelf);
             let file = smoke.dir.join("shelf-test.txt");
             let _ = std::fs::write(&file, vec![b'x'; 1536]);
-            let target = super::drag::DropTarget::create(app.hwnd);
+            let target = super::drag::DropTarget::create();
             let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
             let dropped =
                 super::drag::data_object_for(&file.to_string_lossy()).and_then(|data| unsafe {
@@ -1279,7 +1340,7 @@ pub fn step(app: &mut App) {
                 &format!("窗口已注册为拖放目标（{again:?}）"),
             );
         }
-        68 => {
+        8 => {
             let first = app.shelf.items.first();
             smoke.check(
                 first.is_some_and(|i| i.name() == "shelf-test.txt" && i.detail() == "1.5 KB"),
@@ -1305,21 +1366,21 @@ pub fn step(app: &mut App) {
                 has_target(app, |h| h == Hit::ShelfClear),
                 "中转站有清空按钮",
             );
-            snapshot(app, &mut smoke, "25-shelf", None);
+            snapshot(app, smoke, "25-shelf", None);
             app.activate(Hit::ShelfClear);
             app.set_tab(Tab::Music);
             app.set_pinned(false);
             // 通知
             app.show_notification('\u{E8BD}', "冒烟测试", "这是一条测试通知");
         }
-        69 => {
+        9 => {
             smoke.check(
                 app.state == IslandState::Notification,
                 &format!("显示通知（{:?}，{:?}）", app.state, app.inputs()),
             );
             let lit = bright_pixels(app, island::metrics::NOTIFICATION);
             smoke.check(lit > 50, &format!("通知里画出了文字（亮像素 {lit}）"));
-            snapshot(app, &mut smoke, "26-notification", None);
+            snapshot(app, smoke, "26-notification", None);
             // 点一下关掉
             let f = island::metrics::NOTIFICATION.frame(app.settings.dock);
             app.on_mouse_down(f.center_x(), f.center_y());
@@ -1329,38 +1390,48 @@ pub fn step(app: &mut App) {
             app.settings.monitor = r"\\.\DISPLAY_GONE".into();
             app.set_dock(Edge::Top);
         }
-        70 => {
+        10 => {
             smoke.check(
                 placed_at(app, Edge::Top),
                 "记住的屏幕不在了：显示在主屏幕上",
             );
             app.settings.monitor.clear();
             app.set_palette(LIGHT);
-            smoke.step = 73;
             next = 600;
         }
+        _ => return None,
+    }
+    Some(next)
+}
+
+/// 场景：收放动画的速度、停靠按钮、拖到别的边。
+#[allow(clippy::needless_late_init)] // 每一步都自己定等多久
+fn motion(app: &mut App, smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let next: u32;
+    let expanded = IslandState::Expanded.metrics(app.settings.dock);
+    match n {
         // 收放动画的速度：在屏幕上实际量
-        73 => {
+        0 => {
             next = measure(
                 app,
-                &mut smoke,
+                smoke,
                 n,
                 "展开",
                 (IslandState::Idle.metrics(Edge::Top), expanded),
                 super::scene::EXPAND,
             );
         }
-        74 => {
+        1 => {
             next = measure(
                 app,
-                &mut smoke,
+                smoke,
                 n,
                 "收起",
                 (expanded, IslandState::Idle.metrics(Edge::Top)),
                 super::scene::COLLAPSE,
             );
         }
-        75 => {
+        2 => {
             let t = smoke.timings.clone();
             smoke.check(
                 t.len() == 2 && (150..=550).contains(&t[0]) && (30..=400).contains(&t[1]),
@@ -1372,27 +1443,27 @@ pub fn step(app: &mut App) {
             next = 600;
         }
         // 真实点击"外观 → 位置"的按钮
-        76 => {
-            click_target(app, &mut smoke, Hit::Dock(Edge::Left));
+        3 => {
+            click_target(app, smoke, Hit::Dock(Edge::Left));
             next = 800;
         }
-        77 => {
+        4 => {
             smoke.check(
                 placed_at(app, Edge::Left) && app.settings.dock == Edge::Left,
                 "点「左侧」按钮：停靠到左侧",
             );
-            click_target(app, &mut smoke, Hit::Dock(Edge::Right));
+            click_target(app, smoke, Hit::Dock(Edge::Right));
             next = 800;
         }
-        78 => {
+        5 => {
             smoke.check(
                 placed_at(app, Edge::Right) && app.settings.dock == Edge::Right,
                 "点「右侧」按钮：停靠到右侧",
             );
-            click_target(app, &mut smoke, Hit::Dock(Edge::Top));
+            click_target(app, smoke, Hit::Dock(Edge::Top));
             next = 800;
         }
-        79 => {
+        6 => {
             smoke.check(
                 placed_at(app, Edge::Top) && app.settings.dock == Edge::Top,
                 "点「顶部」按钮：回到顶部",
@@ -1401,7 +1472,7 @@ pub fn step(app: &mut App) {
             next = 400;
         }
         // 按住面板空白处拖到屏幕左边，松手后停靠到左侧
-        80 => {
+        7 => {
             use windows::Win32::UI::WindowsAndMessaging::SetCursorPos;
             match app.blank_point() {
                 Some((x, y)) => {
@@ -1424,7 +1495,7 @@ pub fn step(app: &mut App) {
             }
             next = 300;
         }
-        81 => {
+        8 => {
             use windows::Win32::Foundation::{LPARAM, POINT, WPARAM};
             use windows::Win32::UI::WindowsAndMessaging::{
                 PostMessageW, SetCursorPos, WM_LBUTTONUP, WM_MOUSEMOVE,
@@ -1448,12 +1519,12 @@ pub fn step(app: &mut App) {
             }
             next = 800;
         }
-        82 => {
+        9 => {
             smoke.check(
                 placed_at(app, Edge::Left) && app.settings.dock == Edge::Left,
                 &format!("拖到屏幕左边：停靠到左侧（{:?}）", app.settings.dock),
             );
-            snapshot(app, &mut smoke, "27-dragged-left", None);
+            snapshot(app, smoke, "27-dragged-left", None);
             unsafe {
                 let _ = windows::Win32::UI::WindowsAndMessaging::SetCursorPos(0, 0);
             }
@@ -1461,8 +1532,17 @@ pub fn step(app: &mut App) {
             app.set_pinned(false);
             next = 400;
         }
+        _ => return None,
+    }
+    Some(next)
+}
+
+/// 场景：AI 消息、其他软件的通知、AI 动态、点了跳过去。
+fn ai_messages(app: &mut App, smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let mut next = SETTLE;
+    match n {
         // AI 工具的消息：像 Claude Code 的钩子一样，另起一个 Island.exe --notify，JSON 从标准输入传进来
-        83 => {
+        0 => {
             let stop = r###"{"session_id":"s1","cwd":"C:\\work\\island","hook_event_name":"Stop","last_assistant_message":"## 完成\n- 侧边胶囊做好了"}"###;
             match spawn_notify(&["claude"], Some(stop)) {
                 Ok(c) => smoke.children.push(c),
@@ -1470,7 +1550,7 @@ pub fn step(app: &mut App) {
             }
             next = 1500;
         }
-        84 => {
+        1 => {
             let first = app.ai.first();
             smoke.check(
                 first.is_some_and(|e| {
@@ -1485,7 +1565,7 @@ pub fn step(app: &mut App) {
                 app.state == IslandState::Notification,
                 &format!("AI 提醒显示成通知胶囊（{:?}）", app.state),
             );
-            snapshot(app, &mut smoke, "28-ai-claude", None);
+            snapshot(app, smoke, "28-ai-claude", None);
             // Codex 的 notify：JSON 是最后一个参数
             let codex = r#"{"type":"agent-turn-complete","cwd":"D:\\shop","last-assistant-message":"购物车已修好"}"#;
             match spawn_notify(&["codex", codex], None) {
@@ -1494,7 +1574,7 @@ pub fn step(app: &mut App) {
             }
             next = 1500;
         }
-        85 => {
+        2 => {
             let first = app.ai.first();
             smoke.check(
                 app.ai.len() == 2
@@ -1519,7 +1599,7 @@ pub fn step(app: &mut App) {
             next = 400;
         }
         // 其他软件的系统通知：用 PowerShell 的身份真的弹一条 Windows 通知，岛应该从通知数据库里读到
-        86 => {
+        3 => {
             smoke.note(&format!("读取系统通知：{}", super::toasts::status()));
             let _ = std::fs::remove_file(smoke.dir.join("opened-link.txt"));
             if let Err(e) = register_smoke_protocol(&smoke.dir.join("opened-link.txt")) {
@@ -1533,12 +1613,12 @@ pub fn step(app: &mut App) {
             next = 1000;
         }
         // 通知数据库隔一会儿才看一次：勤看着等它出现（最多约 8 秒）；它只停 3.5 秒
-        87 if !system_toast_shown(app) && smoke.waits < 25 => {
+        4 if !system_toast_shown(app) && smoke.waits < 25 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 300;
         }
-        87 => {
+        4 => {
             let title = app.notification.as_ref().map(|(_, t, _)| t.clone());
             smoke.check(
                 title
@@ -1559,7 +1639,7 @@ pub fn step(app: &mut App) {
                         a.width, a.height
                     ))
             ));
-            snapshot(app, &mut smoke, "29-system-notification", None);
+            snapshot(app, smoke, "29-system-notification", None);
             // 点通知胶囊：应该和在通知中心里点它一样，打开通知里的链接
             smoke.check(
                 app.notification_target.is_some(),
@@ -1569,33 +1649,33 @@ pub fn step(app: &mut App) {
             next = 400;
         }
         // AI 动态：有没看过的消息时，收起的细线染成强调色；展开直接打开 AI 动态，收起后算看过
-        88 => {
+        5 => {
             smoke.check(app.ai_unread(), "有没看过的 AI 消息");
             app.set_tab(Tab::Music);
             app.set_pinned(true);
             next = 700;
         }
-        89 => {
+        6 => {
             smoke.check(
                 app.tab == Tab::Ai && has_target(app, |h| matches!(h, Hit::AiItem(_))),
                 &format!("展开时直接打开 AI 动态，列出消息（{:?}）", app.tab),
             );
-            snapshot(app, &mut smoke, "30-ai-tab", None);
+            snapshot(app, smoke, "30-ai-tab", None);
             app.set_pinned(false);
         }
-        90 => {
+        7 => {
             smoke.check(!app.ai_unread(), "看过 AI 动态再收起，消息都算已读");
             app.set_tab(Tab::Music);
             smoke.waits = 0;
             next = 400;
         }
         // 点系统通知打开了通知里的链接（协议处理程序启动要一会儿）
-        91 if opened_link(&smoke.dir.join("opened-link.txt")).is_none() && smoke.waits < 20 => {
+        8 if opened_link(&smoke.dir.join("opened-link.txt")).is_none() && smoke.waits < 20 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 300;
         }
-        91 => {
+        8 => {
             let link = opened_link(&smoke.dir.join("opened-link.txt"));
             smoke.check(
                 link.as_deref() == Some("islandsmoke://chat/42"),
@@ -1610,7 +1690,7 @@ pub fn step(app: &mut App) {
             smoke.waits = 0;
             next = 1000;
         }
-        92 if !app
+        9 if !app
             .ai
             .first()
             .is_some_and(|m| m.title.starts_with("smoke-agent"))
@@ -1620,7 +1700,7 @@ pub fn step(app: &mut App) {
             smoke.step = n;
             next = 300;
         }
-        92 => {
+        9 => {
             let target = app.ai.first().map(|m| m.target.clone()).unwrap_or_default();
             let window = match target {
                 super::jump::Target::Window(h) => Some(HWND(h as *mut _)),
@@ -1640,12 +1720,12 @@ pub fn step(app: &mut App) {
             app.set_pinned(true);
             next = 800;
         }
-        93 => {
+        10 => {
             smoke.check(app.tab == Tab::Ai, "有新消息时展开到 AI 动态");
-            click_target(app, &mut smoke, Hit::AiItem(0));
+            click_target(app, smoke, Hit::AiItem(0));
             next = 800;
         }
-        94 => {
+        11 => {
             if let Some(h) = smoke.console.take() {
                 let restored = !unsafe { IsIconic(h) }.as_bool();
                 smoke.check(restored, "点 AI 消息把最小化的命令行窗口还原了");
@@ -1660,8 +1740,17 @@ pub fn step(app: &mut App) {
             app.set_tab(Tab::Music);
             next = 600;
         }
+        _ => return None,
+    }
+    Some(next)
+}
+
+/// 场景：在岛上批准、AI 工作台、tokens。
+fn approvals(app: &mut App, smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let next: u32;
+    match n {
         // 在岛上直接批准：像 Claude Code 的 PermissionRequest 钩子一样，--notify 会一直等岛的答复
-        95 => {
+        0 => {
             let ask = r###"{"session_id":"s7","cwd":"C:\\work\\island","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"npm install"}}"###;
             match spawn_waiting(ask) {
                 Ok(c) => smoke.waiting = Some(c),
@@ -1670,12 +1759,12 @@ pub fn step(app: &mut App) {
             smoke.waits = 0;
             next = 500;
         }
-        96 if app.note_approval.is_none() && smoke.waits < 20 => {
+        1 if app.note_approval.is_none() && smoke.waits < 20 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 300;
         }
-        96 => {
+        1 => {
             smoke.check(
                 app.state == IslandState::Notification
                     && app
@@ -1688,20 +1777,20 @@ pub fn step(app: &mut App) {
                     app.approvals.first().map(|a| (&a.title, &a.body))
                 ),
             );
-            let blocked = smoke.waiting.is_some() && !child_done(&mut smoke);
+            let blocked = smoke.waiting.is_some() && !child_done(smoke);
             smoke.check(blocked, "钩子在等岛的答复");
-            snapshot(app, &mut smoke, "31-approval", None);
-            click_target(app, &mut smoke, Hit::ApproveAllow(0));
+            snapshot(app, smoke, "31-approval", None);
+            click_target(app, smoke, Hit::ApproveAllow(0));
             smoke.waits = 0;
             next = 400;
         }
-        97 if !child_done(&mut smoke) && smoke.waits < 20 => {
+        2 if !child_done(smoke) && smoke.waits < 20 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 250;
         }
-        97 => {
-            let out = child_output(&mut smoke);
+        2 => {
+            let out = child_output(smoke);
             smoke.check(
                 out.contains(r#""behavior":"allow""#) && out.contains("PermissionRequest"),
                 &format!("点允许后钩子输出允许（{out}）"),
@@ -1736,7 +1825,7 @@ pub fn step(app: &mut App) {
             }
             next = 700;
         }
-        98 => {
+        3 => {
             let tool = r###"{"session_id":"s8","cwd":"C:\\work\\island","hook_event_name":"PreToolUse","tool_name":"Edit","tool_input":{"file_path":"C:\\work\\island\\app.rs"}}"###;
             match spawn_notify(&["claude"], Some(tool)) {
                 Ok(c) => smoke.children.push(c),
@@ -1744,7 +1833,7 @@ pub fn step(app: &mut App) {
             }
             next = 700;
         }
-        99 => {
+        4 => {
             let agent = app.bench.agents.first();
             // (1000 + 500 + 2000) + (1000 + 500 + 6000)
             smoke.check(
@@ -1772,34 +1861,34 @@ pub fn step(app: &mut App) {
             smoke.waits = 0;
             next = 500;
         }
-        100 if app.approvals.is_empty() && smoke.waits < 20 => {
+        5 if app.approvals.is_empty() && smoke.waits < 20 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 300;
         }
-        100 => {
+        5 => {
             app.set_pinned(true);
             next = 700;
         }
-        101 => {
+        6 => {
             smoke.check(
                 app.tab == Tab::Ai
                     && has_target(app, |h| h == Hit::ApproveDeny(0))
                     && has_target(app, |h| h == Hit::AgentRow(0)),
                 &format!("AI 工作台列出请求和正在干活的代理（{:?}）", app.tab),
             );
-            snapshot(app, &mut smoke, "32-workbench", None);
-            click_target(app, &mut smoke, Hit::ApproveDeny(0));
+            snapshot(app, smoke, "32-workbench", None);
+            click_target(app, smoke, Hit::ApproveDeny(0));
             smoke.waits = 0;
             next = 400;
         }
-        102 if !child_done(&mut smoke) && smoke.waits < 20 => {
+        7 if !child_done(smoke) && smoke.waits < 20 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 250;
         }
-        102 => {
-            let out = child_output(&mut smoke);
+        7 => {
+            let out = child_output(smoke);
             smoke.check(
                 out.contains(r#""behavior":"deny""#),
                 &format!("在工作台点拒绝后钩子输出拒绝（{out}）"),
@@ -1811,7 +1900,7 @@ pub fn step(app: &mut App) {
             }
             next = 1000;
         }
-        103 => {
+        8 => {
             smoke.check(
                 !app.bench.agents.iter().any(|a| a.key == "s8"),
                 "做完后从工作台拿掉",
@@ -1821,8 +1910,17 @@ pub fn step(app: &mut App) {
             app.set_tab(Tab::Music);
             next = 600;
         }
+        _ => return None,
+    }
+    Some(next)
+}
+
+/// 场景：任务栏图标、快捷方式、安装、自动更新。
+fn install(app: &mut App, smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let next: u32;
+    match n {
         // 任务栏通知区的图标：加上了；点一下展开，再点一下收起
-        104 => {
+        0 => {
             smoke.check(
                 app.tray.as_ref().is_some_and(|t| t.added),
                 "图标加到了任务栏通知区",
@@ -1830,7 +1928,7 @@ pub fn step(app: &mut App) {
             tray_click(app);
             next = 800;
         }
-        105 => {
+        1 => {
             smoke.check(
                 app.state == IslandState::Expanded && app.pinned,
                 &format!("点任务栏图标展开（{:?}）", app.state),
@@ -1838,26 +1936,26 @@ pub fn step(app: &mut App) {
             tray_click(app);
             next = 800;
         }
-        106 => {
+        2 => {
             smoke.check(
                 app.state != IslandState::Expanded,
                 &format!("再点一下收起（{:?}）", app.state),
             );
-            check_shortcut(&mut smoke);
-            check_install(&mut smoke);
+            check_shortcut(smoke);
+            check_install(smoke);
             // 自动更新：本机的假服务器扮演 GitHub
             let port = fake_update_server();
-            super::update::check(app.hwnd, true, format!("http://127.0.0.1:{port}/latest"));
+            super::update::check(true, format!("http://127.0.0.1:{port}/latest"));
             smoke.port = port;
             smoke.waits = 0;
             next = 800;
         }
-        107 if app.update_offer.is_none() && smoke.waits < 20 => {
+        3 if app.update_offer.is_none() && smoke.waits < 20 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 300;
         }
-        107 => {
+        3 => {
             let offer = app.update_offer.as_ref().map(|r| r.version.clone());
             smoke.check(
                 offer.as_deref() == Some("99.0.0"),
@@ -1869,18 +1967,18 @@ pub fn step(app: &mut App) {
                     .is_some_and(|(_, t, _)| t.contains("99.0.0")),
                 "弹出\"有新版本\"",
             );
-            snapshot(app, &mut smoke, "33-update", None);
+            snapshot(app, smoke, "33-update", None);
             // 点通知开始更新
             click(app, app.center_point());
             smoke.waits = 0;
             next = 600;
         }
-        108 if app.update_ready.is_none() && smoke.waits < 25 => {
+        4 if app.update_ready.is_none() && smoke.waits < 25 => {
             smoke.waits += 1;
             smoke.step = n;
             next = 300;
         }
-        108 => {
+        4 => {
             let got = app
                 .update_ready
                 .as_ref()
@@ -1898,7 +1996,7 @@ pub fn step(app: &mut App) {
             smoke.waits = 0;
             next = 600;
         }
-        109 if !app
+        5 if !app
             .notification
             .as_ref()
             .is_some_and(|(_, t, _)| t.contains("没成功"))
@@ -1908,7 +2006,7 @@ pub fn step(app: &mut App) {
             smoke.step = n;
             next = 300;
         }
-        109 => {
+        5 => {
             smoke.check(
                 app.update_ready.is_none()
                     && app
@@ -1926,8 +2024,22 @@ pub fn step(app: &mut App) {
             app.check_away(0);
             next = 800;
         }
-        110 => {
-            let summary = app.summary.as_ref().map(|s| {
+        _ => return None,
+    }
+    Some(next)
+}
+
+/// 场景：离开期间的汇总。
+#[allow(clippy::needless_late_init)] // 每一步都自己定等多久
+fn away(app: &mut App, smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let next: u32;
+    match n {
+        0 => {
+            let summary = match &app.page {
+                Some(super::views::Page::Summary(s)) => Some(s),
+                _ => None,
+            }
+            .map(|s| {
                 (
                     s.minutes,
                     s.done.len(),
@@ -1945,63 +2057,199 @@ pub fn step(app: &mut App) {
                         .is_some_and(|(m, d, apps)| *m >= 1 && *d >= 2 && !apps.is_empty()),
                 &format!("离开回来展开汇总（{summary:?}）"),
             );
-            snapshot(app, &mut smoke, "34-away-summary", None);
-            click_target(app, &mut smoke, Hit::SummaryDone);
+            snapshot(app, smoke, "34-away-summary", None);
+            click_target(app, smoke, Hit::SummaryDone);
             next = 800;
         }
-        111 => {
+        1 => {
             smoke.check(
-                app.summary.is_none() && app.state != IslandState::Expanded,
+                app.page.is_none() && app.state != IslandState::Expanded,
                 &format!("点\"知道了\"收起汇总（{:?}）", app.state),
             );
             app.set_tab(Tab::Music);
-            smoke.step = 15;
             next = 35;
         }
+        _ => return None,
+    }
+    Some(next)
+}
+
+/// 场景：快速反复展开收起。
+fn stress(app: &mut App, _smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let mut next = SETTLE;
+    match n {
         // 快速反复展开收起：动画应能被打断，最后收敛到待机
-        15..=34 => {
-            app.set_pinned(n % 2 == 1);
+        0..=19 => {
+            app.set_pinned(n.is_multiple_of(2));
             next = 35;
         }
-        35 => {
+        20 => {
             app.set_pinned(false);
         }
-        36 => {
-            smoke.check(
-                app.state == IslandState::Idle,
-                &format!("快速切换后回到待机（{:?}，{:?}）", app.state, app.inputs()),
-            );
-            snapshot(app, &mut smoke, "16-after-stress", None);
-
-            smoke.note(&format!("内存（用过全部功能后）：{}", memory()));
-            if let Ok(size) = std::env::current_exe()
-                .and_then(std::fs::metadata)
-                .map(|m| m.len())
-            {
-                smoke.note(&format!("程序大小：{:.2} MB", size as f64 / 1048576.0));
-            }
-            smoke.note(&format!(
-                "用时 {:.1} 秒",
-                (tick() - smoke.started) as f64 / 1000.0
-            ));
-
-            let summary = if smoke.failures == 0 {
-                "全部通过".to_string()
-            } else {
-                format!("{} 项失败", smoke.failures)
-            };
-            smoke.lines.push(summary);
-            let _ = std::fs::write(smoke.dir.join("report.txt"), smoke.lines.join("\r\n"));
-            unsafe {
-                let _ = KillTimer(Some(app.hwnd), TIMER_SMOKE);
-                PostQuitMessage(smoke.failures as i32);
-            }
-            app.smoke = Some(smoke);
-            return;
-        }
-        _ => {}
+        _ => return None,
     }
+    Some(next)
+}
 
-    reschedule(app, next);
-    app.smoke = Some(smoke);
+/// 场景：设置页（开关、一键接入）、欢迎卡片、卸载确认。
+fn settings_page(app: &mut App, smoke: &mut Smoke, n: usize) -> Option<u32> {
+    let mut next = SETTLE;
+    match n {
+        0 => {
+            // 欢迎卡片：第一次运行时展开，点"开始使用"收起并记下
+            app.settings.welcome_shown = false;
+            app.show_welcome();
+        }
+        1 => {
+            smoke.check(
+                app.state == IslandState::Expanded
+                    && matches!(app.page, Some(super::views::Page::Welcome))
+                    && has_target(app, |h| h == Hit::WelcomeDone),
+                "第一次运行展开欢迎卡片",
+            );
+            snapshot(app, smoke, "35-welcome", None);
+            click_target(app, smoke, Hit::WelcomeDone);
+        }
+        2 => {
+            smoke.check(
+                app.page.is_none()
+                    && app.settings.welcome_shown
+                    && app.state != IslandState::Expanded,
+                &format!("点\"开始使用\"后收起，以后不再显示（{:?}）", app.state),
+            );
+            app.open_settings();
+        }
+        3 => {
+            smoke.check(
+                app.tab == Tab::Settings
+                    && has_target(app, |h| {
+                        h == Hit::Toggle(super::views::Setting::AwaySummary)
+                    })
+                    && has_target(app, |h| h == Hit::SetupClaude)
+                    && has_target(app, |h| h == Hit::Uninstall),
+                "设置页列出开关和按钮",
+            );
+            snapshot(app, smoke, "36-settings", None);
+            // 真的点一个开关
+            click_target(app, smoke, Hit::Toggle(super::views::Setting::AwaySummary));
+            next = 600;
+        }
+        4 => {
+            smoke.check(!app.settings.away_summary, "点开关关掉了\"离开后显示汇总\"");
+            click_target(app, smoke, Hit::Toggle(super::views::Setting::AwaySummary));
+            next = 600;
+        }
+        5 => {
+            smoke.check(app.settings.away_summary, "再点一下打开");
+            check_ai_setup(smoke);
+            click_target(app, smoke, Hit::Uninstall);
+            next = 600;
+        }
+        6 => {
+            smoke.check(
+                matches!(app.page, Some(super::views::Page::ConfirmUninstall)),
+                "点\"卸载…\"先在岛上确认",
+            );
+            snapshot(app, smoke, "37-uninstall", None);
+            click_target(app, smoke, Hit::UninstallCancel);
+            next = 600;
+        }
+        7 => {
+            smoke.check(
+                app.page.is_none() && app.uninstall_requested.is_none(),
+                "取消卸载什么也不做",
+            );
+            app.begin_uninstall();
+            next = 600;
+        }
+        8 => {
+            click_target(app, smoke, Hit::UninstallKeep);
+            next = 600;
+        }
+        9 => {
+            smoke.check(
+                app.uninstall_requested == Some(true),
+                "点\"卸载，保留数据\"（测试里不真的卸载）",
+            );
+            app.set_pinned(false);
+            app.set_tab(Tab::Music);
+        }
+        _ => return None,
+    }
+    Some(next)
+}
+
+/// 一键接入：在临时文件夹里放一份已有的 Claude Code / Codex 配置，接入后原来的设置还在。
+fn check_ai_setup(smoke: &mut Smoke) {
+    let dir = smoke.dir.join("ai-setup");
+    let _ = std::fs::create_dir_all(&dir);
+    let claude = dir.join("settings.json");
+    let _ = std::fs::write(
+        &claude,
+        r#"{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"say done"}]}]}}"#,
+    );
+    let r = super::aisetup::setup_claude_at(&claude);
+    let text = std::fs::read_to_string(&claude).unwrap_or_default();
+    let exe = std::env::current_exe().unwrap_or_default();
+    smoke.check(
+        r.is_ok()
+            && island::hooks::claude_status(&text, &exe.to_string_lossy())
+                == island::hooks::Status::Current
+            && text.contains("say done")
+            && text.contains("\"model\": \"opus\""),
+        &format!("一键接入 Claude Code，原来的设置都还在（{r:?}）"),
+    );
+    smoke.check(
+        dir.join("settings.json.island-backup").exists(),
+        "接入前留了一份备份",
+    );
+    let codex = dir.join("config.toml");
+    let _ = std::fs::write(&codex, "model = \"o4\"\n");
+    let r = super::aisetup::setup_codex_at(&codex);
+    let text = std::fs::read_to_string(&codex).unwrap_or_default();
+    smoke.check(
+        r.is_ok() && text.contains("--notify") && text.contains("model = \"o4\""),
+        &format!("一键接入 Codex（{r:?}）"),
+    );
+    // 上次意外退出的记录：下次启动时读出来并改名
+    let crash = super::log::data_dir().join("crash.txt");
+    let _ = std::fs::write(&crash, "版本 x，src/a.rs:1：测试\n堆栈");
+    let reason = super::log::take_crash();
+    smoke.check(
+        reason.as_deref() == Some("版本 x，src/a.rs:1：测试") && !crash.exists(),
+        &format!("读出上次意外退出的原因（{reason:?}）"),
+    );
+}
+
+/// 全部跑完：内存、大小、用时，写报告，退出（退出码 = 失败几项）。
+fn finish(app: &mut App, smoke: &mut Smoke) {
+    smoke.check(
+        app.state == IslandState::Idle,
+        &format!("快速切换后回到待机（{:?}，{:?}）", app.state, app.inputs()),
+    );
+    snapshot(app, smoke, "16-after-stress", None);
+
+    smoke.note(&format!("内存（用过全部功能后）：{}", memory()));
+    if let Ok(size) = std::env::current_exe()
+        .and_then(std::fs::metadata)
+        .map(|m| m.len())
+    {
+        smoke.note(&format!("程序大小：{:.2} MB", size as f64 / 1048576.0));
+    }
+    smoke.note(&format!(
+        "用时 {:.1} 秒",
+        (tick() - smoke.started) as f64 / 1000.0
+    ));
+
+    let summary = if smoke.failures == 0 {
+        "全部通过".to_string()
+    } else {
+        format!("{} 项失败", smoke.failures)
+    };
+    smoke.lines.push(summary);
+    let _ = std::fs::write(smoke.dir.join("report.txt"), smoke.lines.join("\r\n"));
+    unsafe {
+        let _ = KillTimer(Some(app.hwnd), TIMER_SMOKE);
+        PostQuitMessage(smoke.failures as i32);
+    }
 }

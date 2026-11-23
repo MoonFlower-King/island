@@ -28,9 +28,8 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, FindWindowW, GetMessageW, HWND_MESSAGE,
-    IsWindow, KillTimer, MSG, PostMessageW, PostQuitMessage, RegisterClassW, SMTO_ABORTIFHUNG,
-    SendMessageTimeoutW, SetTimer, WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_COPYDATA, WM_TIMER,
-    WNDCLASSW,
+    IsWindow, KillTimer, MSG, PostQuitMessage, RegisterClassW, SMTO_ABORTIFHUNG,
+    SendMessageTimeoutW, SetTimer, WINDOW_EX_STYLE, WINDOW_STYLE, WM_COPYDATA, WM_TIMER, WNDCLASSW,
 };
 use windows::core::w;
 
@@ -42,8 +41,6 @@ pub const COPYDATA_AI_WINDOW: usize = 0x4941_0002;
 pub const COPYDATA_AI_ASK: usize = 0x4941_0003;
 /// 岛发回的答复：`allow`、`deny` 或 `ask`（回终端处理）。
 pub const COPYDATA_AI_REPLY: usize = 0x4941_0004;
-/// 有新的 AI 消息进了队列。
-pub const WM_AI: u32 = WM_APP + 4;
 
 /// 收到的一条消息。
 pub struct Inbound {
@@ -54,8 +51,6 @@ pub struct Inbound {
     /// 批准请求：等答复的窗口（0 = 不用答复）。
     pub reply: isize,
 }
-
-static INBOX: Mutex<Vec<Inbound>> = Mutex::new(Vec::new());
 
 /// 岛对批准请求的答复。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -334,7 +329,7 @@ fn processes() -> HashMap<u32, (u32, String)> {
 }
 
 /// 窗口收到 WM_COPYDATA：是我们的就收进队列并返回 true。
-pub fn receive(hwnd: HWND, lparam: LPARAM) -> bool {
+pub fn receive(lparam: LPARAM) -> bool {
     let cds = unsafe { (lparam.0 as *const COPYDATASTRUCT).as_ref() };
     let Some(cds) = cds.filter(|c| {
         matches!(c.dwData, COPYDATA_AI_WINDOW | COPYDATA_AI_ASK) && !c.lpData.is_null()
@@ -360,25 +355,11 @@ pub fn receive(hwnd: HWND, lparam: LPARAM) -> bool {
         Some(n) => (&bytes[..n], &bytes[n + 1..]),
         None => (bytes, &[][..]),
     };
-    if let Ok(mut q) = INBOX.lock()
-        && q.len() < 100
-    {
-        q.push(Inbound {
-            source: String::from_utf8_lossy(source).into_owned(),
-            payload: String::from_utf8_lossy(payload).into_owned(),
-            window,
-            reply,
-        });
-    }
-    unsafe {
-        let _ = PostMessageW(Some(hwnd), WM_AI, WPARAM(0), LPARAM(0));
-    }
+    super::events::post(super::events::Event::Ai(Inbound {
+        source: String::from_utf8_lossy(source).into_owned(),
+        payload: String::from_utf8_lossy(payload).into_owned(),
+        window,
+        reply,
+    }));
     true
-}
-
-pub fn take() -> Vec<Inbound> {
-    INBOX
-        .lock()
-        .map(|mut q| std::mem::take(&mut *q))
-        .unwrap_or_default()
 }

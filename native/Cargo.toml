@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 # settings.json 用 Value 读写，保留不认识的字段
-serde_json = "1"
+serde_json = { version = "1", features = ["preserve_order"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-numerics = "0.3"
