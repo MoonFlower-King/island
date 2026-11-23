@@ -10,7 +10,8 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree, IPersistFile, STGM_READ,
 };
 use windows::Win32::UI::Shell::{
-    FOLDERID_Desktop, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath, ShellLink,
+    FOLDERID_Desktop, FOLDERID_Programs, IShellLinkW, KF_FLAG_DEFAULT, SHGetKnownFolderPath,
+    ShellLink,
 };
 use windows::core::{HSTRING, Interface, Result};
 
@@ -93,6 +94,30 @@ pub fn add() -> bool {
             log::warn(&format!("放桌面快捷方式失败：{e}"));
             false
         }
+    }
+}
+
+/// 开始菜单里的快捷方式（装好的岛才放）：没有就放，指向别处就改过来。
+pub fn ensure_start_menu() {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let lnk = unsafe {
+        let Ok(p) = SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None) else {
+            return;
+        };
+        let dir = p.to_string().ok();
+        CoTaskMemFree(Some(p.0 as *const _));
+        match dir {
+            Some(d) => PathBuf::from(d).join(NAME),
+            None => return,
+        }
+    };
+    if target(&lnk).is_some_and(|t| same_file(&t, &exe)) {
+        return;
+    }
+    if let Err(e) = create(&lnk, &exe, &icon_path()) {
+        log::warn(&format!("放开始菜单快捷方式失败：{e}"));
     }
 }
 

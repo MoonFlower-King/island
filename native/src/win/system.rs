@@ -392,6 +392,13 @@ pub fn startup_enabled() -> bool {
     })
 }
 
+/// 开机启动指向的是别处的 Island.exe（装好之前、挪过位置）：改成现在这个。
+pub fn repoint_startup() {
+    if read_string(RUN_KEY, w!("Island")).is_some() && !startup_enabled() && set_startup(true) {
+        super::log::info("开机启动改为指向现在的位置");
+    }
+}
+
 pub fn set_startup(enabled: bool) -> bool {
     unsafe {
         if enabled {

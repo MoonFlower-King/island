@@ -62,6 +62,10 @@ const TIMER_TICK: usize = 3;
 pub const TIMER_SMOKE: usize = 4;
 const TIMER_LEVEL: usize = 5;
 const TIMER_NOTIFICATION: usize = 6;
+const TIMER_UPDATE: usize = 7;
+/// 启动后多久第一次检查更新，之后隔多久再查。
+const UPDATE_FIRST_MS: u32 = 3 * 60_000;
+const UPDATE_EVERY_MS: u32 = 6 * 3_600_000;
 
 /// 光标在岛附近时每 40 ms 看一次，悬停反应及时。
 const POLL_MS: u32 = 40;
@@ -81,6 +85,8 @@ const AI_NOTIFICATION_MS: u32 = 6000;
 const APPROVAL_NOTIFICATION_MS: u32 = 600_000;
 /// 查不到软件图标时用的铃铛。
 const GLYPH_BELL: char = '\u{EA8F}';
+const GLYPH_DOWNLOAD: char = '\u{E896}';
+const GLYPH_DONE: char = '\u{E73E}';
 /// 系统音量多久看一次。
 const VOLUME_POLL_MS: u64 = 110;
 
@@ -152,6 +158,12 @@ pub struct App {
     pub ai: Vec<views::AiItem>,
     /// 任务栏通知区的图标。
     pub tray: Option<tray::Tray>,
+    /// 自动更新：可以更新到的版本、通知胶囊上弹的是不是它、是不是正在下载。
+    pub update_offer: Option<island::update::Release>,
+    note_update: bool,
+    updating: bool,
+    /// 冒烟测试：下载好的新版本（测试时不真的换掉自己）。
+    pub update_ready: Option<std::path::PathBuf>,
     /// AI 工作台：正在干活的代理、等你批准的操作。
     pub bench: island::ai::Workbench,
     pub approvals: Vec<views::ApprovalItem>,
@@ -205,7 +217,13 @@ fn save_file(name: &str, content: &str) {
     }
 }
 
-pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
+/// 启动时要告诉你的事：刚装好、刚更新完。
+pub enum StartNote {
+    Installed,
+    Updated,
+}
+
+pub fn run(smoke_dir: Option<std::path::PathBuf>, note: Option<StartNote>) -> Result<i32> {
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         // OLE（拖放需要）会顺带把线程初始化成单线程套间
@@ -357,6 +375,10 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
             notification_target: Target::None,
             ai: Vec::new(),
             tray: None,
+            update_offer: None,
+            note_update: false,
+            updating: false,
+            update_ready: None,
             bench: island::ai::Workbench::default(),
             approvals: Vec::new(),
             next_approval: 0,
@@ -412,8 +434,27 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>) -> Result<i32> {
                 &GUID_VIDEO_CURRENT_MONITOR_BRIGHTNESS,
                 DEVICE_NOTIFY_WINDOW_HANDLE,
             );
+            SetTimer(Some(hwnd), TIMER_UPDATE, UPDATE_FIRST_MS, None);
+            if super::install::is_installed() {
+                shortcut::ensure_start_menu();
+            }
+            system::repoint_startup();
+            with_app(|a| match note {
+                Some(StartNote::Installed) => {
+                    a.show_notification(GLYPH_DONE, "灵动岛装好了", "桌面和开始菜单里都有快捷方式")
+                }
+                Some(StartNote::Updated) => a.show_notification(
+                    GLYPH_DONE,
+                    &format!("已更新到 {}", super::install::VERSION),
+                    "设置和数据都还在",
+                ),
+                None => {}
+            });
         }
-        log::info(&format!("启动，缩放 {scale}，软件渲染 {software}"));
+        log::info(&format!(
+            "启动 {}，缩放 {scale}，软件渲染 {software}",
+            super::install::VERSION
+        ));
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -677,6 +718,7 @@ impl App {
         if self.hidden || (self.note_approval.is_some() && !self.raising_approval) {
             return;
         }
+        self.note_update = false;
         self.note_approval = if self.raising_approval {
             self.approvals.first().map(|a| a.id)
         } else {
@@ -763,6 +805,95 @@ impl App {
         if bench_changed && self.state == IslandState::Expanded && self.tab == Tab::Ai {
             self.redraw_expanded();
         }
+    }
+
+    /// 检查更新。`manual`：右键菜单里点的，没有新版本、出错也告诉你。
+    pub fn check_updates(&mut self, manual: bool) {
+        let url = std::env::var("ISLAND_UPDATE_URL")
+            .ok()
+            .filter(|u| !u.is_empty())
+            .unwrap_or_else(|| island::update::LATEST_URL.to_string());
+        super::update::check(self.hwnd, manual, url);
+    }
+
+    /// 检查、下载的结果。
+    pub fn on_update_events(&mut self) {
+        use super::update::Event;
+        for e in super::update::take() {
+            match e {
+                Event::Available(r) => {
+                    let fresh = self.update_offer.as_ref().map(|o| &o.version) != Some(&r.version);
+                    self.update_offer = Some(r.clone());
+                    if fresh && !self.updating {
+                        self.show_notification_for(
+                            GLYPH_DOWNLOAD,
+                            &format!("有新版本 {}", r.version),
+                            "点一下更新，设置和数据都保留",
+                            8000,
+                        );
+                        self.note_update = self.note_approval.is_none();
+                    }
+                }
+                Event::UpToDate => self.show_notification(
+                    GLYPH_DONE,
+                    "已经是最新版",
+                    &format!("当前 {}", super::install::VERSION),
+                ),
+                Event::Ready(r, path) => {
+                    if self.testing {
+                        self.update_ready = Some(path);
+                        self.updating = false;
+                        continue;
+                    }
+                    match super::update::apply(&path, &r.version) {
+                        // 新版本已经启动，等着这个进程退出
+                        Ok(()) => unsafe { PostQuitMessage(0) },
+                        Err(e) => {
+                            self.updating = false;
+                            self.show_notification(GLYPH_BELL, "更新失败", &e);
+                        }
+                    }
+                }
+                Event::Failed(msg) => {
+                    self.updating = false;
+                    self.show_notification(GLYPH_BELL, "更新没成功", &msg);
+                }
+            }
+        }
+    }
+
+    /// 下载并换上新版本（点了"有新版本"的通知、或菜单里的"更新到…"）。
+    pub fn start_update(&mut self) {
+        let Some(r) = self.update_offer.clone() else {
+            return;
+        };
+        if self.updating {
+            return;
+        }
+        let dir = if self.testing {
+            std::env::temp_dir().join("island-smoke-update")
+        } else {
+            match std::env::current_exe()
+                .ok()
+                .and_then(|e| e.parent().map(|p| p.to_path_buf()))
+            {
+                Some(d) => d,
+                None => return,
+            }
+        };
+        self.updating = true;
+        let size = if r.exe_size > 0 {
+            format!("下载中，{:.1} MB", r.exe_size as f64 / 1_048_576.0)
+        } else {
+            "下载中".to_string()
+        };
+        self.show_notification_for(
+            GLYPH_DOWNLOAD,
+            &format!("正在更新到 {}…", r.version),
+            &size,
+            60_000,
+        );
+        super::update::download(self.hwnd, r, dir);
     }
 
     /// 弹出排在最前的批准请求（带允许、拒绝按钮，一直停着）。
@@ -937,6 +1068,7 @@ impl App {
             let _ = KillTimer(Some(self.hwnd), TIMER_NOTIFICATION);
         }
         self.note_approval = None;
+        self.note_update = false;
         if self.notification.take().is_some() {
             self.update_state();
         }
@@ -1558,6 +1690,12 @@ impl App {
                 _ => forward::Answer::Terminal,
             };
             self.decide(0, answer);
+            return;
+        }
+        // "有新版本"：点了就开始更新
+        if self.state == IslandState::Notification && self.note_update {
+            self.dismiss_notification();
+            self.start_update();
             return;
         }
         // 点一下通知就关掉；AI 消息和其他软件的通知顺便跳过去
@@ -2591,6 +2729,7 @@ const MENU_DEMO: usize = 6;
 const MENU_TOASTS: usize = 7;
 const MENU_EXIT: usize = 9;
 const MENU_SHORTCUT: usize = 10;
+const MENU_UPDATE: usize = 11;
 
 struct MenuState {
     pinned: bool,
@@ -2598,6 +2737,8 @@ struct MenuState {
     toasts: bool,
     persist_clipboard: bool,
     shortcut: bool,
+    /// 有新版本时是版本号（菜单显示"更新到 …"），否则 None（"检查更新"）。
+    update: Option<String>,
 }
 
 /// 在岛上或任务栏图标上点右键：弹出菜单，执行选中的项。
@@ -2610,6 +2751,7 @@ fn context_menu(hwnd: HWND) {
             toasts: a.settings.show_system_notifications,
             persist_clipboard: a.settings.persist_clipboard,
             shortcut: shortcut::exists(),
+            update: a.update_offer.as_ref().map(|r| r.version.clone()),
         }
     }) else {
         return;
@@ -2665,6 +2807,11 @@ fn show_menu(hwnd: HWND, s: &MenuState) -> usize {
             MENU_SHORTCUT,
             w!("在桌面放快捷方式"),
         );
+        let update = match &s.update {
+            Some(v) => HSTRING::from(format!("更新到 {v}")),
+            None => HSTRING::from("检查更新"),
+        };
+        let _ = AppendMenuW(menu, MF_STRING, MENU_UPDATE, &update);
         let _ = AppendMenuW(menu, MF_STRING, MENU_DEMO, w!("演示：弹出一条通知"));
         let _ = AppendMenuW(menu, MF_STRING, MENU_DATA, w!("打开数据文件夹"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -2722,6 +2869,13 @@ fn on_menu_command(a: &mut App, cmd: usize) {
             }
             a.save_settings();
         }
+        MENU_UPDATE => {
+            if a.update_offer.is_some() {
+                a.start_update();
+            } else {
+                a.check_updates(true);
+            }
+        }
         MENU_SHORTCUT => {
             if shortcut::exists() {
                 shortcut::remove();
@@ -2761,6 +2915,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 TIMER_TICK => with_app(|a| a.on_tick()),
                 TIMER_LEVEL => with_app(|a| a.hide_level()),
                 TIMER_NOTIFICATION => with_app(|a| a.dismiss_notification()),
+                TIMER_UPDATE => {
+                    unsafe {
+                        SetTimer(Some(hwnd), TIMER_UPDATE, UPDATE_EVERY_MS, None);
+                    }
+                    with_app(|a| a.check_updates(false))
+                }
                 TIMER_SMOKE => with_app(smoke::step),
                 _ => None,
             };
@@ -2903,6 +3063,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         // 任务栏图标：点一下（或用键盘选中）展开 / 收起，右键打开菜单
+        super::update::WM_UPDATE => {
+            with_app(|a| a.on_update_events());
+            LRESULT(0)
+        }
         tray::WM_TRAY => {
             match (lparam.0 as u32) & 0xFFFF {
                 NIN_SELECT | tray::NIN_KEYSELECT => {
