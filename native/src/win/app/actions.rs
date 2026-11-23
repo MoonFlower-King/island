@@ -32,13 +32,30 @@ impl App {
                 jump::open(&target);
             }
             Hit::AiReadAll => self.mark_ai_read(),
+            Hit::Toggle(setting) => self.toggle_setting(setting),
+            Hit::SetupClaude => self.setup_ai(true),
+            Hit::SetupCodex => self.setup_ai(false),
+            Hit::CheckUpdate => self.check_updates(true),
+            Hit::OpenData => self.open_data_folder(),
+            Hit::Uninstall => self.begin_uninstall(),
+            Hit::UninstallCancel => {
+                self.page = None;
+                self.redraw_expanded();
+            }
+            Hit::UninstallKeep => self.finish_uninstall(true),
+            Hit::UninstallAll => self.finish_uninstall(false),
+            Hit::WelcomeDone => {
+                self.finish_welcome();
+                self.set_pinned(false);
+                self.redraw_expanded();
+            }
             Hit::SummaryDone => {
-                self.summary = None;
+                self.page = None;
                 self.set_pinned(false);
                 self.redraw_expanded();
             }
             Hit::SummaryAi => {
-                self.summary = None;
+                self.page = None;
                 if self.tab == Tab::Ai {
                     self.redraw_expanded();
                 } else {
@@ -183,7 +200,13 @@ impl App {
 
     pub fn set_tab(&mut self, tab: Tab) {
         // 在看离开期间的汇总时点了标签：收起汇总
-        let leaving_summary = self.summary.take().is_some();
+        let leaving_summary = self.page.take().is_some();
+        if leaving_summary {
+            self.finish_welcome();
+        }
+        if tab == Tab::Settings {
+            self.refresh_system();
+        }
         if tab == self.tab {
             if leaving_summary {
                 self.redraw_expanded();

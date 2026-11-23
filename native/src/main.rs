@@ -7,10 +7,15 @@ mod win;
 
 #[cfg(windows)]
 fn main() {
+    win::log::install_panic_hook();
     let args: Vec<String> = std::env::args().collect();
     // AI 工具的钩子：把消息转给正在运行的岛，马上退出
     if args.iter().any(|a| a == "--notify") {
         std::process::exit(win::forward::run(&args));
+    }
+    // "设置 → 应用"里点了卸载
+    if args.iter().any(|a| a == "--uninstall") {
+        std::process::exit(win::uninstall::run_from_command());
     }
     let smoke = args.iter().position(|a| a == "--smoke-test").map(|i| {
         args.get(i + 1)

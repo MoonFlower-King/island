@@ -97,9 +97,16 @@ pub fn run() -> bool {
     let keep = target.exists()
         && installed_version(&dir).is_some_and(|v| !island::update::is_newer(VERSION, &v));
     if !keep {
+        let fresh = !target.exists();
         close_running();
         match install_to(&dir) {
-            Ok(_) => log::info(&format!("安装到 {}", dir.display())),
+            Ok(_) => {
+                log::info(&format!("安装到 {}", dir.display()));
+                // 第一次装：开机自动启动（欢迎卡片上会说，设置里可以关）
+                if fresh {
+                    super::system::set_startup_for(true, &target);
+                }
+            }
             Err(e) => {
                 // 装不上（权限、磁盘满）：就从这里运行
                 log::warn(&format!("安装失败，就从这里运行：{e}"));

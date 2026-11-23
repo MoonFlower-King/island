@@ -97,21 +97,20 @@ pub fn add() -> bool {
     }
 }
 
-/// 开始菜单里的快捷方式（装好的岛才放）：没有就放，指向别处就改过来。
-pub fn ensure_start_menu() {
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let lnk = unsafe {
-        let Ok(p) = SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None) else {
-            return;
-        };
+/// 开始菜单里快捷方式的位置。
+pub fn start_menu_path() -> Option<PathBuf> {
+    unsafe {
+        let p = SHGetKnownFolderPath(&FOLDERID_Programs, KF_FLAG_DEFAULT, None).ok()?;
         let dir = p.to_string().ok();
         CoTaskMemFree(Some(p.0 as *const _));
-        match dir {
-            Some(d) => PathBuf::from(d).join(NAME),
-            None => return,
-        }
+        dir.map(|d| PathBuf::from(d).join(NAME))
+    }
+}
+
+/// 开始菜单里的快捷方式（装好的岛才放）：没有就放，指向别处就改过来。
+pub fn ensure_start_menu() {
+    let (Ok(exe), Some(lnk)) = (std::env::current_exe(), start_menu_path()) else {
+        return;
     };
     if target(&lnk).is_some_and(|t| same_file(&t, &exe)) {
         return;

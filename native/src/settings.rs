@@ -86,6 +86,12 @@ pub struct Settings {
     pub show_system_notifications: bool,
     /// 第一次运行时已经在桌面放过快捷方式（之后用户删了就不再自动放）。
     pub desktop_shortcut_offered: bool,
+    /// 自动检查更新。
+    pub auto_update: bool,
+    /// 离开 10 分钟以上回来时展开汇总。
+    pub away_summary: bool,
+    /// 第一次运行的欢迎卡片已经看过了。
+    pub welcome_shown: bool,
     /// 岛显示在哪块屏幕上（设备名，如 `\\.\DISPLAY2`）；空表示主屏幕。只有原生版用。
     pub monitor: String,
     /// 当前使用的翻译服务（预设的 id）。
@@ -136,6 +142,9 @@ impl Settings {
             show_level_hud: get_bool(&raw, "ShowLevelHud", true),
             show_system_notifications: get_bool(&raw, "ShowSystemNotifications", true),
             desktop_shortcut_offered: get_bool(&raw, "DesktopShortcutOffered", false),
+            auto_update: get_bool(&raw, "AutoCheckUpdates", true),
+            away_summary: get_bool(&raw, "ShowAwaySummary", true),
+            welcome_shown: get_bool(&raw, "WelcomeShown", false),
             idle_as_line: get_bool(&raw, "IdleAsLine", true),
             media_as_line: get_bool(&raw, "MediaAsLine", false),
             dock: Edge::parse(raw.get("Dock").and_then(Value::as_str).unwrap_or("Top")),
@@ -213,6 +222,9 @@ impl Settings {
             "DesktopShortcutOffered".into(),
             json!(self.desktop_shortcut_offered),
         );
+        m.insert("AutoCheckUpdates".into(), json!(self.auto_update));
+        m.insert("ShowAwaySummary".into(), json!(self.away_summary));
+        m.insert("WelcomeShown".into(), json!(self.welcome_shown));
         m.insert("IdleAsLine".into(), json!(self.idle_as_line));
         m.insert("MediaAsLine".into(), json!(self.media_as_line));
         m.insert("Dock".into(), json!(self.dock.name()));

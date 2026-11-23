@@ -175,7 +175,8 @@ impl App {
         if done.is_empty() && apps.is_empty() && self.approvals.is_empty() {
             return;
         }
-        if self.hidden {
+        // 别盖住欢迎卡片、卸载确认
+        if self.hidden || self.page.is_some() {
             return;
         }
         let minutes = now.saturating_sub(since) / 60_000;
@@ -184,11 +185,11 @@ impl App {
             done.len(),
             apps.iter().map(|a| a.1).sum::<u32>()
         ));
-        self.summary = Some(views::Summary {
+        self.page = Some(views::Page::Summary(views::Summary {
             minutes,
             done,
             apps,
-        });
+        }));
         self.dismiss_notification();
         if self.pinned {
             self.redraw_expanded();

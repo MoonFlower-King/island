@@ -11,6 +11,7 @@ mod fields;
 mod input;
 mod menu;
 mod notify;
+mod system_page;
 mod updates;
 
 use std::cell::RefCell;
@@ -182,7 +183,12 @@ pub struct App {
     /// 每个会话今天用了多少 tokens（做完的会话也留着，算"今天"的总数）。
     pub tokens_today: std::collections::HashMap<String, u64>,
     /// 离开期间的汇总（显示着的话）、从什么时候开始算离开、最近其他软件来的通知 (时刻, 软件名, 图标)。
-    pub summary: Option<views::Summary>,
+    /// 盖在标签内容上的一页：离开期间的汇总、欢迎卡片、卸载确认。
+    pub page: Option<views::Page>,
+    /// 设置页要显示的系统状态。
+    pub system: views::SystemStatus,
+    /// 冒烟测试：点了卸载确认里的哪个（true = 保留数据）。
+    pub uninstall_requested: Option<bool>,
     away_since: Option<u64>,
     recent_notes: Vec<(u64, String, Option<std::sync::Arc<super::media::Art>>)>,
     pub approvals: Vec<views::ApprovalItem>,
@@ -214,11 +220,21 @@ thread_local! {
 }
 
 /// 借用全局 App。消息处理可能重入（例如右键菜单的模态循环），借不到时直接跳过。
+/// 借用 App 处理一条消息。正在处理别的消息时（模态循环里又来了消息）借不到，这条就跳过；
+/// 跳过的记进日志（10 秒最多记一次），后台的事另有队列会稍后再处理。
 fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
-    APP.with(|cell| {
-        cell.try_borrow_mut()
-            .ok()
-            .and_then(|mut a| a.as_mut().map(f))
+    APP.with(|cell| match cell.try_borrow_mut() {
+        Ok(mut a) => a.as_mut().map(f),
+        Err(_) => {
+            static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let now = tick();
+            let last = LAST.load(std::sync::atomic::Ordering::Relaxed);
+            if now.saturating_sub(last) > 10_000 {
+                LAST.store(now, std::sync::atomic::Ordering::Relaxed);
+                log::info("窗口正忙，跳过了一条消息");
+            }
+            None
+        }
     })
 }
 
@@ -400,7 +416,9 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>, note: Option<StartNote>) -> Re
             update_ready: None,
             bench: island::ai::Workbench::default(),
             tokens_today: Default::default(),
-            summary: None,
+            page: None,
+            system: views::SystemStatus::default(),
+            uninstall_requested: None,
             away_since: None,
             recent_notes: Vec::new(),
             approvals: Vec::new(),
@@ -461,8 +479,11 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>, note: Option<StartNote>) -> Re
             SetTimer(Some(hwnd), TIMER_UPDATE, UPDATE_FIRST_MS, None);
             if super::install::is_installed() {
                 shortcut::ensure_start_menu();
+                super::uninstall::register();
             }
             system::repoint_startup();
+            // 接入过 AI 工具、但指向的是以前的位置：改成现在的
+            super::aisetup::repair();
             with_app(|a| match note {
                 Some(StartNote::Installed) => {
                     a.show_notification(GLYPH_DONE, "灵动岛装好了", "桌面和开始菜单里都有快捷方式")
@@ -474,6 +495,24 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>, note: Option<StartNote>) -> Re
                 ),
                 None => {}
             });
+            // 第一次运行：展开欢迎卡片（说明岛在哪、怎么用），一直停着直到你点"开始使用"
+            with_app(|a| {
+                if !a.settings.welcome_shown {
+                    a.show_welcome();
+                }
+            });
+            // 上次意外退出了：告诉你，原因在日志里
+            if let Some(reason) = log::take_crash() {
+                log::warn(&format!("上次意外退出：{reason}"));
+                with_app(|a| {
+                    a.show_notification_for(
+                        GLYPH_BELL,
+                        "灵动岛上次意外退出了",
+                        "原因记在数据文件夹的 crash.last.txt 里",
+                        8000,
+                    )
+                });
+            }
         }
         log::info(&format!(
             "启动 {}，缩放 {scale}，软件渲染 {software}",
@@ -594,12 +633,16 @@ impl App {
                 self.tab = Tab::Ai;
             }
             // 看着 AI 动态收起：算都看过了
-            if previous == IslandState::Expanded && self.tab == Tab::Ai && self.summary.is_none() {
+            if previous == IslandState::Expanded && self.tab == Tab::Ai && self.page.is_none() {
                 self.mark_ai_read();
             }
-            // 汇总只看一次
+            // 汇总、欢迎卡片只看一次，收起就没了
             if previous == IslandState::Expanded {
-                self.summary = None;
+                self.finish_welcome();
+                self.page = None;
+            }
+            if target == IslandState::Expanded && self.tab == Tab::Settings {
+                self.refresh_system();
             }
             if target == IslandState::Expanded {
                 if self.tab == Tab::Monitor {
@@ -834,7 +877,8 @@ impl App {
             approvals: &self.approvals,
             agents: &self.bench.agents,
             tokens_today: self.tokens_today.values().sum(),
-            summary: self.summary.as_ref(),
+            page: self.page.as_ref(),
+            system: &self.system,
             now: tick(),
             pressed: self.pressed,
         }
@@ -1287,7 +1331,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     unsafe {
                         SetTimer(Some(hwnd), TIMER_UPDATE, UPDATE_EVERY_MS, None);
                     }
-                    with_app(|a| a.check_updates(false))
+                    with_app(|a| {
+                        if a.settings.auto_update {
+                            a.check_updates(false)
+                        }
+                    })
                 }
                 TIMER_EVENTS => {
                     unsafe {
@@ -1425,6 +1473,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         // 任务栏图标：点一下（或用键盘选中）展开 / 收起，右键打开菜单
+        WM_CONFIRM_UNINSTALL => {
+            with_app(|a| a.begin_uninstall());
+            LRESULT(0)
+        }
         WM_TRAY => {
             match (lparam.0 as u32) & 0xFFFF {
                 NIN_SELECT | tray::NIN_KEYSELECT => {

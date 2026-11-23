@@ -39,10 +39,12 @@ pub enum Tab {
     Appearance,
     /// AI 动态：Claude、Codex 等完成任务或等你确认的消息。
     Ai,
+    /// 设置：开关、接入 AI 工具、更新、卸载。
+    Settings,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 8] = [
+    pub const ALL: [Tab; 9] = [
         Tab::Music,
         Tab::Todo,
         Tab::Clipboard,
@@ -51,6 +53,7 @@ impl Tab {
         Tab::Monitor,
         Tab::Appearance,
         Tab::Ai,
+        Tab::Settings,
     ];
 
     /// settings.json 里 LastTab 存的名字（1.x 起不变）。
@@ -64,6 +67,7 @@ impl Tab {
             Tab::Monitor => "Monitor",
             Tab::Appearance => "Appearance",
             Tab::Ai => "Ai",
+            Tab::Settings => "Settings",
         }
     }
 
@@ -84,6 +88,7 @@ impl Tab {
             Tab::Monitor => '\u{E9D9}',
             Tab::Appearance => '\u{E790}',
             Tab::Ai => '\u{E99A}',
+            Tab::Settings => '\u{E713}',
         }
     }
 }
@@ -217,6 +222,53 @@ pub enum Hit {
     /// 离开期间的汇总：知道了、去 AI 动态。
     SummaryDone,
     SummaryAi,
+    /// 设置页：开关、接入 AI 工具、检查更新、打开数据文件夹、卸载。
+    Toggle(Setting),
+    SetupClaude,
+    SetupCodex,
+    CheckUpdate,
+    OpenData,
+    Uninstall,
+    /// 卸载确认：保留数据、全部删除、取消。
+    UninstallKeep,
+    UninstallAll,
+    UninstallCancel,
+    /// 欢迎卡片：开始使用。
+    WelcomeDone,
+}
+
+/// 设置页上的开关。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setting {
+    Autostart,
+    Shortcut,
+    Notifications,
+    LevelHud,
+    Clipboard,
+    AutoUpdate,
+    AwaySummary,
+}
+
+/// 展开面板上临时盖住标签内容的一页。
+pub enum Page {
+    /// 离开期间的汇总。
+    Summary(Summary),
+    /// 第一次运行的欢迎卡片。
+    Welcome,
+    /// 卸载确认。
+    ConfirmUninstall,
+}
+
+/// 设置页要显示的、不在 settings.json 里的状态（注册表、文件、别的软件的配置）。
+#[derive(Clone, Debug, Default)]
+pub struct SystemStatus {
+    pub autostart: bool,
+    pub shortcut: bool,
+    /// Claude Code / Codex 的接入情况；没装是 None。
+    pub claude: Option<island::hooks::Status>,
+    pub codex: Option<island::hooks::Status>,
+    /// 版本那一行右边的说明（"已是最新"、"有新版本 2.0.7"）。
+    pub update: String,
 }
 
 /// 离开期间发生的事（回来时展开给你看）。
@@ -343,8 +395,10 @@ pub struct ViewState<'a> {
     pub agents: &'a [island::ai::Agent],
     /// 今天一共用了多少 tokens。
     pub tokens_today: u64,
-    /// 离开期间的汇总：有的话展开面板显示它，不显示标签内容。
-    pub summary: Option<&'a Summary>,
+    /// 盖在标签内容上的一页（汇总、欢迎、卸载确认）。
+    pub page: Option<&'a Page>,
+    /// 设置页用的系统状态。
+    pub system: &'a SystemStatus,
     pub now: u64,
 }
 
@@ -711,9 +765,20 @@ pub fn draw_notification(
 pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<Targets> {
     let mut t = Targets::default();
     draw_header(p, v, &mut t)?;
-    if let Some(s) = v.summary {
-        draw_summary(p, v, s, &mut t)?;
-        return Ok(t);
+    match v.page {
+        Some(Page::Summary(s)) => {
+            draw_summary(p, v, s, &mut t)?;
+            return Ok(t);
+        }
+        Some(Page::Welcome) => {
+            draw_welcome(p, v, &mut t)?;
+            return Ok(t);
+        }
+        Some(Page::ConfirmUninstall) => {
+            draw_uninstall(p, v, &mut t)?;
+            return Ok(t);
+        }
+        None => {}
     }
     match v.tab {
         Tab::Music => match v.media {
@@ -728,8 +793,282 @@ pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<Targets> {
         Tab::Monitor => draw_monitor(p, v)?,
         Tab::Appearance => draw_appearance(p, v, &mut t)?,
         Tab::Ai => draw_ai(p, v, &mut t)?,
+        Tab::Settings => draw_settings(p, v, &mut t)?,
     }
     Ok(t)
+}
+
+// ───────────────────────────── 设置、欢迎、卸载 ─────────────────────────────
+
+/// 一个圆角小按钮（宽度随文字），返回右边界。`primary` 用强调色。
+fn chip(
+    p: &Painter,
+    v: &ViewState,
+    t: &mut Targets,
+    (x, y): (f32, f32),
+    text: &str,
+    hit: Hit,
+    primary: bool,
+) -> Result<f32> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let r = Rect::new(x, y, segment_width(text) - 2.0, 24.0);
+    let hot = v.hovered == Some(hit);
+    let fill = if primary {
+        color(v.accent, if hot { 0.85 } else { 1.0 })
+    } else {
+        color(fg, if hot { 0.2 } else { 0.11 })
+    };
+    p.fill_round(r, 12.0, fill)?;
+    let ink = if primary {
+        color(on(v.accent), 1.0)
+    } else {
+        color(fg, 0.9)
+    };
+    let weight = if primary {
+        DWRITE_FONT_WEIGHT_SEMI_BOLD
+    } else {
+        DWRITE_FONT_WEIGHT_NORMAL
+    };
+    p.text(text, r, &style(&family, 11.5, weight, Align::Center), ink)?;
+    t.add(r, hit);
+    Ok(r.right())
+}
+
+/// 开关：左边一个小滑块，右边文字。
+fn toggle(
+    p: &Painter,
+    v: &ViewState,
+    t: &mut Targets,
+    (x, y): (f32, f32),
+    text: &str,
+    setting: Setting,
+    on_: bool,
+) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let row = Rect::new(x, y, 200.0, 24.0);
+    hover_bg(p, v, Hit::Toggle(setting), row, 8.0)?;
+    let track = Rect::new(x + 6.0, y + 4.5, 26.0, 15.0);
+    p.fill_round(
+        track,
+        7.5,
+        if on_ {
+            color(v.accent, 1.0)
+        } else {
+            color(fg, 0.16)
+        },
+    )?;
+    let knob_x = track.x + 7.5 + if on_ { 11.0 } else { 0.0 };
+    p.fill_circle(
+        knob_x,
+        track.y + 7.5,
+        5.5,
+        if on_ {
+            color(v.palette.background, 1.0)
+        } else {
+            color(fg, 0.55)
+        },
+    )?;
+    p.text(
+        text,
+        Rect::new(x + 40.0, y, 160.0, 24.0),
+        &style(&family, 12.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading),
+        color(fg, 0.95),
+    )?;
+    t.add(row, Hit::Toggle(setting));
+    Ok(())
+}
+
+fn hook_label(name: &str, s: Option<island::hooks::Status>) -> String {
+    use island::hooks::Status;
+    match s {
+        Some(Status::Current) => format!("已接入 {name}"),
+        Some(Status::Outdated) => format!("修正 {name} 的接入"),
+        _ => format!("接入 {name}"),
+    }
+}
+
+fn draw_settings(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    p.text(
+        "设置",
+        Rect::new(16.0, 50.0, 100.0, 22.0),
+        &style(&family, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
+        color(fg, 1.0),
+    )?;
+    p.text(
+        &format!(
+            "版本 {} · {}",
+            crate::win::install::VERSION,
+            v.system.update
+        ),
+        Rect::new(150.0, 50.0, EXPANDED.width - 166.0, 22.0),
+        &style(&family, 11.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing),
+        color(fg, 0.45),
+    )?;
+    let s = v.settings;
+    let items = [
+        ("开机自动启动", Setting::Autostart, v.system.autostart),
+        ("桌面快捷方式", Setting::Shortcut, v.system.shortcut),
+        (
+            "其他软件的通知",
+            Setting::Notifications,
+            s.show_system_notifications,
+        ),
+        ("音量和亮度提示", Setting::LevelHud, s.show_level_hud),
+        ("保存剪贴板历史", Setting::Clipboard, s.persist_clipboard),
+        ("自动检查更新", Setting::AutoUpdate, s.auto_update),
+        ("离开后显示汇总", Setting::AwaySummary, s.away_summary),
+    ];
+    for (i, (text, setting, on_)) in items.into_iter().enumerate() {
+        let x = if i % 2 == 0 { 10.0 } else { 220.0 };
+        let y = 76.0 + (i / 2) as f32 * 26.0;
+        toggle(p, v, t, (x, y), text, setting, on_)?;
+    }
+    let mut x = 16.0;
+    for (text, hit) in [
+        (hook_label("Claude Code", v.system.claude), Hit::SetupClaude),
+        (hook_label("Codex", v.system.codex), Hit::SetupCodex),
+        ("检查更新".to_string(), Hit::CheckUpdate),
+    ] {
+        x = chip(p, v, t, (x, 190.0), &text, hit, false)? + 8.0;
+    }
+    let mut x = 16.0;
+    for (text, hit) in [("打开数据文件夹", Hit::OpenData), ("卸载…", Hit::Uninstall)] {
+        x = chip(p, v, t, (x, 222.0), text, hit, false)? + 8.0;
+    }
+    Ok(())
+}
+
+/// 第一次运行：说明岛在哪、怎么用，一直停着直到点"开始使用"。
+fn draw_welcome(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    p.text(
+        "欢迎使用灵动岛",
+        Rect::new(16.0, 50.0, 250.0, 22.0),
+        &style(&family, 12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
+        color(fg, 1.0),
+    )?;
+    let w = segment_width("开始使用");
+    chip(
+        p,
+        v,
+        t,
+        (EXPANDED.width - 16.0 - w, 50.0),
+        "开始使用",
+        Hit::WelcomeDone,
+        false,
+    )?;
+    let hooked = v.system.claude == Some(island::hooks::Status::Current);
+    let rows: [(char, &str, &str); 4] = [
+        (
+            glyph::MUSIC,
+            "它在屏幕顶部正中",
+            "鼠标移上去就展开，移开收起；平时缩成一条细线",
+        ),
+        (
+            '\u{E713}',
+            "右键它，或者点任务栏右下角的图标",
+            "打开菜单；所有开关都在\"设置\"标签里",
+        ),
+        (
+            glyph::CHECK,
+            if v.system.autostart {
+                "开机会自动启动"
+            } else {
+                "开机不会自动启动"
+            },
+            if v.system.autostart {
+                "不想要可以在设置里关掉"
+            } else {
+                "需要的话在设置里打开"
+            },
+        ),
+        (
+            GLYPH_AI,
+            if hooked {
+                "已经接入 Claude Code"
+            } else {
+                "接入 Claude Code"
+            },
+            if hooked {
+                "AI 做完事、要你批准时都会出现在岛上"
+            } else {
+                "AI 做完事、要你批准时在岛上告诉你"
+            },
+        ),
+    ];
+    let title = style(&family, 12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading);
+    let body = style(&family, 11.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    for (i, (g, head, sub)) in rows.into_iter().enumerate() {
+        let y = 78.0 + i as f32 * 42.0;
+        let r = Rect::new(12.0, y, 416.0, 39.0);
+        p.fill_round(r, 10.0, color(fg, 0.06))?;
+        let icon = Rect::new(22.0, y + 7.5, 24.0, 24.0);
+        p.fill_round(icon, 7.0, color(fg, 0.12))?;
+        p.icon(g, icon, 12.0, color(fg, 0.9))?;
+        p.text(
+            head,
+            Rect::new(56.0, y + 3.0, 280.0, 18.0),
+            &title,
+            color(fg, 1.0),
+        )?;
+        p.text(
+            sub,
+            Rect::new(56.0, y + 20.0, 300.0, 16.0),
+            &body,
+            color(fg, 0.55),
+        )?;
+        if i == 3 && !hooked && v.system.claude.is_some() {
+            let w = segment_width("一键接入");
+            chip(
+                p,
+                v,
+                t,
+                (r.right() - 10.0 - w, y + 7.5),
+                "一键接入",
+                Hit::SetupClaude,
+                true,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_uninstall(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    p.text(
+        "卸载灵动岛？",
+        Rect::new(16.0, 54.0, 300.0, 24.0),
+        &style(&family, 14.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
+        color(fg, 1.0),
+    )?;
+    let body = style(&family, 12.0, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    p.text(
+        "会删除程序、桌面和开始菜单的快捷方式，并取消开机启动。",
+        Rect::new(16.0, 86.0, 410.0, 20.0),
+        &body,
+        color(fg, 0.7),
+    )?;
+    p.text(
+        "设置、待办、剪贴板历史可以留着，重新安装会接着用。",
+        Rect::new(16.0, 108.0, 410.0, 20.0),
+        &body,
+        color(fg, 0.7),
+    )?;
+    let mut x = 16.0;
+    for (text, hit, primary) in [
+        ("卸载，保留数据", Hit::UninstallKeep, true),
+        ("全部删除", Hit::UninstallAll, false),
+        ("取消", Hit::UninstallCancel, false),
+    ] {
+        x = chip(p, v, t, (x, 150.0), text, hit, primary)? + 8.0;
+    }
+    Ok(())
 }
 
 // ───────────────────────────── 离开期间的汇总 ─────────────────────────────
@@ -1134,14 +1473,14 @@ fn hover_bg(p: &Painter, v: &ViewState, hit: Hit, r: Rect, radius: f32) -> Resul
     Ok(())
 }
 
-/// 标签按钮的间距：8 个标签放在图钉（x = 304）左边。
-const TAB_STEP: f32 = 36.0;
+/// 标签按钮的间距：9 个标签放在图钉（x = 304）左边。
+const TAB_STEP: f32 = 32.0;
 
 fn draw_header(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
     let fg = v.palette.foreground;
     let family = p.gfx.text_font.clone();
     for (i, tab) in Tab::ALL.into_iter().enumerate() {
-        let r = Rect::new(16.0 + i as f32 * TAB_STEP, 12.0, TAB_STEP - 4.0, 28.0);
+        let r = Rect::new(14.0 + i as f32 * TAB_STEP, 12.0, TAB_STEP - 2.0, 28.0);
         if v.tab == tab {
             p.fill_round(r, 14.0, color(fg, 0.20))?;
         } else {

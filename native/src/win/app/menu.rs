@@ -12,6 +12,7 @@ const MENU_TOASTS: usize = 7;
 const MENU_EXIT: usize = 9;
 const MENU_SHORTCUT: usize = 10;
 const MENU_UPDATE: usize = 11;
+const MENU_SETTINGS: usize = 12;
 
 struct MenuState {
     pinned: bool,
@@ -96,6 +97,7 @@ fn show_menu(hwnd: HWND, s: &MenuState) -> usize {
         let _ = AppendMenuW(menu, MF_STRING, MENU_UPDATE, &update);
         let _ = AppendMenuW(menu, MF_STRING, MENU_DEMO, w!("演示：弹出一条通知"));
         let _ = AppendMenuW(menu, MF_STRING, MENU_DATA, w!("打开数据文件夹"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("设置…"));
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, MENU_EXIT, w!("退出"));
 
@@ -125,32 +127,9 @@ fn show_menu(hwnd: HWND, s: &MenuState) -> usize {
 fn on_menu_command(a: &mut App, cmd: usize) {
     match cmd {
         MENU_PIN => a.set_pinned(!a.pinned),
-        MENU_LEVEL => {
-            a.settings.show_level_hud = !a.settings.show_level_hud;
-            if !a.settings.show_level_hud {
-                a.hide_level();
-            }
-            a.save_settings();
-        }
-        MENU_TOASTS => {
-            a.settings.show_system_notifications = !a.settings.show_system_notifications;
-            if a.settings.show_system_notifications {
-                toasts::start();
-            } else {
-                toasts::stop();
-            }
-            a.save_settings();
-        }
-        MENU_CLIPBOARD => {
-            a.settings.persist_clipboard = !a.settings.persist_clipboard;
-            if a.settings.persist_clipboard {
-                a.save_clips();
-            } else {
-                // 关闭保存时删掉磁盘上的历史
-                let _ = std::fs::remove_file(data_file("clipboard.json"));
-            }
-            a.save_settings();
-        }
+        MENU_LEVEL => a.toggle_setting(views::Setting::LevelHud),
+        MENU_TOASTS => a.toggle_setting(views::Setting::Notifications),
+        MENU_CLIPBOARD => a.toggle_setting(views::Setting::Clipboard),
         MENU_UPDATE => {
             if a.update_offer.is_some() {
                 a.start_update();
@@ -158,25 +137,10 @@ fn on_menu_command(a: &mut App, cmd: usize) {
                 a.check_updates(true);
             }
         }
-        MENU_SHORTCUT => {
-            if shortcut::exists() {
-                shortcut::remove();
-            } else {
-                shortcut::add();
-            }
-        }
-        MENU_STARTUP => {
-            let enable = !system::startup_enabled();
-            if !system::set_startup(enable) {
-                log::warn("设置开机启动失败");
-            }
-        }
-        MENU_DATA => {
-            let dir = log::data_dir();
-            let _ = std::fs::create_dir_all(&dir);
-            let path = windows::core::HSTRING::from(dir.as_os_str());
-            unsafe { ShellExecuteW(None, w!("open"), &path, None, None, SW_SHOWNORMAL) };
-        }
+        MENU_SHORTCUT => a.toggle_setting(views::Setting::Shortcut),
+        MENU_STARTUP => a.toggle_setting(views::Setting::Autostart),
+        MENU_DATA => a.open_data_folder(),
+        MENU_SETTINGS => a.open_settings(),
         MENU_DEMO => {
             // 点菜单时鼠标还停在岛上，先收起展开态，好让通知立刻可见
             a.hover.set(false);
