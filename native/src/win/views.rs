@@ -214,6 +214,19 @@ pub enum Hit {
     ApproveDeny(usize),
     ApprovalRow(usize),
     AgentRow(usize),
+    /// 离开期间的汇总：知道了、去 AI 动态。
+    SummaryDone,
+    SummaryAi,
+}
+
+/// 离开期间发生的事（回来时展开给你看）。
+pub struct Summary {
+    /// 离开了几分钟。
+    pub minutes: u64,
+    /// 这期间做完了的 AI 任务（新的在前）。
+    pub done: Vec<AiItem>,
+    /// 这期间其他软件来的通知：(软件名, 几条, 图标)，多的在前。
+    pub apps: Vec<(String, u32, Option<std::sync::Arc<Art>>)>,
 }
 
 /// 一个等你批准的操作（Claude Code 的钩子在等岛的答复）。
@@ -240,6 +253,8 @@ pub struct AiItem {
     pub read: bool,
     /// 软件自己的图标（桌面版的系统通知才有）。
     pub icon: Option<std::sync::Arc<Art>>,
+    /// 收到的时刻（毫秒，GetTickCount64），算"离开期间"用。
+    pub received: u64,
     /// 点了跳到哪儿（发消息的终端窗口、软件里的对话）。
     pub target: super::jump::Target,
 }
@@ -326,6 +341,10 @@ pub struct ViewState<'a> {
     /// AI 工作台：等你批准的、正在干活的，和现在的时间（毫秒，算跑了多久）。
     pub approvals: &'a [ApprovalItem],
     pub agents: &'a [island::ai::Agent],
+    /// 今天一共用了多少 tokens。
+    pub tokens_today: u64,
+    /// 离开期间的汇总：有的话展开面板显示它，不显示标签内容。
+    pub summary: Option<&'a Summary>,
     pub now: u64,
 }
 
@@ -692,6 +711,10 @@ pub fn draw_notification(
 pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<Targets> {
     let mut t = Targets::default();
     draw_header(p, v, &mut t)?;
+    if let Some(s) = v.summary {
+        draw_summary(p, v, s, &mut t)?;
+        return Ok(t);
+    }
     match v.tab {
         Tab::Music => match v.media {
             Some(m) => draw_player(p, m, v, &mut t)?,
@@ -707,6 +730,177 @@ pub fn draw_expanded(p: &Painter, v: &ViewState) -> Result<Targets> {
         Tab::Ai => draw_ai(p, v, &mut t)?,
     }
     Ok(t)
+}
+
+// ───────────────────────────── 离开期间的汇总 ─────────────────────────────
+
+/// 月亮（Segoe Fluent Icons：QuietHours）。
+const GLYPH_AWAY: char = '\u{E708}';
+
+/// 最要紧的在前：等你批准的；消息条数一直留一行；做完的任务填剩下的位置，放不下的合成"还有 N 个"。
+fn draw_summary(p: &Painter, v: &ViewState, s: &Summary, t: &mut Targets) -> Result<()> {
+    let fg = v.palette.foreground;
+    let family = p.gfx.text_font.clone();
+    let w = EXPANDED.width;
+    p.icon(
+        GLYPH_AWAY,
+        Rect::new(16.0, 51.0, 16.0, 22.0),
+        12.0,
+        color(fg, 0.9),
+    )?;
+    p.text(
+        &format!("你离开的 {} 分钟里", s.minutes),
+        Rect::new(36.0, 50.0, 300.0, 24.0),
+        &style(&family, 12.0, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading),
+        color(fg, 1.0),
+    )?;
+    let label = "知道了";
+    let bw = segment_width(label);
+    let b = Rect::new(w - 16.0 - bw, 51.0, bw, 22.0);
+    let hot = v.hovered == Some(Hit::SummaryDone);
+    p.fill_round(b, 11.0, color(fg, if hot { 0.18 } else { 0.1 }))?;
+    p.text(
+        label,
+        b,
+        &style(&family, 11.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Center),
+        color(fg, 0.85),
+    )?;
+    t.add(b, Hit::SummaryDone);
+
+    let title = style(&family, 12.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, Align::Leading);
+    let body = style(&family, 11.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Leading);
+    let time = style(&family, 10.5, DWRITE_FONT_WEIGHT_NORMAL, Align::Trailing);
+    let badge = |x: f32, y: f32, size: f32, image: Option<&Art>| -> Result<()> {
+        let r = Rect::new(x, y, size, size);
+        match image {
+            Some(a) => p.image(a.id, &a.pixels, a.width, a.height, r, size * 0.24),
+            None => {
+                p.fill_circle(
+                    x + size / 2.0,
+                    y + size / 2.0,
+                    size / 2.0,
+                    color(v.accent, 1.0),
+                )?;
+                p.icon(GLYPH_AI, r, size * 0.48, color(on(v.accent), 1.0))
+            }
+        }
+    };
+    enum Row<'a> {
+        Approvals,
+        Done(&'a AiItem),
+        More(usize, bool),
+        Apps,
+    }
+    let mut rows = Vec::new();
+    if !v.approvals.is_empty() {
+        rows.push(Row::Approvals);
+    }
+    let apps = !s.apps.is_empty();
+    let slots = AI_ROWS - rows.len() - apps as usize;
+    let shown = if s.done.len() > slots {
+        slots.saturating_sub(1)
+    } else {
+        s.done.len()
+    };
+    rows.extend(s.done.iter().take(shown).map(Row::Done));
+    if s.done.len() > shown && slots > 0 {
+        rows.push(Row::More(s.done.len() - shown, shown > 0));
+    }
+    if apps {
+        rows.push(Row::Apps);
+    }
+    for (i, row) in rows.iter().enumerate() {
+        let y = AI_TOP + i as f32 * AI_ROW_HEIGHT;
+        let r = Rect::new(12.0, y, 416.0, AI_ROW_HEIGHT - 3.0);
+        let clickable = !matches!(row, Row::Apps);
+        let hovered = clickable && v.hovered == Some(Hit::SummaryAi);
+        let urgent = matches!(row, Row::Approvals);
+        let fill = if urgent {
+            color(v.accent, if hovered { 0.26 } else { 0.18 })
+        } else {
+            color(fg, if hovered { 0.12 } else { 0.06 })
+        };
+        p.fill_round(r, 10.0, fill)?;
+        match row {
+            Row::Approvals => {
+                badge(22.0, y + 7.0, 25.0, None)?;
+                p.text(
+                    &format!("{} 个操作在等你批准", v.approvals.len()),
+                    Rect::new(56.0, y + 3.0, 340.0, 18.0),
+                    &title,
+                    color(fg, 1.0),
+                )?;
+                p.text(
+                    "点这里去处理",
+                    Rect::new(56.0, y + 20.0, 340.0, 16.0),
+                    &body,
+                    color(fg, 0.6),
+                )?;
+            }
+            Row::Done(m) => {
+                badge(22.0, y + 7.0, 25.0, m.icon.as_deref())?;
+                p.text(
+                    &m.title,
+                    Rect::new(56.0, y + 3.0, 300.0, 18.0),
+                    &title,
+                    color(fg, 1.0),
+                )?;
+                p.text(
+                    &m.body,
+                    Rect::new(56.0, y + 20.0, 340.0, 16.0),
+                    &body,
+                    color(fg, 0.55),
+                )?;
+                p.text(
+                    &m.at,
+                    Rect::new(356.0, y + 3.0, 52.0, 18.0),
+                    &time,
+                    color(fg, 0.4),
+                )?;
+            }
+            Row::More(n, also) => {
+                let text = format!(
+                    "{} {n} 个任务做完了 · 在 AI 动态里看",
+                    if *also { "还有" } else { "有" }
+                );
+                p.text(
+                    &text,
+                    Rect::new(56.0, y + 10.0, 340.0, 18.0),
+                    &body,
+                    color(fg, 0.6),
+                )?;
+            }
+            Row::Apps => {
+                for (k, (_, _, icon)) in s.apps.iter().take(3).enumerate() {
+                    badge(22.0 + k as f32 * 25.0, y + 8.0, 22.0, icon.as_deref())?;
+                }
+                let x = 22.0 + s.apps.len().min(3) as f32 * 25.0 + 8.0;
+                let total: u32 = s.apps.iter().map(|(_, n, _)| n).sum();
+                let detail = s
+                    .apps
+                    .iter()
+                    .map(|(name, n, _)| format!("{name} {n} 条"))
+                    .collect::<Vec<_>>()
+                    .join(" · ");
+                p.text(
+                    &format!("{total} 条消息"),
+                    Rect::new(x, y + 3.0, 400.0 - x, 18.0),
+                    &title,
+                    color(fg, 1.0),
+                )?;
+                p.text(
+                    &detail,
+                    Rect::new(x, y + 20.0, 410.0 - x, 16.0),
+                    &body,
+                    color(fg, 0.55),
+                )?;
+            }
+        }
+        if clickable {
+            t.add(r, Hit::SummaryAi);
+        }
+    }
+    Ok(())
 }
 
 // ───────────────────────────── AI 动态 ─────────────────────────────
@@ -744,6 +938,12 @@ fn draw_ai(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
         }
         if !v.approvals.is_empty() {
             parts.push(format!("{} 个等你批准", v.approvals.len()));
+        }
+        if v.tokens_today > 0 {
+            parts.push(format!(
+                "今天 {} tokens",
+                island::usage::format_tokens(v.tokens_today)
+            ));
         }
         parts.join(" · ")
     } else if unread > 0 {
@@ -864,6 +1064,12 @@ fn draw_ai(p: &Painter, v: &ViewState, t: &mut Targets) -> Result<()> {
         };
         if !g.files.is_empty() {
             line.push_str(&format!(" · 改了 {} 个文件", g.files.len()));
+        }
+        if g.tokens > 0 {
+            line.push_str(&format!(
+                " · {} tokens",
+                island::usage::format_tokens(g.tokens)
+            ));
         }
         p.text(
             &line,

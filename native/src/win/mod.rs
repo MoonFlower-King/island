@@ -18,4 +18,5 @@ pub mod toasts;
 pub mod translator;
 pub mod tray;
 pub mod update;
+pub mod usage;
 pub mod views;

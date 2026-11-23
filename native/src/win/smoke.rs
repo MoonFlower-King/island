@@ -1711,8 +1711,26 @@ pub fn step(app: &mut App) {
                 "答复后请求从岛上拿掉",
             );
             // 工作台：同一个会话开始新任务、正在跑命令
-            let start = r###"{"session_id":"s8","cwd":"C:\\work\\island","hook_event_name":"UserPromptSubmit","prompt":"跑一下测试"}"###;
-            match spawn_notify(&["claude"], Some(start)) {
+            // 对话记录：两条回复，其中一条写了两行（只算一次）；读缓存的不算
+            let transcript = smoke.dir.join("s8.jsonl");
+            let reply = |id: &str, out: u64| {
+                format!(
+                    r#"{{"type":"assistant","timestamp":"2099-01-01T00:00:00Z","message":{{"id":"{id}","usage":{{"input_tokens":1000,"cache_creation_input_tokens":500,"cache_read_input_tokens":90000,"output_tokens":{out}}}}}}}"#
+                )
+            };
+            let _ = std::fs::write(
+                &transcript,
+                [reply("m1", 2000), reply("m1", 2000), reply("m2", 6000)].join("\n") + "\n",
+            );
+            let start = serde_json::json!({
+                "session_id": "s8",
+                "cwd": "C:\\work\\island",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "跑一下测试",
+                "transcript_path": transcript.to_string_lossy(),
+            })
+            .to_string();
+            match spawn_notify(&["claude"], Some(&start)) {
                 Ok(c) => smoke.children.push(c),
                 Err(e) => smoke.check(false, &format!("启动 --notify（{e}）")),
             }
@@ -1728,6 +1746,15 @@ pub fn step(app: &mut App) {
         }
         99 => {
             let agent = app.bench.agents.first();
+            // (1000 + 500 + 2000) + (1000 + 500 + 6000)
+            smoke.check(
+                agent.is_some_and(|a| a.tokens == 11_000),
+                &format!(
+                    "工作台数出这个会话用的 tokens（{:?}，今天 {:?}）",
+                    agent.map(|a| a.tokens),
+                    app.tokens_today.get("s8")
+                ),
+            );
             smoke.check(
                 agent.is_some_and(|a| {
                     a.prompt == "跑一下测试" && a.action == "改 app.rs" && a.files.len() == 1
@@ -1894,6 +1921,39 @@ pub fn step(app: &mut App) {
                 ),
             );
             app.dismiss_notification();
+            // 离开 11 分钟再回来：岛展开这段时间的汇总
+            app.check_away(super::app::AWAY_MS + 60_000);
+            app.check_away(0);
+            next = 800;
+        }
+        110 => {
+            let summary = app.summary.as_ref().map(|s| {
+                (
+                    s.minutes,
+                    s.done.len(),
+                    s.apps
+                        .iter()
+                        .map(|(n, c, _)| (n.clone(), *c))
+                        .collect::<Vec<_>>(),
+                )
+            });
+            smoke.check(
+                app.state == IslandState::Expanded
+                    && summary
+                        .as_ref()
+                        .is_some_and(|(m, d, apps)| *m >= 10 && *d >= 2 && !apps.is_empty()),
+                &format!("离开回来展开汇总（{summary:?}）"),
+            );
+            snapshot(app, &mut smoke, "34-away-summary", None);
+            click_target(app, &mut smoke, Hit::SummaryDone);
+            next = 800;
+        }
+        111 => {
+            smoke.check(
+                app.summary.is_none() && app.state != IslandState::Expanded,
+                &format!("点\"知道了\"收起汇总（{:?}）", app.state),
+            );
+            app.set_tab(Tab::Music);
             smoke.step = 15;
             next = 35;
         }

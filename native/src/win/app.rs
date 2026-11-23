@@ -83,6 +83,8 @@ const DRAG_BAR_HEIGHT: f32 = 44.0;
 const AI_NOTIFICATION_MS: u32 = 6000;
 /// 批准请求一直停着（钩子最多等 10 分钟）。
 const APPROVAL_NOTIFICATION_MS: u32 = 600_000;
+/// 多久没碰键盘鼠标算离开。
+pub const AWAY_MS: u64 = 10 * 60_000;
 /// 查不到软件图标时用的铃铛。
 const GLYPH_BELL: char = '\u{EA8F}';
 const GLYPH_DOWNLOAD: char = '\u{E896}';
@@ -166,6 +168,12 @@ pub struct App {
     pub update_ready: Option<std::path::PathBuf>,
     /// AI 工作台：正在干活的代理、等你批准的操作。
     pub bench: island::ai::Workbench,
+    /// 每个会话今天用了多少 tokens（做完的会话也留着，算"今天"的总数）。
+    pub tokens_today: std::collections::HashMap<String, u64>,
+    /// 离开期间的汇总（显示着的话）、从什么时候开始算离开、最近其他软件来的通知 (时刻, 软件名, 图标)。
+    pub summary: Option<views::Summary>,
+    away_since: Option<u64>,
+    recent_notes: Vec<(u64, String, Option<std::sync::Arc<super::media::Art>>)>,
     pub approvals: Vec<views::ApprovalItem>,
     next_approval: u64,
     /// 正在弹的批准请求（不会被别的通知顶掉），和通知胶囊上按钮的位置。
@@ -380,6 +388,10 @@ pub fn run(smoke_dir: Option<std::path::PathBuf>, note: Option<StartNote>) -> Re
             updating: false,
             update_ready: None,
             bench: island::ai::Workbench::default(),
+            tokens_today: Default::default(),
+            summary: None,
+            away_since: None,
+            recent_notes: Vec::new(),
             approvals: Vec::new(),
             next_approval: 0,
             note_approval: None,
@@ -570,8 +582,12 @@ impl App {
                 self.tab = Tab::Ai;
             }
             // 看着 AI 动态收起：算都看过了
-            if previous == IslandState::Expanded && self.tab == Tab::Ai {
+            if previous == IslandState::Expanded && self.tab == Tab::Ai && self.summary.is_none() {
                 self.mark_ai_read();
+            }
+            // 汇总只看一次
+            if previous == IslandState::Expanded {
+                self.summary = None;
             }
             if target == IslandState::Expanded {
                 if self.tab == Tab::Monitor {
@@ -762,6 +778,7 @@ impl App {
             }
             bench_changed |= self.bench.apply(&event, now, m.window);
             let key = event.key();
+            super::usage::request(self.hwnd, &key, &event.transcript);
             let target = if m.window != 0 {
                 Target::Window(m.window)
             } else {
@@ -896,6 +913,78 @@ impl App {
         super::update::download(self.hwnd, r, dir);
     }
 
+    /// 离开的判断：多久没碰键盘鼠标（锁屏时也在累加）。超过 10 分钟算离开；
+    /// 离开后第一次有动静，就把这期间发生的事展开给你看。
+    pub fn check_away(&mut self, idle_ms: u64) {
+        let now = tick();
+        match self.away_since {
+            None if idle_ms >= AWAY_MS => self.away_since = Some(now.saturating_sub(idle_ms)),
+            Some(since) if idle_ms < 2000 => {
+                self.away_since = None;
+                self.show_summary(since, now);
+            }
+            _ => {}
+        }
+    }
+
+    fn show_summary(&mut self, since: u64, now: u64) {
+        let done: Vec<views::AiItem> = self
+            .ai
+            .iter()
+            .filter(|m| m.received >= since && m.title.contains("完成"))
+            .cloned()
+            .collect();
+        let mut apps: Vec<(String, u32, Option<std::sync::Arc<super::media::Art>>)> = Vec::new();
+        for (t, name, icon) in &self.recent_notes {
+            if *t < since {
+                continue;
+            }
+            match apps.iter_mut().find(|(n, _, _)| n == name) {
+                Some(a) => a.1 += 1,
+                None => apps.push((name.clone(), 1, icon.clone())),
+            }
+        }
+        apps.sort_by_key(|a| std::cmp::Reverse(a.1));
+        if done.is_empty() && apps.is_empty() && self.approvals.is_empty() {
+            return;
+        }
+        if self.hidden {
+            return;
+        }
+        let minutes = now.saturating_sub(since) / 60_000;
+        log::info(&format!(
+            "离开 {minutes} 分钟回来：{} 个任务做完、{} 条消息",
+            done.len(),
+            apps.iter().map(|a| a.1).sum::<u32>()
+        ));
+        self.summary = Some(views::Summary {
+            minutes,
+            done,
+            apps,
+        });
+        self.dismiss_notification();
+        if self.pinned {
+            self.redraw_expanded();
+        } else {
+            self.set_pinned(true);
+        }
+    }
+
+    /// 后台数好了 tokens。
+    pub fn on_usage(&mut self) {
+        let mut changed = false;
+        for (key, total, today) in super::usage::take() {
+            if let Some(a) = self.bench.agents.iter_mut().find(|a| a.key == key) {
+                changed |= a.tokens != total;
+                a.tokens = total;
+            }
+            changed |= self.tokens_today.insert(key, today) != Some(today);
+        }
+        if changed && self.state == IslandState::Expanded && self.tab == Tab::Ai {
+            self.redraw_expanded();
+        }
+    }
+
     /// 弹出排在最前的批准请求（带允许、拒绝按钮，一直停着）。
     fn show_approval(&mut self) {
         let Some(a) = self.approvals.first().cloned() else {
@@ -981,6 +1070,7 @@ impl App {
                 read: false,
                 icon,
                 target,
+                received: tick(),
             },
         );
         self.ai.truncate(50);
@@ -1026,6 +1116,22 @@ impl App {
         let raw = toasts::take();
         if !self.settings.show_system_notifications {
             return;
+        }
+        // 记下每一条是哪个软件的（离开期间的汇总要数）；AI 软件的另外记在 AI 动态里
+        let now = tick();
+        for (aumid, xml) in &raw {
+            if island::toast::content(xml).is_none() {
+                continue;
+            }
+            let info = self.apps.get(aumid);
+            if island::ai::App::parse(&format!("{aumid} {}", info.name)) == island::ai::App::Other {
+                self.recent_notes.push((now, info.name, info.icon));
+            }
+        }
+        self.recent_notes
+            .retain(|(t, _, _)| now.saturating_sub(*t) < 24 * 3_600_000);
+        if self.recent_notes.len() > 500 {
+            self.recent_notes.drain(..self.recent_notes.len() - 500);
         }
         // 一下子来很多时只弹最后一条
         let latest = raw.into_iter().rev().find_map(|(aumid, xml)| {
@@ -1161,6 +1267,8 @@ impl App {
             ai: &self.ai,
             approvals: &self.approvals,
             agents: &self.bench.agents,
+            tokens_today: self.tokens_today.values().sum(),
+            summary: self.summary.as_ref(),
             now: tick(),
             pressed: self.pressed,
         }
@@ -1886,6 +1994,19 @@ impl App {
                 jump::open(&target);
             }
             Hit::AiReadAll => self.mark_ai_read(),
+            Hit::SummaryDone => {
+                self.summary = None;
+                self.set_pinned(false);
+                self.redraw_expanded();
+            }
+            Hit::SummaryAi => {
+                self.summary = None;
+                if self.tab == Tab::Ai {
+                    self.redraw_expanded();
+                } else {
+                    self.set_tab(Tab::Ai);
+                }
+            }
             Hit::ApproveAllow(i) => self.decide(i, forward::Answer::Allow),
             Hit::ApproveDeny(i) => self.decide(i, forward::Answer::Deny),
             Hit::ApprovalRow(i) => self.decide(i, forward::Answer::Terminal),
@@ -2023,7 +2144,12 @@ impl App {
     }
 
     pub fn set_tab(&mut self, tab: Tab) {
+        // 在看离开期间的汇总时点了标签：收起汇总
+        let leaving_summary = self.summary.take().is_some();
         if tab == self.tab {
+            if leaving_summary {
+                self.redraw_expanded();
+            }
             return;
         }
         self.blur(true);
@@ -2623,6 +2749,10 @@ impl App {
                 self.apply_theme();
             }
         }
+        // 离开再回来（冒烟测试时用模拟的数字，不看真的键盘鼠标）
+        if !self.testing {
+            self.check_away(idle_ms());
+        }
         // AI 工作台：去掉很久没动静的代理、等答复的钩子已经退出的请求（在终端里答了）
         let pruned = self.bench.prune(tick());
         let before = self.approvals.len();
@@ -2660,6 +2790,20 @@ impl App {
             let _ = self.scene.set_scale(&self.gfx, scale);
             self.redraw_all();
         }
+    }
+}
+
+/// 多久没碰键盘鼠标（毫秒）。
+fn idle_ms() -> u64 {
+    let mut info = LASTINPUTINFO {
+        cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+        dwTime: 0,
+    };
+    if unsafe { GetLastInputInfo(&mut info) }.as_bool() {
+        (unsafe { windows::Win32::System::SystemInformation::GetTickCount() })
+            .wrapping_sub(info.dwTime) as u64
+    } else {
+        0
     }
 }
 
@@ -3063,6 +3207,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         // 任务栏图标：点一下（或用键盘选中）展开 / 收起，右键打开菜单
+        super::usage::WM_USAGE => {
+            with_app(|a| a.on_usage());
+            LRESULT(0)
+        }
         super::update::WM_UPDATE => {
             with_app(|a| a.on_update_events());
             LRESULT(0)
