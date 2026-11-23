@@ -1941,7 +1941,8 @@ pub fn step(app: &mut App) {
                 app.state == IslandState::Expanded
                     && summary
                         .as_ref()
-                        .is_some_and(|(m, d, apps)| *m >= 10 && *d >= 2 && !apps.is_empty()),
+                        // 离开时长最多到开机时长（CI 的虚拟机刚开机几分钟），所以只看有没有算出来
+                        .is_some_and(|(m, d, apps)| *m >= 1 && *d >= 2 && !apps.is_empty()),
                 &format!("离开回来展开汇总（{summary:?}）"),
             );
             snapshot(app, &mut smoke, "34-away-summary", None);
