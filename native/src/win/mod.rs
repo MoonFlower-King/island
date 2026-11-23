@@ -3,6 +3,7 @@
 pub mod app;
 pub mod appinfo;
 pub mod drag;
+pub mod events;
 pub mod forward;
 pub mod gfx;
 pub mod install;

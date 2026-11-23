@@ -12,13 +12,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{PCSTR, w};
 
 /// 有新的系统通知进了队列。
-pub const WM_TOAST: u32 = WM_APP + 5;
 /// 多久看一次。
 const POLL: Duration = Duration::from_millis(1500);
 /// 一次最多取这么多条（刚开机时可能一下子来很多）。
@@ -27,18 +24,10 @@ const BATCH: i64 = 20;
 /// 一条新通知：(应用的 AppUserModelID, 通知 XML)。
 pub type Raw = (String, String);
 
-static INBOX: Mutex<Vec<Raw>> = Mutex::new(Vec::new());
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static STOP: AtomicBool = AtomicBool::new(false);
 /// 最近一次的状态（给冒烟测试和日志看）。
 static STATUS: Mutex<String> = Mutex::new(String::new());
-
-pub fn take() -> Vec<Raw> {
-    INBOX
-        .lock()
-        .map(|mut q| std::mem::take(&mut *q))
-        .unwrap_or_default()
-}
 
 pub fn status() -> String {
     STATUS.lock().map(|s| s.clone()).unwrap_or_default()
@@ -51,14 +40,13 @@ fn set_status(s: impl Into<String>) {
 }
 
 /// 开始读（已经在读就什么都不做）。只看启动之后新来的通知。
-pub fn start(hwnd: HWND) {
+pub fn start() {
     STOP.store(false, Ordering::SeqCst);
     if RUNNING.swap(true, Ordering::SeqCst) {
         return;
     }
-    let hwnd = hwnd.0 as isize;
     std::thread::spawn(move || {
-        watch(HWND(hwnd as *mut _));
+        watch();
         RUNNING.store(false, Ordering::SeqCst);
     });
 }
@@ -72,7 +60,7 @@ fn database_path() -> Option<std::path::PathBuf> {
     Some(std::path::Path::new(&base).join(r"Microsoft\Windows\Notifications\wpndatabase.db"))
 }
 
-fn watch(hwnd: HWND) {
+fn watch() {
     let Some(lib) = Sqlite::load() else {
         set_status("系统里没有 winsqlite3.dll");
         return;
@@ -112,15 +100,10 @@ fn watch(hwnd: HWND) {
                             last = Some(*id);
                         }
                         if !rows.is_empty() {
-                            if let Ok(mut q) = INBOX.lock() {
-                                q.extend(rows.into_iter().map(|(_, a, p)| (a, p)));
-                                let n = q.len();
-                                if n > 100 {
-                                    q.drain(..n - 100);
-                                }
-                            }
-                            unsafe {
-                                let _ = PostMessageW(Some(hwnd), WM_TOAST, WPARAM(0), LPARAM(0));
+                            // 一次最多交 100 条
+                            let skip = rows.len().saturating_sub(100);
+                            for (_, aumid, xml) in rows.into_iter().skip(skip) {
+                                super::events::post(super::events::Event::Toast((aumid, xml)));
                             }
                         }
                     }

@@ -1,12 +1,10 @@
 //! 拖放：把文件拖到岛上（OLE 放置目标），以及把中转站里的文件拖出去（交给系统外壳）。
 //!
 //! 拖进来时窗口平时是鼠标穿透的；光标进入岛的范围后轮询会把它变成可点击，
-//! OLE 才能找到这个窗口。放置目标的回调只发窗口消息，真正的处理在消息循环里做，
-//! 不在 OLE 回调里借用 App。
+//! OLE 才能找到这个窗口。放置目标的回调只把事放进队列（[`super::events`]），
+//! 真正的处理在消息循环里做，不在 OLE 回调里借用 App。
 
-use std::sync::Mutex;
-
-use windows::Win32::Foundation::{HWND, LPARAM, POINTL, WPARAM};
+use windows::Win32::Foundation::{HWND, POINTL};
 use windows::Win32::System::Com::{DVASPECT_CONTENT, FORMATETC, IDataObject, TYMED_HGLOBAL};
 use windows::Win32::System::Ole::{
     CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE,
@@ -16,20 +14,7 @@ use windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS;
 use windows::Win32::UI::Shell::{
     BHID_DataObject, DragQueryFileW, HDROP, IShellItem, SHCreateItemFromParsingName, SHDoDragDrop,
 };
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{HSTRING, Ref, Result, implement};
-
-/// 拖放状态变化：wParam 1 = 进入，0 = 离开，2 = 放下（路径用 [`take_dropped`] 取）。
-pub const WM_DRAG: u32 = WM_APP + 3;
-
-static DROPPED: Mutex<Vec<String>> = Mutex::new(Vec::new());
-
-pub fn take_dropped() -> Vec<String> {
-    DROPPED
-        .lock()
-        .map(|mut d| std::mem::take(&mut *d))
-        .unwrap_or_default()
-}
 
 /// 数据里带的文件路径（资源管理器、桌面拖来的文件都是 CF_HDROP）。
 pub fn read_paths(data: &IDataObject) -> Vec<String> {
@@ -62,29 +47,20 @@ pub fn read_paths(data: &IDataObject) -> Vec<String> {
 
 #[implement(IDropTarget)]
 pub struct DropTarget {
-    hwnd: isize,
     /// 这次拖进来的东西里有文件。
     has_files: std::cell::Cell<bool>,
 }
 
 impl DropTarget {
-    pub fn create(hwnd: HWND) -> IDropTarget {
+    pub fn create() -> IDropTarget {
         DropTarget {
-            hwnd: hwnd.0 as isize,
             has_files: std::cell::Cell::new(false),
         }
         .into()
     }
 
-    fn notify(&self, state: usize) {
-        unsafe {
-            let _ = PostMessageW(
-                Some(HWND(self.hwnd as *mut _)),
-                WM_DRAG,
-                WPARAM(state),
-                LPARAM(0),
-            );
-        }
+    fn notify(&self, d: super::events::Drag) {
+        super::events::post(super::events::Event::Drag(d));
     }
 
     fn effect(&self, allowed: *mut DROPEFFECT) {
@@ -130,7 +106,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         self.has_files.set(has);
         self.effect(effect);
         if has {
-            self.notify(1);
+            self.notify(super::events::Drag::Enter);
         }
         Ok(())
     }
@@ -147,7 +123,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
 
     fn DragLeave(&self) -> Result<()> {
         if self.has_files.replace(false) {
-            self.notify(0);
+            self.notify(super::events::Drag::Leave);
         }
         Ok(())
     }
@@ -162,10 +138,7 @@ impl IDropTarget_Impl for DropTarget_Impl {
         self.effect(effect);
         let paths = data.as_ref().map(read_paths).unwrap_or_default();
         self.has_files.set(false);
-        if let Ok(mut d) = DROPPED.lock() {
-            d.extend(paths);
-        }
-        self.notify(2);
+        self.notify(super::events::Drag::Drop(paths));
         Ok(())
     }
 }

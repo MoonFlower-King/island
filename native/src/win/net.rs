@@ -1,20 +1,16 @@
 //! 翻译请求：用系统自带的 WinHTTP 发 HTTPS 请求（自动使用系统代理），在后台线程里流式读取，
 //! 每收到一段译文就通过 `WM_TRANSLATE` 通知窗口。另外是 DPAPI 加解密 Key。
 
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use windows::Win32::Foundation::{HLOCAL, HWND, LPARAM, LocalFree, WPARAM};
+use windows::Win32::Foundation::{HLOCAL, LocalFree};
 use windows::Win32::Networking::WinHttp::*;
 use windows::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
 };
-use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_APP};
 use windows::core::{HSTRING, PCWSTR, w};
 
 use island::translate::{self, Chunk, Format, Url};
-
-pub const WM_TRANSLATE: u32 = WM_APP + 2;
 
 /// 一次翻译请求。
 pub struct Job {
@@ -34,39 +30,18 @@ pub enum Event {
     Error(u64, String),
 }
 
-static EVENTS: Mutex<Vec<Event>> = Mutex::new(Vec::new());
 /// 当前有效的请求编号；换成别的值后，旧请求在下一次读数据时自己停下。
 static CURRENT: AtomicU64 = AtomicU64::new(0);
-
-pub fn take_events() -> Vec<Event> {
-    EVENTS
-        .lock()
-        .map(|mut e| std::mem::take(&mut *e))
-        .unwrap_or_default()
-}
 
 pub fn cancel() {
     CURRENT.store(0, Ordering::SeqCst);
 }
 
-pub fn start(hwnd: HWND, job: Job) {
+pub fn start(job: Job) {
     CURRENT.store(job.id, Ordering::SeqCst);
-    let target = hwnd.0 as isize;
     std::thread::spawn(move || {
         let id = job.id;
-        let post = move |event: Event| {
-            if let Ok(mut e) = EVENTS.lock() {
-                e.push(event);
-            }
-            unsafe {
-                let _ = PostMessageW(
-                    Some(HWND(target as *mut _)),
-                    WM_TRANSLATE,
-                    WPARAM(0),
-                    LPARAM(0),
-                );
-            }
-        };
+        let post = |event: Event| super::events::post(super::events::Event::Translate(event));
         match run(&job, &post) {
             Ok(()) => post(Event::Done(id)),
             Err((message, _)) => {

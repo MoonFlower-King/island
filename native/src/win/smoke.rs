@@ -1251,7 +1251,7 @@ pub fn step(app: &mut App) {
             app.set_tab(Tab::Shelf);
             let file = smoke.dir.join("shelf-test.txt");
             let _ = std::fs::write(&file, vec![b'x'; 1536]);
-            let target = super::drag::DropTarget::create(app.hwnd);
+            let target = super::drag::DropTarget::create();
             let mut effect = DROPEFFECT_COPY | DROPEFFECT_MOVE;
             let dropped =
                 super::drag::data_object_for(&file.to_string_lossy()).and_then(|data| unsafe {
@@ -1847,7 +1847,7 @@ pub fn step(app: &mut App) {
             check_install(&mut smoke);
             // 自动更新：本机的假服务器扮演 GitHub
             let port = fake_update_server();
-            super::update::check(app.hwnd, true, format!("http://127.0.0.1:{port}/latest"));
+            super::update::check(true, format!("http://127.0.0.1:{port}/latest"));
             smoke.port = port;
             smoke.waits = 0;
             next = 800;

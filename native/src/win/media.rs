@@ -4,22 +4,18 @@
 //! 整理好的快照放进一个共享槽，再 PostMessage 通知界面线程去取。
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicIsize, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use windows::Foundation::TypedEventHandler;
 use windows::Media::Control::*;
-use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, IStream,
 };
-use windows::Win32::UI::WindowsAndMessaging::PostMessageW;
 use windows::core::Result;
 
 use island::color::{self, Rgb};
 use island::text::clean;
-
-pub const WM_MEDIA: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 1;
 
 /// 封面边长（像素）。展开面板里最大显示 120 DIP，200% 缩放下需要 240。
 const ART_SIZE: u32 = 240;
@@ -100,20 +96,12 @@ impl Snapshot {
     }
 }
 
-static HWND_TARGET: AtomicIsize = AtomicIsize::new(0);
-static LATEST: Mutex<Option<Option<Snapshot>>> = Mutex::new(None);
 static SESSION: Mutex<Option<GlobalSystemMediaTransportControlsSession>> = Mutex::new(None);
 static SESSION_TOKENS: Mutex<Option<(i64, i64, i64)>> = Mutex::new(None);
 static MANAGER: Mutex<Option<GlobalSystemMediaTransportControlsSessionManager>> = Mutex::new(None);
 
-/// 取出最新的快照（`Some(None)` 表示没有在播放的会话；`None` 表示没有新消息）。
-pub fn take_latest() -> Option<Option<Snapshot>> {
-    LATEST.lock().ok()?.take()
-}
-
-/// 启动监听。结果通过 `WM_MEDIA` 消息通知窗口。
-pub fn start(hwnd: HWND, tick: fn() -> u64) {
-    HWND_TARGET.store(hwnd.0 as isize, Ordering::SeqCst);
+/// 启动监听。结果通过 [`super::events::Event::Media`] 告诉窗口。
+pub fn start(tick: fn() -> u64) {
     TICK.lock().map(|mut t| *t = Some(tick)).ok();
     std::thread::spawn(|| {
         unsafe {
@@ -413,15 +401,7 @@ fn decode_art(bytes: &[u8]) -> Result<Art> {
 }
 
 fn publish(snapshot: Option<Snapshot>) {
-    if let Ok(mut slot) = LATEST.lock() {
-        *slot = Some(snapshot);
-    }
-    let hwnd = HWND(HWND_TARGET.load(Ordering::SeqCst) as *mut _);
-    if !hwnd.0.is_null() {
-        unsafe {
-            let _ = PostMessageW(Some(hwnd), WM_MEDIA, WPARAM(0), LPARAM(0));
-        }
-    }
+    super::events::post(super::events::Event::Media(snapshot));
 }
 
 #[derive(Clone, Copy)]

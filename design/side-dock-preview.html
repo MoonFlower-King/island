@@ -145,6 +145,12 @@ textarea.field { padding: 8px 10px; line-height: 1.45; }
 .row:hover { background: var(--i-hover); }
 .row .x { visibility: hidden; margin-left: auto; color: var(--i-sub); border: 0; background: transparent; cursor: pointer; padding: 2px; display: grid; }
 .row:hover .x { visibility: visible; }
+.tg { position: absolute; display: flex; align-items: center; gap: 8px; height: 24px; padding: 0 6px; border: 0; border-radius: 8px; background: transparent; color: var(--i-fg); font: 12px/1 inherit; cursor: pointer; text-align: left; }
+.tg:hover, .tg:focus-visible { background: var(--i-track); outline: none; }
+.tg i { width: 26px; height: 15px; border-radius: 8px; background: var(--i-track); position: relative; flex: none; transition: background .15s; }
+.tg i::after { content: ""; position: absolute; left: 2px; top: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--i-sub); transition: transform .15s, background .15s; }
+.tg.on i { background: var(--i-accent); }
+.tg.on i::after { transform: translateX(11px); background: var(--i-bg); }
 .check { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--i-sub); flex: none; display: grid; place-items: center; }
 .check.on { background: var(--i-accent); border-color: var(--i-accent); color: var(--i-bg); }
 .done { text-decoration: line-through; color: var(--i-faint) !important; }
@@ -259,6 +265,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       <div class="chips">
         <button class="chip action" id="demoUpdate">有新版本</button>
         <button class="chip action" id="demoAway">离开 42 分钟后回来</button>
+        <button class="chip action" id="demoWelcome">第一次运行</button>
       </div>
       <span class="note">每天看一次有没有新版本，点一下自动下载、校验、替换并重启。锁屏或走开 10 分钟以上，回来时岛展开一张"离开期间"的汇总。</span>
       <span class="note">真机上来自 Claude Code 的钩子：正在干什么、跑了多久实时显示；要批准的操作直接在岛上点允许或拒绝，不用切回终端。</span>
@@ -371,7 +378,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   const PRESET_AC = ["#0A84FF", "#30D158", "#FF9F0A", "#FF375F", "#BF5AF2", "#64D2FF"];
 
   const S = {
-    dock: "left", wall: "dark", showApps: true, showLevel: true, persistClips: true, autostart: false, shortcut: true,
+    dock: "left", wall: "dark", showApps: true, showLevel: true, persistClips: true, autostart: true, shortcut: true, autoUpdate: true, awaySummary: true, claudeHooked: false, codexHooked: false,
     menuOpen: false,
     theme: "dark", custom: { bg: "#1C1C1E", fg: "#FFFFFF", ac: "#0A84FF" },
     idleLine: false, mediaLine: false,
@@ -562,11 +569,11 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   }
 
   // ───────── 展开面板：440 × 260，坐标和 views.rs 一致 ─────────
-  const TABS = [["music", "music", "音乐"], ["todo", "todo", "待办"], ["clipboard", "clip", "剪贴板"], ["shelf", "shelf", "中转站"], ["translate", "tr", "翻译"], ["monitor", "mon", "系统监控"], ["appearance", "pal", "外观"], ["ai", "spark", "AI 动态"]];
+  const TABS = [["music", "music", "音乐"], ["todo", "todo", "待办"], ["clipboard", "clip", "剪贴板"], ["shelf", "shelf", "中转站"], ["translate", "tr", "翻译"], ["monitor", "mon", "系统监控"], ["appearance", "pal", "外观"], ["ai", "spark", "AI 动态"], ["settings", "gear", "设置"]];
   function header() {
     const d = new Date(), [hh, mm] = hm();
     const tabs = TABS.map(([id, ic, name], i) =>
-      `<button class="p-btn ${S.tab === id ? "sel" : "dim"}" data-act="tab" data-v="${id}" title="${name}" aria-label="${name}" style="left:${16 + i * 36}px;top:12px;width:32px;height:28px">${ico(ic, 15)}${id === "ai" && unread() ? `<span style="position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:${AI_APPS[firstUnread().app].color}"></span>` : ""}</button>`).join("");
+      `<button class="p-btn ${S.tab === id ? "sel" : "dim"}" data-act="tab" data-v="${id}" title="${name}" aria-label="${name}" style="left:${14 + i * 32}px;top:12px;width:30px;height:28px">${ico(ic, 15)}${id === "ai" && unread() ? `<span style="position:absolute;right:4px;top:4px;width:7px;height:7px;border-radius:50%;background:${AI_APPS[firstUnread().app].color}"></span>` : ""}</button>`).join("");
     return tabs +
       `<button class="p-btn ${S.pinned ? "" : "dim"}" data-act="pin" title="${S.pinned ? "取消置顶" : "置顶（鼠标移开也不收起）"}" aria-label="置顶" style="left:304px;top:13px;width:26px;height:26px;${S.pinned ? "color:var(--i-accent)" : ""}">${ico("pin", 13)}</button>
        <span class="abs f" style="left:334px;top:12px;width:36px;height:28px;line-height:28px;text-align:right;font-size:11px">${WEEK[d.getDay()]}</span>
@@ -690,6 +697,42 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   function firstUnread() { return S.ai.find((a) => !a.read); }
   function fmtTok(n) { return n >= 1e8 ? `${(n / 1e8).toFixed(2)} 亿` : n >= 1e4 ? `${(n / 1e4).toFixed(1)} 万` : String(n); }
   // 离开期间：AI 做完的、等你批准的、各软件来了几条消息
+  // ───────── 设置：开关、接入 AI 工具、更新、卸载都在这一页 ─────────
+  const VERSION = "2.0.6";
+  function tabSettings() {
+    const tg = (key, text, x, y) => `<button class="tg${S[key] ? " on" : ""}" data-act="toggle" data-v="${key}" role="switch" aria-checked="${!!S[key]}" style="left:${x}px;top:${y}px;width:200px"><i></i>${text}</button>`;
+    const chip = (act, text, done) => `<button class="p-btn" data-act="${act}" style="position:static;height:24px;padding:0 10px;border-radius:12px;background:var(--i-track);font-size:11.5px;width:auto;white-space:nowrap;gap:4px">${done ? ico("check", 11) : ""}${text}</button>`;
+    const line = (y, chips) => `<div class="abs" style="left:16px;right:16px;top:${y}px;display:flex;gap:8px">${chips}</div>`;
+    return `<span class="abs t" style="left:16px;top:50px;height:22px;line-height:22px;font-size:12px;font-weight:600">设置</span>
+      <span class="abs f" style="right:16px;top:50px;height:22px;line-height:22px;font-size:11px">版本 ${VERSION} · 已是最新</span>` +
+      tg("autostart", "开机自动启动", 10, 76) + tg("shortcut", "桌面快捷方式", 220, 76) +
+      tg("showApps", "其他软件的通知", 10, 102) + tg("showLevel", "音量和亮度提示", 220, 102) +
+      tg("persistClips", "保存剪贴板历史", 10, 128) + tg("autoUpdate", "自动检查更新", 220, 128) +
+      tg("awaySummary", "离开后显示汇总", 10, 154) +
+      line(190, chip("hook-claude", S.claudeHooked ? "已接入 Claude Code" : "接入 Claude Code", S.claudeHooked) +
+        chip("hook-codex", S.codexHooked ? "已接入 Codex" : "接入 Codex", S.codexHooked) + chip("check-update", "检查更新")) +
+      line(222, chip("open-data", "打开数据文件夹") + chip("uninstall", "卸载…"));
+  }
+  // 卸载：在岛上确认（从"设置 → 应用"卸载时是系统的对话框）
+  function tabUninstall() {
+    const btn = (act, text, primary) => `<button class="p-btn" data-act="${act}" style="position:static;height:28px;padding:0 14px;border-radius:14px;width:auto;white-space:nowrap;font-size:12px;${primary ? "background:var(--i-accent);color:var(--i-bg);font-weight:600" : "background:var(--i-track)"}">${text}</button>`;
+    return `<span class="abs t" style="left:16px;top:56px;font-size:14px;font-weight:700">卸载灵动岛？</span>
+      <span class="abs s" style="left:16px;right:16px;top:86px;font-size:12px;line-height:1.7">会删除程序、桌面和开始菜单的快捷方式，并取消开机启动。<br>设置、待办、剪贴板历史可以留着，重新安装会接着用。</span>
+      <div class="abs" style="left:16px;right:16px;top:150px;display:flex;gap:8px;flex-wrap:wrap">${btn("uninstall-keep", "卸载，保留数据", true)}${btn("uninstall-all", "全部删除")}${btn("uninstall-cancel", "取消")}</div>`;
+  }
+  // 第一次运行：展开说明在哪、怎么用，一直停着直到点"开始使用"
+  function tabWelcome() {
+    const row = (y, icon, title, sub, btn) => `<div class="row" style="top:${y}px;height:38px;align-items:center;cursor:default">
+      <span class="t" style="width:24px;height:24px;border-radius:7px;background:var(--i-track);display:grid;place-items:center;flex:none">${ico(icon, 13)}</span>
+      <div style="min-width:0;flex:1;display:grid"><span class="t" style="font-size:12.5px;font-weight:600">${title}</span><span class="s" style="font-size:11.5px">${sub}</span></div>${btn || ""}</div>`;
+    const small = (act, text) => `<button class="p-btn" data-act="${act}" style="position:static;height:24px;padding:0 10px;border-radius:12px;background:var(--i-accent);color:var(--i-bg);font-size:11.5px;font-weight:600;width:auto;white-space:nowrap">${text}</button>`;
+    return `<span class="abs t" style="left:16px;top:50px;height:22px;line-height:22px;font-size:12.5px;font-weight:700">欢迎使用灵动岛</span>
+      <div class="seg" style="left:356px;top:50px"><button data-act="welcome-done">开始使用</button></div>` +
+      row(78, "music", "它在屏幕顶部正中", "鼠标移上去就展开，移开收起；平时缩成一条细线") +
+      row(120, "gear", "右键它，或者点任务栏右下角的图标", "打开菜单；所有开关都在\"设置\"标签里") +
+      row(162, "check", S.autostart ? "开机会自动启动" : "开机不会自动启动", S.autostart ? "不想要可以在设置里关掉" : "需要的话在设置里打开") +
+      row(204, "spark", S.claudeHooked ? "已经接入 Claude Code" : "接入 Claude Code", S.claudeHooked ? "AI 做完事、要你批准时都会出现在岛上" : "AI 做完事、要你批准时在岛上告诉你", S.claudeHooked ? "" : small("hook-claude", "一键接入"));
+  }
   function tabSummary() {
     const m = S.summary; if (!m) return "";
     // 最要紧的在前：等你批准的；消息条数一直留一行；做完的任务填剩下的位置，放不下的合成"还有 N 个"
@@ -762,7 +805,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
          ${a.read ? "" : `<span style="width:7px;height:7px;border-radius:50%;background:${AI_APPS[a.app].color};flex:none"></span>`}</div>`;
   }
   function panelHTML() {
-    const body = { summary: tabSummary, ai: tabAI, music: tabMusic, todo: tabTodo, clipboard: tabClipboard, shelf: tabShelf, translate: tabTranslate, monitor: tabMonitor, appearance: tabAppearance }[S.tab]();
+    const body = { uninstall: tabUninstall, welcome: tabWelcome, settings: tabSettings, summary: tabSummary, ai: tabAI, music: tabMusic, todo: tabTodo, clipboard: tabClipboard, shelf: tabShelf, translate: tabTranslate, monitor: tabMonitor, appearance: tabAppearance }[S.tab]();
     return header() + body + (S.toast ? `<div class="toast">${esc(S.toast)}</div>` : "");
   }
 
@@ -960,6 +1003,8 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
   // 跑了多久每秒走一次
   setInterval(() => { if (S.agents.length) refreshBench(); }, 1000);
 
+  // ───────── 第一次运行、卸载 ─────────
+  document.getElementById("demoWelcome").addEventListener("click", () => { closeMenu(); S.note = null; S.tab = "welcome"; S.pinned = true; update(true); rerenderAll(); });
   // ───────── 自动更新 ─────────
   // 每天到 GitHub 看一次最新版本；点通知就下载、校验 SHA256、替换自己并重启（设置和数据不动）
   function offerUpdate() {
@@ -1121,6 +1166,15 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       case "ai-readall": S.ai.forEach((a) => (a.read = true)); break;
       case "ai-clear": S.ai = []; break;
       case "pin": S.pinned = !S.pinned; break;
+      case "toggle": S[v] = !S[v]; save(); if (v === "showLevel" && !S.showLevel) S.level = 0; break;
+      case "hook-claude": S.claudeHooked = true; flashHint("已写入 ~/.claude/settings.json：6 个钩子，原来的设置都保留；重开 Claude Code 生效"); break;
+      case "hook-codex": S.codexHooked = true; flashHint("已写入 ~/.codex/config.toml 的 notify"); break;
+      case "check-update": flashHint("已经是最新版 2.0.6"); break;
+      case "open-data": flashHint("真机上会打开 %APPDATA%\\Island"); break;
+      case "uninstall": S.tab = "uninstall"; break;
+      case "uninstall-cancel": S.tab = "settings"; break;
+      case "uninstall-keep": case "uninstall-all": S.tab = "settings"; S.pinned = false; flashHint(act === "uninstall-all" ? "真机上：程序和数据都删除了，岛退出" : "真机上：程序删除了，设置和数据留在 %APPDATA%\\Island，岛退出"); break;
+      case "welcome-done": S.tab = "music"; S.pinned = false; break;
       case "play": togglePlay(); return;
       case "prev": S.song = (S.song + SONGS.length - 1) % SONGS.length; S.pos = 0; break;
       case "next": S.song = (S.song + 1) % SONGS.length; S.pos = 0; break;
@@ -1322,6 +1376,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       ["demo", "演示：弹出一条通知"],
       ["data", "打开数据文件夹"],
       null,
+      ["settings", "设置…"],
       ["exit", "退出"],
     ];
     menu = document.createElement("div");
@@ -1340,6 +1395,7 @@ tr.current td { background: color-mix(in srgb, var(--accent) 12%, transparent); 
       if (m === "demo") { S.hover = false; notify("mail", "新消息", "这是一条来自灵动岛的演示通知"); }
       else if (m === "data") flashHint("真机上会打开 %LOCALAPPDATA% 里的灵动岛数据文件夹");
       else if (m === "exit") flashHint("预览里不会真的退出");
+      else if (m === "settings") { S.note = null; S.tab = "settings"; S.pinned = true; update(true); rerenderAll(); }
       else if (m === "update") { S.hover = false; S.pinned = false; offerUpdate(); }
       else {
         S[m] = !S[m]; save();
